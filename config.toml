@@ -1,0 +1,25 @@
+[paths]
+# 所有路径都相对项目根目录；也可用环境变量覆盖（见 lrcstudio/config.py）
+
+# 中文歌声对齐模型（SOFA 官方 ckpt）
+sofa_ckpt = "models/sofa/v1.0.0_mandarin_singing.ckpt"
+# SOFA 源码（third_party 下，已去 .git）
+sofa_root = "third_party/SOFA"
+# 跑 SOFA 的独立虚拟环境解释器
+sofa_python = ".venv-sofa/Scripts/python.exe"
+# SOFA 的拼音词典
+sofa_dict = "third_party/SOFA/dictionary/opencpop-extension.txt"
+# faster-whisper CT2 模型
+whisper_model = "models/faster-whisper-large-v3"
+# 中间产物
+work_dir = "work"
+
+[defaults]
+# 时间戳格式：3 = 三位小数（全库统一），2 = 两位
+decimals = 3
+# 逐字时间提前量（秒，正数=提前）
+lead = 0.0
+# demucs 分离的采样率
+sep_sample_rate = 44100
+# 抓歌词的间隔（秒），避免 405
+lyric_interval = 4.5

@@ -1,0 +1,24 @@
+[project]
+name = "lrcstudio"
+version = "0.1.0"
+description = "给歌曲生成逐字（卡拉OK）LRC：SOFA 歌声对齐 + faster-whisper + demucs"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "av>=12",
+    "torch>=2.0",
+    "faster-whisper>=1.1",
+    "demucs>=4.0",
+    "whisperx>=3.3",
+    "pypinyin>=0.49",
+]
+
+[project.scripts]
+lrcstudio = "lrcstudio.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lrcstudio"]

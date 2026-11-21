@@ -1,0 +1,14 @@
+# 虚拟环境与模型
+.venv-sofa/
+models/
+# 中间产物
+work/
+out/
+sofa/
+ref/
+# Python
+__pycache__/
+*.pyc
+# 编辑器
+.vscode/
+.idea/
