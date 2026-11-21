@@ -17,6 +17,15 @@ from . import config, format as fmt, text as tx
 
 HAN = re.compile(r"[\u4e00-\u9fff]")
 TS = re.compile(r"^\[(\d{2}):(\d{2}\.\d{2,3})\](.*)$")
+SPEAKER_TAG_RE = re.compile(r"【[^】]*】")
+
+
+def _speaker_tag_mask(text: str) -> list[bool]:
+    mask = [False] * len(text)
+    for m in SPEAKER_TAG_RE.finditer(text):
+        for i in range(m.start(), m.end()):
+            mask[i] = True
+    return mask
 
 
 def prep_segments(vocal_wav: Path, lines: list[tuple[float, str]], out_dir: Path,
@@ -30,10 +39,11 @@ def prep_segments(vocal_wav: Path, lines: list[tuple[float, str]], out_dir: Path
     meta, missing = [], []
     for i, (t0, line) in enumerate(lines):
         nxt = lines[i + 1][0] if i + 1 < len(lines) else total
-        chars = tx.han_chars(line)
+        sung_line = SPEAKER_TAG_RE.sub("", line)
+        chars = tx.han_chars(sung_line)
         if not chars:
             continue
-        syls = tx.pinyin_syllables(line)
+        syls = tx.pinyin_syllables(sung_line)
         bad = [s for s in syls if s not in keys]
         if bad:
             missing.append((line[:12], bad))
@@ -96,8 +106,13 @@ def build_lrc(meta: list[dict], words_dir: Path, ti: str = "", ar: str = "",
             continue
         off = m["offset"]
         chars, k = [], 0
-        for ch in m["text"]:
-            if HAN.match(ch):
+        tag_mask = _speaker_tag_mask(m["text"])
+        first_t = off + syl[0][0]
+        for ci, ch in enumerate(m["text"]):
+            if tag_mask[ci]:
+                t_tag = first_t if k == 0 else (off + syl[min(k - 1, len(syl) - 1)][1])
+                chars.append((ch, t_tag))
+            elif HAN.match(ch):
                 if k < len(syl):
                     chars.append((ch, off + syl[k][0]))
                 k += 1
@@ -109,7 +124,7 @@ def build_lrc(meta: list[dict], words_dir: Path, ti: str = "", ar: str = "",
                 elif chars:
                     t_non = chars[-1][1]
                 else:
-                    t_non = off + syl[0][0]
+                    t_non = first_t
                 chars.append((ch, t_non))
         if not chars:
             continue

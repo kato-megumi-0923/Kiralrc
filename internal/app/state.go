@@ -710,9 +710,12 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		enhCount := 0
 		for _, ln := range strings.Split(norm, "\n") {
 			ln = strings.TrimSpace(ln)
-			if lrcLineRe.MatchString(ln) {
+			if m := lrcLineRe.FindStringSubmatch(ln); m != nil {
 				lineCount++
-				if len(lrcTagRe.FindAllStringIndex(ln, -1)) > 2 {
+				body := m[3]
+				nTags := len(lrcTagRe.FindAllStringIndex(body, -1))
+				nRunes := len([]rune(strings.TrimSpace(lrcTagRe.ReplaceAllString(body, ""))))
+				if nTags > 2 || (nRunes > 0 && nTags == nRunes+1) {
 					enhCount++
 				}
 			}
@@ -1362,13 +1365,17 @@ func (a *app) runQueueWorker() {
 					step, _ = strconv.Atoi(m[1])
 				}
 				songTitle := item.Title
+				songPath := item.AudioPath
 				a.post(func() {
-					if idx < len(a.queueItems) && a.queueItems[idx].Status == "running" {
-						if step >= 1 && step <= 6 {
-							a.queueItems[idx].Stage = step
-							a.queueItems[idx].Note = line
-						} else if strings.HasPrefix(line, "[") {
-							a.queueItems[idx].Note = line
+					for i := range a.queueItems {
+						if strings.EqualFold(a.queueItems[i].AudioPath, songPath) && a.queueItems[i].Status == "running" {
+							if step >= 1 && step <= 6 {
+								a.queueItems[i].Stage = step
+								a.queueItems[i].Note = line
+							} else if strings.HasPrefix(line, "[") {
+								a.queueItems[i].Note = line
+							}
+							break
 						}
 					}
 					if step >= 1 && step <= 6 {
@@ -1384,24 +1391,29 @@ func (a *app) runQueueWorker() {
 			err = cmd.Wait()
 		}
 
+		songPath := item.AudioPath
 		a.post(func() {
-			if idx < len(a.queueItems) {
+			for i := range a.queueItems {
+				if !strings.EqualFold(a.queueItems[i].AudioPath, songPath) {
+					continue
+				}
 				switch {
 				case skippedNoVocal:
-					a.queueItems[idx].Status = "skipped"
-					a.queueItems[idx].Note = lastLine
+					a.queueItems[i].Status = "skipped"
+					a.queueItems[i].Note = lastLine
 				case err != nil:
-					a.queueItems[idx].Status = "failed"
+					a.queueItems[i].Status = "failed"
 					if lastLine != "" {
-						a.queueItems[idx].Note = lastLine
+						a.queueItems[i].Note = lastLine
 					} else {
-						a.queueItems[idx].Note = err.Error()
+						a.queueItems[i].Note = err.Error()
 					}
 				default:
-					a.queueItems[idx].Status = "done"
-					a.queueItems[idx].Stage = 6
-					a.queueItems[idx].Note = "逐字 LRC 已生成"
+					a.queueItems[i].Status = "done"
+					a.queueItems[i].Stage = 6
+					a.queueItems[i].Note = "逐字 LRC 已生成"
 				}
+				break
 			}
 			// If another song is still running, point active header to it
 			for _, it := range a.queueItems {
@@ -1973,8 +1985,10 @@ func (a *app) loadLrcFile(path string) error {
 			continue
 		}
 		tagLocs := lrcTagRe.FindAllStringSubmatchIndex(body, -1)
+		runes := []rune(plain)
+		isEnh := len(tagLocs) > 2 || (len(runes) > 0 && len(tagLocs) == len(runes)+1)
 		// Same-timestamp non-enhanced line following an existing line = bilingual translation!
-		if len(tagLocs) <= 2 && len(lines) > 0 && math.Abs(start-lines[len(lines)-1].Start) < 0.06 {
+		if !isEnh && len(lines) > 0 && math.Abs(start-lines[len(lines)-1].Start) < 0.06 {
 			if lines[len(lines)-1].Translation == "" {
 				lines[len(lines)-1].Translation = plain
 			} else {
@@ -1984,8 +1998,7 @@ func (a *app) loadLrcFile(path string) error {
 		}
 		var chars []lyricChar
 		end := start + 2.4
-		runes := []rune(plain)
-		if len(tagLocs) > 2 {
+		if isEnh {
 			enhLines++
 			// Parse each <tag>segment accurately so tagless spaces or multi-char tokens never shift subsequent timestamps!
 			for ti, loc := range tagLocs {
