@@ -1,0 +1,1414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Kiralrc · Cloudy 风格界面设计稿</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ============================================================
+   Cloudy 视觉语言（提取自 D:\WindowsDev\cloudy）
+   - 纯净白/墨黑底 + 主题色呼吸感染色（themeAccent）
+   - 232px 轻盈侧栏、1px 发丝线、胶囊主按钮、大圆角 Hero 卡
+   - 底部悬浮液态玻璃胶囊栏（barGlass）+ 顶部/底部 rim 高光
+   - Lucide 线性图标 + 紧凑标题字距 + 柔和微光歌词
+   ============================================================ */
+:root{
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+
+  --accent-raw: #e03c2f;
+  --accent: oklch(0.58 0.21 24);
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 36%, transparent);
+  --on-accent: #ffffff;
+
+  --bg-base: #ffffff;
+  --side-base: #f4f4f6;
+  --bg: var(--bg-base);
+  --side: var(--side-base);
+  --surface: rgba(0,0,0,.032);
+  --surface-2: rgba(0,0,0,.052);
+  --raised: #ffffff;
+  --hover: rgba(0,0,0,.042);
+  --press: rgba(0,0,0,.08);
+  --line: rgba(0,0,0,.072);
+  --ink: #1d1d1f;
+  --ink-2: rgba(60,60,67,.64);
+  --ink-3: rgba(60,60,67,.36);
+
+  --ok: #2e8b57;       --ok-bg: rgba(46,139,87,.12);
+  --warn: #c47a00;     --warn-bg: rgba(217,140,0,.13);
+  --err: #d12c2c;      --err-bg: rgba(209,44,44,.12);
+
+  /* 液态玻璃胶囊（浅色） */
+  --glass-bg: rgba(255,255,255,.72);
+  --glass-rim: rgba(255,255,255,.92);
+  --glass-edge: rgba(0,0,0,.09);
+  --glass-shadow: 0 18px 44px -14px rgba(25,20,20,.22), 0 2px 8px rgba(0,0,0,.06);
+
+  --paper-out: #f5efe7;
+  --wave: rgba(29,29,31,.16);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* 主题色呼吸感染色（复刻 Cloudy themeAccent：主区 10%、侧栏 14% 混色，视觉克制通透） */
+html.tinted{
+  --bg: color-mix(in srgb, var(--bg-base) 92%, var(--accent-raw) 8%);
+  --side: color-mix(in srgb, var(--side-base) 86%, var(--accent-raw) 14%);
+  --raised: color-mix(in srgb, #ffffff 95%, var(--accent-raw) 5%);
+}
+
+html.dark{
+  --accent: oklch(0.66 0.2 22);
+  --bg-base: #141416;
+  --side-base: #1c1c1f;
+  --bg: var(--bg-base);
+  --side: var(--side-base);
+  --surface: rgba(255,255,255,.045);
+  --surface-2: rgba(255,255,255,.075);
+  --raised: #222226;
+  --hover: rgba(255,255,255,.06);
+  --press: rgba(255,255,255,.10);
+  --line: rgba(255,255,255,.075);
+  --ink: #f5f5f7;
+  --ink-2: rgba(235,235,245,.58);
+  --ink-3: rgba(235,235,245,.32);
+
+  --ok: #5cd68d;       --ok-bg: rgba(92,214,141,.14);
+  --warn: #f5b942;     --warn-bg: rgba(245,185,66,.14);
+  --err: #ff7a7a;      --err-bg: rgba(255,122,122,.15);
+
+  --glass-bg: rgba(26,26,30,.72);
+  --glass-rim: rgba(255,255,255,.22);
+  --glass-edge: rgba(255,255,255,.10);
+  --glass-shadow: 0 22px 50px -14px rgba(0,0,0,.65), 0 2px 10px rgba(0,0,0,.4);
+
+  --paper-out: #0e0d10;
+  --wave: rgba(255,255,255,.18);
+}
+html.dark.tinted{
+  --bg: color-mix(in srgb, var(--bg-base) 90%, var(--accent-raw) 10%);
+  --side: color-mix(in srgb, var(--side-base) 85%, var(--accent-raw) 15%);
+  --raised: color-mix(in srgb, #222226 90%, var(--accent-raw) 10%);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:var(--font);font-size:13.5px;line-height:1.5;color:var(--ink);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:26px;
+  -webkit-font-smoothing:antialiased;
+  background:
+    radial-gradient(900px 600px at 18% 12%, color-mix(in srgb, var(--accent-raw) 22%, transparent), transparent 60%),
+    radial-gradient(800px 600px at 85% 88%, color-mix(in srgb, var(--accent-raw) 16%, transparent), transparent 62%),
+    var(--paper-out);
+  transition:background .4s var(--ease);
+}
+
+/* 通用 SVG 图标 */
+.ic{width:16px;height:16px;flex:none;stroke:currentColor;stroke-width:1.85;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.ic.sm{width:14px;height:14px}
+.ic.lg{width:18px;height:18px}
+.ic.fill{fill:currentColor;stroke:none}
+
+/* ============== 窗口（Cloudy 无标题栏直通结构） ============== */
+.window{
+  width:1360px;height:860px;flex:none;border-radius:14px;overflow:hidden;position:relative;
+  display:grid;grid-template-columns:232px 1fr;grid-template-rows:100%;
+  background:var(--bg);color:var(--ink);
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 2px 6px rgba(0,0,0,.05),
+    0 34px 80px -24px rgba(40,25,20,.26);
+  transition:background .35s var(--ease);
+}
+html.dark .window{box-shadow:0 0 0 1px rgba(255,255,255,.11), 0 40px 90px -20px rgba(0,0,0,.72)}
+
+/* 右上角极简 Win11 窗口控制（悬浮在主区右上角） */
+.win-ctrls{
+  position:absolute;top:0;right:0;z-index:30;display:flex;align-items:center;height:38px;
+}
+.win-ctrls .wc{
+  width:44px;height:38px;display:grid;place-items:center;color:var(--ink-2);cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.win-ctrls .wc:hover{background:var(--hover);color:var(--ink)}
+.win-ctrls .wc.close:hover{background:#d92d20;color:#fff}
+.win-ctrls .wc-theme{width:34px;height:28px;border-radius:99px;margin-right:4px}
+
+/* ============== 侧栏（232px，复刻 Cloudy win-side） ============== */
+.side{
+  display:flex;flex-direction:column;padding:16px 12px 14px;
+  background:var(--side);border-right:1px solid var(--line);min-width:0;
+  transition:background .35s var(--ease);
+}
+.brand{
+  display:flex;align-items:center;gap:10px;padding:2px 8px 16px;user-select:none;
+}
+.brand-mark{
+  width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:#fff;flex:none;
+  background:linear-gradient(155deg, color-mix(in srgb, var(--accent-raw) 88%, #ff9a76), var(--accent));
+  box-shadow:0 6px 16px -6px var(--accent-glow), 0 1px 0 rgba(255,255,255,.28) inset;
+}
+.brand-name{font-size:15px;font-weight:800;letter-spacing:-.01em}
+.brand-sub{font-size:11px;color:var(--ink-3);margin-left:auto;font-weight:600}
+
+.side-search{
+  display:flex;align-items:center;gap:8px;height:34px;padding:0 11px;margin-bottom:14px;
+  border-radius:10px;background:var(--surface);box-shadow:0 0 0 1px var(--line) inset;
+  color:var(--ink-3);font-size:13px;cursor:text;
+}
+.side-search kbd{margin-left:auto;font-family:var(--font);font-size:10.5px;color:var(--ink-3);padding:1px 5px;border-radius:5px;background:var(--surface)}
+
+.nav-item{
+  display:flex;align-items:center;gap:10px;height:36px;padding:0 11px;border-radius:9px;
+  font-size:13.5px;font-weight:600;color:var(--ink-2);cursor:pointer;white-space:nowrap;position:relative;
+  transition:background .15s,color .15s,transform .18s var(--spring);
+}
+.nav-item:hover{background:var(--hover);color:var(--ink)}
+.nav-item:active{transform:scale(.97)}
+.nav-item.sel{background:var(--accent-soft);color:var(--ink);font-weight:700}
+.nav-item.sel::before{
+  content:"";position:absolute;left:3px;top:10px;width:3.5px;height:16px;border-radius:2px;
+  background:var(--accent);box-shadow:0 0 8px var(--accent-glow);
+}
+.nav-item.sel .ic{color:var(--accent)}
+.nav-item .badge{
+  margin-left:auto;min-width:18px;height:18px;padding:0 6px;border-radius:99px;
+  background:var(--accent);color:var(--on-accent);font-size:11px;font-weight:700;
+  display:grid;place-items:center;
+}
+.nav-head{margin:18px 10px 6px;font-size:11px;font-weight:700;color:var(--ink-3);letter-spacing:.02em}
+.nav-recent{
+  display:flex;align-items:center;gap:9px;height:34px;padding:0 10px;border-radius:9px;
+  font-size:13px;font-weight:500;color:var(--ink-2);cursor:pointer;
+}
+.nav-recent:hover{background:var(--hover);color:var(--ink)}
+.nav-recent .mini-c{width:20px;height:20px;border-radius:5px;flex:none}
+.nav-recent span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;padding-top:10px}
+/* 侧栏左下角正在处理卡片（复刻 Cloudy .win-now） */
+.side-now{
+  display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:12px;
+  background:var(--surface);cursor:pointer;transition:background .15s;
+}
+.side-now:hover{background:var(--surface-2)}
+.side-now .ring-c{
+  width:34px;height:34px;border-radius:9px;flex:none;position:relative;overflow:hidden;
+  background:linear-gradient(135deg,#6aa6ff,#5c6cff);display:grid;place-items:center;color:#fff;
+}
+.side-now .info{min-width:0;flex:1}
+.side-now b{display:block;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side-now span{display:block;font-size:11px;color:var(--ink-2)}
+.side-now .pbar{height:3px;border-radius:99px;background:var(--surface-2);margin-top:5px;overflow:hidden}
+.side-now .pbar i{display:block;height:100%;width:62%;background:var(--accent);border-radius:99px}
+
+/* ============== 主内容区 + 底部悬浮液态玻璃胶囊 ============== */
+.main{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.page{display:none;flex:1;min-height:0;overflow:auto;padding:34px 40px 108px}
+.page.show{display:block;animation:cloudyPageIn .34s cubic-bezier(0.22, 0.8, 0.24, 1) both}
+@keyframes cloudyPageIn{
+  from{opacity:0;transform:translateY(12px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.page::-webkit-scrollbar{width:10px}
+.page::-webkit-scrollbar-thumb{background:var(--ink-3);border:3px solid transparent;background-clip:content-box;border-radius:99px}
+
+/* 底部悬浮液态玻璃胶囊栏（复刻 Cloudy barGlass） */
+.glass-dock{
+  position:absolute;left:28px;right:28px;bottom:16px;height:66px;z-index:20;
+  border-radius:999px;padding:0 16px 0 12px;
+  display:grid;grid-template-columns:1fr 1.3fr 1fr;align-items:center;gap:16px;
+  background:var(--glass-bg);
+  backdrop-filter:blur(22px) saturate(1.75);
+  -webkit-backdrop-filter:blur(22px) saturate(1.75);
+  box-shadow:
+    0 0 0 1px var(--glass-edge),
+    0 1.2px 0 var(--glass-rim) inset,
+    0 -1px 0 rgba(0,0,0,.05) inset,
+    var(--glass-shadow);
+  transition:opacity .25s,transform .25s var(--ease);
+}
+.glass-dock.hide{opacity:0;pointer-events:none;transform:translateY(16px)}
+.dock-song{display:flex;align-items:center;gap:11px;min-width:0;cursor:pointer}
+.dock-disc{
+  width:44px;height:44px;border-radius:50%;flex:none;position:relative;
+  background:
+    radial-gradient(circle, #fff 0 10%, transparent 11%),
+    radial-gradient(circle, var(--accent) 0 32%, transparent 33%),
+    radial-gradient(circle, #2a2a30 34%, #151518 96%);
+  box-shadow:0 4px 12px rgba(0,0,0,.22);
+}
+.dock-song b{display:block;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dock-song span{display:block;font-size:11.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dock-center{display:flex;flex-direction:column;align-items:center;gap:4px}
+.dock-ctls{display:flex;align-items:center;gap:14px}
+.ctl{width:30px;height:30px;border-radius:50%;border:none;background:transparent;display:grid;place-items:center;color:var(--ink-2);cursor:pointer;transition:background .15s,transform .2s var(--spring)}
+.ctl:hover{background:var(--hover);color:var(--ink)}
+.ctl.play{width:34px;height:34px;background:var(--ink);color:var(--bg-base)}
+.ctl.play:hover{transform:scale(1.06)}
+.dock-prog{display:flex;align-items:center;gap:8px;width:100%;font-size:10.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.dock-prog .track{flex:1;height:4px;border-radius:99px;background:var(--surface-2);overflow:hidden}
+.dock-prog .track i{display:block;height:100%;width:38%;border-radius:99px;background:var(--accent);box-shadow:0 0 10px var(--accent-glow)}
+.dock-end{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+
+/* ============== 通用控件（Cloudy 风格） ============== */
+.page-date{font-size:11.5px;font-weight:600;color:var(--ink-2)}
+h1.title{font-size:28px;line-height:1.2;font-weight:800;letter-spacing:-.025em;margin-top:2px}
+.sec-title{font-size:17px;font-weight:800;letter-spacing:-.015em;margin:26px 0 12px;display:flex;align-items:center;gap:8px}
+.muted{color:var(--ink-2)}
+.faint{color:var(--ink-3)}
+.cap{font-size:12px;color:var(--ink-2)}
+.mono{font-family:var(--mono);font-size:12px}
+.strong{font-weight:700}
+.row{display:flex;align-items:center}
+.gap6{gap:6px}.gap8{gap:8px}.gap12{gap:12px}.gap16{gap:16px}
+.grow{flex:1}
+.hdr{display:flex;align-items:flex-end;gap:12px;margin-bottom:20px}
+
+.card{
+  background:var(--surface);border-radius:16px;
+  box-shadow:0 0 0 1px var(--line) inset;
+}
+.card.solid{background:var(--raised);box-shadow:0 0 0 1px var(--line), 0 8px 24px -14px rgba(0,0,0,.1)}
+
+/* Cloudy 胶囊按钮 */
+.btn{
+  height:34px;padding:0 15px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;
+  font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;border:none;
+  background:var(--surface-2);color:var(--ink);
+  transition:background .15s,transform .22s var(--spring),box-shadow .2s;
+}
+.btn:hover{background:var(--press)}
+.btn:active{transform:scale(.96)}
+.btn.accent{
+  background:var(--accent);color:var(--on-accent);
+  box-shadow:0 1px 0 rgba(255,255,255,.25) inset, 0 8px 22px -8px var(--accent-glow);
+}
+.btn.accent:hover{filter:brightness(1.06)}
+.btn.ghost{background:transparent}
+.btn.ghost:hover{background:var(--hover)}
+.btn.icon{width:32px;height:32px;padding:0;justify-content:center}
+.btn.lg{height:40px;padding:0 22px;font-size:14px}
+
+/* Cloudy 分段控件 */
+.seg{
+  display:inline-flex;padding:3px;border-radius:10px;background:var(--surface-2);gap:2px;
+}
+.seg span{
+  height:26px;padding:0 12px;border-radius:7px;display:inline-flex;align-items:center;gap:5px;
+  font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer;white-space:nowrap;
+  transition:background .18s,color .18s,box-shadow .18s;
+}
+.seg span.on{
+  background:var(--raised);color:var(--ink);
+  box-shadow:0 1px 3px rgba(0,0,0,.14), 0 0 0 .5px var(--line);
+}
+
+/* 输入框 & 数字框 */
+.tb{
+  height:34px;padding:0 12px;border-radius:10px;background:var(--surface);
+  box-shadow:0 0 0 1px var(--line) inset;display:flex;align-items:center;gap:8px;font-size:13px;
+}
+.tb.focus{background:var(--raised);box-shadow:0 0 0 1.5px var(--accent) inset}
+.tb .ph{color:var(--ink-3)}
+.numbox{
+  height:32px;padding:0 10px;border-radius:9px;background:var(--surface);
+  box-shadow:0 0 0 1px var(--line) inset;display:inline-flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+
+/* 开关 / 单选 / 复选 */
+.toggle{
+  width:38px;height:22px;border-radius:99px;background:var(--surface-2);position:relative;flex:none;cursor:pointer;
+  box-shadow:0 0 0 1px var(--line) inset;transition:background .2s;
+}
+.toggle::after{
+  content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.24);transition:transform .25s var(--spring);
+}
+.toggle.on{background:var(--accent);box-shadow:none}
+.toggle.on::after{transform:translateX(16px)}
+.radio{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--ink-3);flex:none;display:grid;place-items:center}
+.radio.on{border-color:var(--accent);background:var(--accent)}
+.radio.on::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--on-accent)}
+.check{width:18px;height:18px;border-radius:6px;border:1.5px solid var(--ink-3);flex:none;display:grid;place-items:center}
+.check.on{border-color:var(--accent);background:var(--accent);color:var(--on-accent)}
+
+/* 徽章与提示条 */
+.pill{
+  display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 9px;border-radius:99px;
+  font-size:11.5px;font-weight:600;white-space:nowrap;
+}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.err{background:var(--err-bg);color:var(--err)}
+.pill.accent{background:var(--accent-soft);color:var(--accent)}
+.pill.neutral{background:var(--surface-2);color:var(--ink-2)}
+
+.notice{
+  display:flex;gap:12px;align-items:flex-start;padding:12px 15px;border-radius:14px;
+  background:var(--surface);box-shadow:0 0 0 1px var(--line) inset;font-size:13px;
+}
+.notice.warn{background:var(--warn-bg);box-shadow:none}
+.notice.accent{background:var(--accent-soft);box-shadow:none}
+
+/* KI 交接标注徽章 */
+.ki{
+  display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:99px;
+  font-size:10px;font-weight:700;border:1px dashed var(--accent);color:var(--accent);
+  background:var(--accent-soft);margin-left:6px;vertical-align:middle;white-space:nowrap;
+}
+body.noki .ki{display:none}
+
+/* 光影封面（复刻 Cloudy .cover） */
+.art{
+  position:relative;flex:none;overflow:hidden;border-radius:8px;display:grid;place-items:center;color:#fff;
+  background:
+    radial-gradient(120% 90% at 20% 10%, oklch(0.84 0.13 calc(var(--h) + 38)) 0%, transparent 55%),
+    radial-gradient(100% 100% at 90% 100%, oklch(0.44 0.16 calc(var(--h) - 22)) 0%, transparent 60%),
+    oklch(0.64 0.17 var(--h));
+  box-shadow:0 0 0 .5px rgba(0,0,0,.1) inset;
+}
+
+/* ============== 1. 曲库（Cloudy Daily Hero + 统计 + 干净曲目表） ============== */
+.hero-banner{
+  position:relative;display:flex;align-items:center;height:192px;padding:0 30px;border-radius:22px;overflow:hidden;color:#fff;
+  background:
+    radial-gradient(75% 125% at 86% 48%, color-mix(in srgb, var(--accent-raw) 92%, #ff9966), transparent 72%),
+    radial-gradient(65% 110% at 8% 0%, color-mix(in srgb, var(--accent-raw) 78%, #5e1828), transparent 70%),
+    color-mix(in srgb, var(--accent-raw) 36%, #1f1417);
+  box-shadow:0 18px 38px -16px var(--accent-glow);
+}
+.hero-num{
+  position:absolute;left:45%;top:-26px;font-size:216px;font-weight:800;letter-spacing:-.06em;line-height:1;
+  color:rgba(255,255,255,.07);pointer-events:none;font-variant-numeric:tabular-nums;
+}
+.hero-text{position:relative;z-index:2;flex:1;min-width:0}
+.hero-note{font-size:12px;font-weight:600;color:rgba(255,255,255,.72)}
+.hero-title{font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1.2;margin:4px 0 6px}
+.hero-sub{font-size:13px;color:rgba(255,255,255,.84)}
+.hero-cta{
+  display:inline-flex;align-items:center;gap:8px;margin-top:16px;height:36px;padding:0 18px;border-radius:999px;
+  background:#fff;color:#1d1d1f;font-size:13px;font-weight:700;cursor:pointer;
+  box-shadow:0 6px 18px -6px rgba(0,0,0,.3);transition:transform .25s var(--spring);
+}
+.hero-cta:hover{transform:scale(1.04)}
+.hero-cta.sec{background:rgba(255,255,255,.16);color:#fff;box-shadow:none;backdrop-filter:blur(8px);margin-left:8px}
+
+/* 右侧叠放封面 + 黑胶（复刻 Cloudy daily-stack） */
+.hero-stack{position:relative;width:270px;height:150px;flex:none;z-index:2}
+.vinyl{
+  position:absolute;left:96px;top:50%;width:124px;height:124px;transform:translateY(-50%);border-radius:50%;
+  background:
+    radial-gradient(circle, #fff6f2 0 3%, transparent 3.4%),
+    radial-gradient(circle, var(--accent-raw) 0 33%, transparent 33.5%),
+    repeating-radial-gradient(circle, rgba(255,255,255,.06) 0 1px, transparent 2px 4px),
+    radial-gradient(circle, #2a2a30 34%, #16161a 95%, #0c0c0e 100%);
+  box-shadow:0 16px 32px -12px rgba(0,0,0,.6);
+}
+.sleeve{position:absolute;top:50%;width:124px;height:124px;border-radius:14px;transform:translateY(-50%);box-shadow:0 12px 26px -8px rgba(0,0,0,.45)}
+.sleeve.s1{left:36px;z-index:3}
+.sleeve.s2{left:12px;transform:translateY(-50%) rotate(-7deg);opacity:.9;z-index:2}
+.sleeve.s3{left:-8px;transform:translateY(-50%) rotate(-14deg);opacity:.72;z-index:1}
+
+.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+.stat-card{padding:15px 18px;display:flex;align-items:center;gap:14px}
+.stat-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;flex:none}
+.stat-n{font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:1.15}
+.stat-l{font-size:12px;color:var(--ink-2)}
+
+.filter-bar{display:flex;align-items:center;gap:10px;margin:22px 0 12px}
+.tabs{display:flex;gap:4px}
+.tabs span{padding:6px 13px;border-radius:99px;font-size:13px;font-weight:600;color:var(--ink-2);cursor:pointer;transition:background .15s,color .15s}
+.tabs span:hover{background:var(--hover);color:var(--ink)}
+.tabs span.on{background:var(--ink);color:var(--bg-base)}
+.tabs span em{font-style:normal;opacity:.65;margin-left:4px;font-size:11.5px}
+
+.track-list{display:flex;flex-direction:column;gap:2px}
+.trow{
+  display:grid;grid-template-columns:36px 2.3fr 1.1fr 64px 124px 72px 1.4fr 88px;
+  align-items:center;height:54px;padding:0 12px;border-radius:12px;font-size:13.5px;cursor:pointer;position:relative;
+  transition:background .15s,transform .18s var(--spring);
+}
+.trow:hover{background:var(--hover)}
+.trow:active{transform:scale(.993)}
+.trow.head{height:34px;font-size:11.5px;font-weight:600;color:var(--ink-3);border-bottom:1px solid var(--line);border-radius:0;margin-bottom:4px;cursor:default}
+.trow.head:hover{background:none}
+.trow.sel{background:var(--accent-soft)}
+.trow.sel::before{content:"";position:absolute;left:3px;top:17px;width:3.5px;height:20px;border-radius:2px;background:var(--accent)}
+.trow .tt{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow .sub{font-size:11.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ============== 2. 新建对齐 ============== */
+.align-grid{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start}
+.step{padding:18px 20px;margin-bottom:14px}
+.step-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.step-n{width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px;font-weight:700}
+.step-n.done{background:var(--ok);color:#fff}
+.drop{
+  border:1.5px dashed var(--line);border-radius:14px;padding:14px 16px;
+  display:flex;align-items:center;gap:14px;background:var(--bg);
+}
+.minwave{flex:1;height:38px}
+.src-opts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.src{
+  padding:12px 14px;border-radius:12px;background:var(--bg);box-shadow:0 0 0 1px var(--line) inset;
+  display:flex;gap:10px;cursor:pointer;transition:box-shadow .15s,background .15s;
+}
+.src.on{background:var(--accent-soft);box-shadow:0 0 0 1.5px var(--accent) inset}
+.src .t{font-weight:700;font-size:13px}
+.src .d{font-size:11.5px;color:var(--ink-2);margin-top:2px;line-height:1.4}
+.cands{margin-top:12px;border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:0 0 0 1px var(--line) inset}
+.cand{display:grid;grid-template-columns:26px 1fr 112px 58px 136px;gap:8px;align-items:center;padding:10px 12px;border-top:1px solid var(--line);font-size:13px}
+.cand:first-child{border-top:none}
+.cand.on{background:var(--accent-soft)}
+.engine{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:12px;background:var(--bg);box-shadow:0 0 0 1px var(--line) inset;margin-top:12px}
+.form3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.side-panel .card{padding:18px 20px;margin-bottom:14px}
+.opt{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.opt:first-of-type{border-top:none}
+.pm{display:flex;gap:12px;align-items:flex-start;position:relative;padding-bottom:12px}
+.pm:not(:last-child)::after{content:"";position:absolute;left:11px;top:25px;bottom:2px;width:1.5px;background:var(--line)}
+.pm .n{width:23px;height:23px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-size:11.5px;font-weight:700;color:var(--ink-2);flex:none}
+.pm .t{font-size:13px;font-weight:700}
+.pm .d{font-size:11.5px;color:var(--ink-2)}
+
+/* ============== 3. 任务队列 ============== */
+.job{padding:22px 24px}
+.stepper{display:grid;grid-template-columns:repeat(6,1fr);margin-top:22px;position:relative}
+.st{display:flex;flex-direction:column;align-items:center;text-align:center;position:relative;padding:0 6px}
+.st::before{content:"";position:absolute;top:15px;left:-50%;right:50%;height:2px;background:var(--line);z-index:0}
+.st:first-child::before{display:none}
+.st.done::before,.st.run::before{background:var(--ok)}
+.st .c{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;position:relative;z-index:1;background:var(--raised);border:2px solid var(--line);color:var(--ink-3);font-size:12px;font-weight:700}
+.st.done .c{background:var(--ok);border-color:var(--ok);color:#fff}
+.st.run .c{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.st .t{margin-top:9px;font-weight:700;font-size:12.5px}
+.st .d{font-size:11.5px;color:var(--ink-2);margin-top:2px}
+.prog-s{height:4px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin:6px 0 3px;width:110px}
+.prog-s i{display:block;height:100%;width:62%;background:var(--accent);border-radius:99px}
+.log{
+  margin-top:18px;border-radius:12px;background:var(--bg);box-shadow:0 0 0 1px var(--line) inset;
+  padding:12px 15px;font-family:var(--mono);font-size:11.8px;line-height:1.68;color:var(--ink-2);
+}
+.log .ok{color:var(--ok)} .log .w{color:var(--warn)} .log .a{color:var(--accent)}
+.qrow{display:grid;grid-template-columns:40px 1fr 140px 210px 110px;align-items:center;gap:12px;padding:13px 16px;border-top:1px solid var(--line)}
+.qrow:first-child{border-top:none}
+
+/* ============== 4. 编辑与校对（Cloudy 律动微光歌词 + 波形时间轴） ============== */
+#p-editor{padding:0;display:none;grid-template-rows:52px 1fr 252px;height:100%;overflow:hidden}
+#p-editor.show{display:grid}
+.ed-top{
+  display:flex;align-items:center;gap:6px;padding:0 184px 0 18px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+.ed-top .vsep{width:1px;height:18px;background:var(--line);margin:0 4px}
+.ed-main{display:grid;grid-template-columns:268px 1fr 296px;min-height:0}
+.lines{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.lines-h{padding:11px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.lines-list{overflow:hidden;padding:6px}
+.ln{
+  display:grid;grid-template-columns:20px 66px 1fr 16px;gap:6px;align-items:center;
+  height:33px;padding:0 8px;border-radius:8px;font-size:12.5px;cursor:pointer;
+}
+.ln:hover{background:var(--hover)}
+.ln.sel{background:var(--accent-soft);font-weight:600}
+.ln .idx{color:var(--ink-3);font-size:11px;text-align:right}
+.ln .ts{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.ln .tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln.tr .tx{color:var(--ink-2)}
+
+/* 中央卡拉OK微光舞台（呼应 Cloudy Now Playing 律动微光） */
+.stage{
+  position:relative;display:flex;flex-direction:column;min-width:0;overflow:hidden;
+  background:
+    radial-gradient(520px 260px at 50% 48%, color-mix(in srgb, var(--accent-raw) 14%, transparent), transparent 72%);
+}
+.stage-top{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 0}
+.stage-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:12px}
+.pv-dim{font-size:19px;font-weight:600;color:var(--ink-3);letter-spacing:.02em}
+.pv-cur{display:flex;gap:3px;align-items:flex-end}
+.pv-cur .ch{display:flex;flex-direction:column;align-items:center}
+.pv-cur .py{font-size:11px;color:var(--ink-3);height:14px;line-height:14px}
+.pv-cur .hz{font-size:38px;line-height:48px;font-weight:800;color:var(--ink-3);letter-spacing:.01em}
+.pv-cur .ch.done .hz{color:var(--accent);text-shadow:0 0 22px var(--accent-glow)}
+.pv-cur .ch.done .py{color:var(--accent)}
+.pv-cur .ch.now .hz{
+  background:linear-gradient(90deg,var(--accent) 58%,var(--ink-3) 58%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 14px var(--accent-glow));
+}
+.pv-tr{font-size:14.5px;color:var(--ink-2);font-weight:500}
+.stage-foot{
+  display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);white-space:nowrap;
+}
+
+.props{border-left:1px solid var(--line);padding:14px 16px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.glyph-box{
+  width:52px;height:52px;border-radius:14px;background:var(--accent-soft);color:var(--accent);
+  display:grid;place-items:center;font-size:28px;font-weight:800;
+}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.kv .lbl{font-size:11.5px;color:var(--ink-2);margin-bottom:4px}
+.issues{display:flex;flex-direction:column;gap:7px}
+.issue{display:flex;gap:9px;padding:8px 10px;border-radius:11px;background:var(--surface);font-size:12px;line-height:1.45;align-items:flex-start}
+
+/* 时间轴 */
+.timeline{
+  border-top:1px solid var(--line);display:grid;grid-template-columns:92px 1fr;
+  grid-template-rows:34px 24px 54px 46px 38px 1fr;min-height:0;position:relative;background:var(--bg);
+}
+.tl-tools{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.th{border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:0 10px;font-size:11.5px;font-weight:600;color:var(--ink-2)}
+.tr-cell{position:relative;border-bottom:1px solid var(--line);overflow:hidden}
+.ruler{font-size:10.5px;color:var(--ink-3);font-family:var(--mono)}
+.ruler .tk{position:absolute;bottom:0;width:1px;background:var(--ink-3)}
+.ruler .lb{position:absolute;top:2px;transform:translateX(-50%)}
+.cblk{
+  position:absolute;top:6px;bottom:6px;border-radius:7px;background:var(--accent-soft);
+  border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);
+  display:flex;align-items:center;justify-content:center;font-size:13.5px;font-weight:700;color:var(--ink);
+}
+.cblk.sel{background:var(--accent);color:var(--on-accent);border-color:var(--accent);box-shadow:0 4px 12px -4px var(--accent-glow)}
+.cblk.next{opacity:.5}
+.lblk{
+  position:absolute;top:7px;bottom:7px;border-radius:7px;background:var(--surface);
+  border:1px solid var(--line);font-size:11.5px;display:flex;align-items:center;padding:0 9px;white-space:nowrap;overflow:hidden;color:var(--ink-2);
+}
+.lblk.cur{border-color:var(--accent);color:var(--ink);font-weight:600}
+.endtag{position:absolute;top:4px;bottom:4px;width:2px;background:var(--ok)}
+.endtag::after{content:"尾";position:absolute;top:-1px;left:3px;font-size:9px;color:var(--ok);font-weight:700}
+.playhead{position:absolute;top:34px;bottom:0;width:2px;background:var(--accent);z-index:5;pointer-events:none;box-shadow:0 0 10px var(--accent-glow)}
+.playhead::before{content:"";position:absolute;top:0;left:-5px;border:6px solid transparent;border-top:8px solid var(--accent)}
+.onset{position:absolute;top:0;bottom:0;width:1px;border-left:1px dashed var(--ok);opacity:.75}
+
+/* ============== 5. 工具箱 ============== */
+.tools{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.tool{padding:18px 20px;display:flex;flex-direction:column;gap:10px;min-height:172px;transition:transform .2s var(--ease),background .2s}
+.tool:hover{transform:translateY(-2px);background:var(--surface-2)}
+.tool-ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;color:#fff}
+.tool .t{font-weight:700;font-size:15px}
+.tool .d{font-size:12.5px;color:var(--ink-2);line-height:1.5;flex:1}
+.tool .f{display:flex;align-items:center;justify-content:space-between}
+.vresult{margin-top:12px;display:grid;grid-template-columns:280px 1fr;gap:14px}
+.vfile{display:flex;align-items:center;gap:10px;padding:11px 14px;border-top:1px solid var(--line)}
+.vfile:first-child{border-top:none}
+.vfile.sel{background:var(--accent-soft)}
+
+/* ============== 6. 设置（复刻 Cloudy 设置：8色主题圆点 + 干净分组卡） ============== */
+.set-wrap{max-width:960px}
+.set-group{border-radius:16px;background:var(--surface);box-shadow:0 0 0 1px var(--line) inset;overflow:hidden;margin-bottom:14px}
+.set-row{display:flex;align-items:center;gap:14px;padding:14px 18px;border-top:1px solid var(--line)}
+.set-row:first-child{border-top:none}
+.set-row .t{font-weight:600;font-size:13.5px}
+.set-row .d{font-size:12px;color:var(--ink-2)}
+.set-row .r{margin-left:auto;display:flex;align-items:center;gap:10px}
+.swatches{display:flex;align-items:center;gap:9px}
+.sw{
+  width:24px;height:24px;border-radius:50%;cursor:pointer;position:relative;
+  box-shadow:0 0 0 1px rgba(0,0,0,.12) inset;transition:transform .2s var(--spring);
+}
+.sw:hover{transform:scale(1.12)}
+.sw.on{box-shadow:0 0 0 2.5px var(--bg), 0 0 0 4.5px var(--accent)}
+
+/* ============== 外部设计稿切页导览条 ============== */
+.deck{
+  position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:100;
+  display:flex;align-items:center;gap:3px;padding:4px 6px;border-radius:999px;
+  background:rgba(24,24,28,.78);backdrop-filter:blur(24px) saturate(1.5);
+  box-shadow:0 10px 28px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.12) inset;
+}
+.deck span{color:rgba(255,255,255,.76);font-size:12px;font-weight:600;padding:5px 11px;border-radius:99px;cursor:pointer;white-space:nowrap}
+.deck span.on,.deck span:hover{background:rgba(255,255,255,.15);color:#fff}
+.deck .dsep{width:1px;height:14px;background:rgba(255,255,255,.18);margin:0 4px}
+.deck .dot-sw{width:14px;height:14px;border-radius:50%;padding:0;margin:0 2px;border:1.5px solid rgba(255,255,255,.35)}
+.deck .dot-sw.on{border-color:#fff;transform:scale(1.18)}
+body.shot .deck{display:none}
+</style>
+</head>
+<body>
+
+<div class="window" id="win">
+  <!-- 右上角极简 Win11 窗口控制 -->
+  <div class="win-ctrls">
+    <div class="wc wc-theme" id="themeBtn" title="切换深浅色">
+      <svg class="ic sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    </div>
+    <div class="wc"><svg class="ic sm" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></div>
+    <div class="wc"><svg class="ic sm" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></div>
+    <div class="wc close"><svg class="ic sm" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+  </div>
+
+  <!-- ==================== 232px 侧栏 ==================== -->
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg class="ic" viewBox="0 0 24 24" stroke-width="2.1"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      </div>
+      <span class="brand-name">Kiralrc</span>
+      <span class="brand-sub">逐字对齐</span>
+    </div>
+
+    <div class="side-search">
+      <svg class="ic sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>搜索曲库或命令</span>
+      <kbd>Ctrl+K</kbd>
+    </div>
+
+    <div class="nav-item sel" data-p="library">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>曲库
+    </div>
+    <div class="nav-item" data-p="align">
+      <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>新建对齐
+    </div>
+    <div class="nav-item" data-p="queue">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>任务队列<span class="badge">3</span>
+    </div>
+    <div class="nav-item" data-p="editor">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>编辑与校对
+    </div>
+    <div class="nav-item" data-p="tools">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>工具箱
+    </div>
+
+    <div class="nav-head">最近校对</div>
+    <div class="nav-recent" data-p="editor"><div class="art mini-c" style="--h:18"></div><span>晚风 - 示例歌手</span></div>
+    <div class="nav-recent" data-p="editor"><div class="art mini-c" style="--h:250"></div><span>远方的信 - 夏木</span></div>
+    <div class="nav-recent" data-p="editor"><div class="art mini-c" style="--h:55"></div><span>ずっと隣で - Haruka</span></div>
+
+    <div class="side-foot">
+      <div class="side-now" data-p="queue">
+        <div class="ring-c"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg></div>
+        <div class="info">
+          <b>远方的信 · 第 1/3 首</b>
+          <span>人声分离 62%</span>
+          <div class="pbar"><i></i></div>
+        </div>
+      </div>
+      <div class="nav-item" data-p="settings">
+        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>设置
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== 主内容区 ==================== -->
+  <main class="main">
+
+    <!-- ========== 1. 曲库 ========== -->
+    <section class="page show" id="p-library">
+      <div class="page-date">C:\Users\yxljs\OneDrive\Music · 上次扫描 今天 20:10</div>
+      <h1 class="title" style="margin-bottom:18px">曲库</h1>
+
+      <!-- Cloudy 标志性大 Hero 卡（剔除纯音乐/OST/伴奏后的真实曲库统计） -->
+      <div class="hero-banner">
+        <div class="hero-num">696</div>
+        <div class="hero-text">
+          <div class="hero-note">本地曲库总览 · 共 894 首音频（有效人声 696 首 · 已排除纯音乐 / OST / 伴奏 198 首）</div>
+          <div class="hero-title">还有 52 首人声歌曲可升级为逐字歌词</div>
+          <div class="hero-sub">644 首逐字已就绪 · 52 首仅整行时间 · 0 首人声缺词　|　已排除：纯音乐 118 · OST 原声 56 · 伴奏 24</div>
+          <div>
+            <button class="hero-cta" data-p="queue">
+              <svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>批量升级整行歌词（52）
+            </button>
+            <button class="hero-cta sec">添加文件夹</button>
+            <button class="hero-cta sec">重新扫描</button>
+          </div>
+        </div>
+        <div class="hero-stack">
+          <div class="vinyl"></div>
+          <div class="art sleeve s3" style="--h:55"></div>
+          <div class="art sleeve s2" style="--h:250"></div>
+          <div class="art sleeve s1" style="--h:18"></div>
+        </div>
+      </div>
+
+      <div class="stat-row">
+        <div class="card stat-card">
+          <div class="stat-ic" style="background:var(--ok-bg);color:var(--ok)"><svg class="ic lg" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div><div class="stat-n">644</div><div class="stat-l">逐字 LRC · 可直接卡拉 OK（占人声 92.5%）</div></div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-ic" style="background:var(--accent-soft);color:var(--accent)"><svg class="ic lg" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+          <div><div class="stat-n">52</div><div class="stat-l">仅整行时间 · 可升级为逐字（0 首人声缺词）</div></div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-ic" style="background:var(--surface-2);color:var(--ink-2)"><svg class="ic lg" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+          <div><div class="stat-n">198</div><div class="stat-l">已排除：纯音乐 118 · OST 原声 56 · 伴奏 24</div></div>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <div class="tabs grow">
+          <span>有效人声<em>696</em></span><span class="on">待升级逐字<em>52</em></span><span>逐字就绪<em>644</em></span><span>纯音乐 / OST / 伴奏<em>198</em></span>
+        </div>
+        <span class="pill neutral">纯音乐 118</span>
+        <span class="pill neutral">OST 原声 56</span>
+        <span class="pill neutral">伴奏 24</span>
+      </div>
+
+      <div class="track-list">
+        <div class="trow head"><div><span class="check"></span></div><div>标题</div><div>艺术家</div><div>时长</div><div>歌词状态</div><div>语言</div><div>备注</div><div></div></div>
+        <div class="trow sel">
+          <div><span class="check on"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></div>
+          <div class="row gap12"><div class="art" style="width:36px;height:36px;--h:18"></div><div style="min-width:0"><div class="tt">突然的自我</div><div class="sub">cloudy music/国语 · mp3</div></div></div>
+          <div>伍佰 &amp; China Blue</div><div class="muted">3:35</div>
+          <div><span class="pill accent">仅整行</span></div><div><span class="pill neutral">中文</span></div>
+          <div class="sub">仅整行 24 行 · 可升级为 SOFA 逐字</div>
+          <div class="row" style="justify-content:flex-end;gap:2px"><button class="btn ghost icon" data-p="align"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg></button><button class="btn ghost icon" data-p="editor"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg></button></div>
+        </div>
+        <div class="trow sel">
+          <div><span class="check on"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></div>
+          <div class="row gap12"><div class="art" style="width:36px;height:36px;--h:250"></div><div style="min-width:0"><div class="tt">好想好想</div><div class="sub">情深深雨濛濛/CD2/02 · wav</div></div></div>
+          <div>赵薇</div><div class="muted">4:08</div>
+          <div><span class="pill accent">仅整行</span></div><div><span class="pill neutral">中文</span></div>
+          <div class="sub">仅整行 30 行 · 可升级为 SOFA 逐字</div>
+          <div class="row" style="justify-content:flex-end;gap:2px"><button class="btn ghost icon" data-p="align"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg></button><button class="btn ghost icon" data-p="editor"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg></button></div>
+        </div>
+        <div class="trow sel">
+          <div><span class="check on"><svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg></span></div>
+          <div class="row gap12"><div class="art" style="width:36px;height:36px;--h:55"></div><div style="min-width:0"><div class="tt">secret base~君がくれたもの~</div><div class="sub">cloudy music/Shiodome Miuna · flac</div></div></div>
+          <div>SILENT SIREN</div><div class="muted">5:02</div>
+          <div><span class="pill accent">仅整行</span></div><div><span class="pill neutral">日文</span></div>
+          <div class="sub">仅整行 76 行 · 可升级为 WhisperX 逐字</div>
+          <div class="row" style="justify-content:flex-end;gap:2px"><button class="btn ghost icon" data-p="align"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg></button><button class="btn ghost icon" data-p="editor"><svg class="ic sm" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg></button></div>
+        </div>
+        <div class="trow">
+          <div><span class="check"></span></div>
+          <div class="row gap12"><div class="art" style="width:36px;height:36px;--h:210"></div><div style="min-width:0"><div class="tt">03 POWDER SNOW off Vocals</div><div class="sub">WHITE ALBUM キャラソン原声 · wav</div></div></div>
+          <div>WHITE ALBUM</div><div class="muted">4:12</div>
+          <div><span class="pill neutral">伴奏</span></div><div><span class="pill neutral">—</span></div>
+          <div class="sub">伴奏 / Off Vocal · 已从待处理中排除<span class="ki">KI-1</span></div>
+          <div class="row" style="justify-content:flex-end"><button class="btn ghost icon"><svg class="ic sm" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button></div>
+        </div>
+        <div class="trow">
+          <div><span class="check"></span></div>
+          <div class="row gap12"><div class="art" style="width:36px;height:36px;--h:168"></div><div style="min-width:0"><div class="tt">10 - 情深深雨濛濛(纯音乐演奏)</div><div class="sub">情深深雨濛濛/CD1 · wav</div></div></div>
+          <div>大型管弦乐团</div><div class="muted">3:40</div>
+          <div><span class="pill neutral">OST 原声</span></div><div><span class="pill neutral">—</span></div>
+          <div class="sub">OST 原声配乐 · 已从待处理中排除<span class="ki">KI-1</span></div>
+          <div class="row" style="justify-content:flex-end"><button class="btn ghost icon"><svg class="ic sm" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button></div>
+        </div>
+        <div class="trow">
+          <div><span class="check"></span></div>
+          <div class="row gap12"><div class="art" style="width:36px;height:36px;--h:295"></div><div style="min-width:0"><div class="tt">Ken Arai - NEXT TO YOU</div><div class="sub">cloudy music/纯音乐 · flac</div></div></div>
+          <div>Ken Arai</div><div class="muted">3:48</div>
+          <div><span class="pill neutral">纯音乐</span></div><div><span class="pill neutral">—</span></div>
+          <div class="sub">纯音乐 · 已从待处理中排除<span class="ki">KI-1</span></div>
+          <div class="row" style="justify-content:flex-end"><button class="btn ghost icon"><svg class="ic sm" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 2. 新建对齐 ========== -->
+    <section class="page" id="p-align">
+      <div class="page-date">音频 → 逐字（卡拉 OK）LRC</div>
+      <h1 class="title" style="margin-bottom:20px">新建对齐</h1>
+
+      <div class="align-grid">
+        <div>
+          <div class="card step">
+            <div class="step-h"><span class="step-n done">✓</span><span class="strong">音频文件</span><span class="grow"></span><button class="btn">更换音频</button></div>
+            <div class="drop">
+              <div class="art" style="width:48px;height:48px;border-radius:12px;--h:18"><svg class="ic lg" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+              <div style="width:220px"><div class="strong">晚风.flac</div><div class="cap">3:12 · 44.1 kHz · 立体声 · 28.4 MB</div><div class="cap" style="color:var(--ok);margin-top:2px">✓ 已有人声轨缓存，将跳过分离</div></div>
+              <canvas class="minwave" id="miniWave"></canvas>
+            </div>
+          </div>
+
+          <div class="card step">
+            <div class="step-h"><span class="step-n">2</span><span class="strong">歌词文本</span><span class="cap">优先用官方歌词；ASR 同音字错误较多</span></div>
+            <div class="src-opts">
+              <div class="src on"><span class="radio on"></span><div><div class="t">网易云自动匹配</div><div class="d">清洗文件名后搜索，选时长最接近条目</div></div></div>
+              <div class="src"><span class="radio"></span><div><div class="t">本地参考文件</div><div class="d">LRC 或纯文本，带时间戳则直接定句首</div></div></div>
+              <div class="src"><span class="radio"></span><div><div class="t">仅 ASR 识别</div><div class="d">faster-whisper large-v3，适合无公开歌词</div></div></div>
+            </div>
+            <div class="row gap8" style="margin-top:12px"><div class="tb grow"><span>晚风 示例歌手</span></div><button class="btn">搜索</button></div>
+            <div class="cands">
+              <div class="cand on"><span class="radio on"></span><div><b>晚风</b> <span class="muted">· 示例歌手</span></div><div><span class="pill ok">3:12 · Δ0s</span></div><div class="muted">32 行</div><div><span class="pill accent">含翻译 · 仅用原文</span></div></div>
+              <div class="cand"><span class="radio"></span><div>晚风（Live） <span class="muted">· 示例歌手</span></div><div><span class="pill warn">3:41 · Δ29s</span></div><div class="muted">32 行</div><div class="cap">可能缺段<span class="ki">KI-2</span></div></div>
+              <div class="cand"><span class="radio"></span><div>晚风 <span class="muted">· 翻唱合集</span></div><div><span class="pill neutral">3:05 · Δ7s</span></div><div class="muted">30 行</div><div></div></div>
+            </div>
+          </div>
+
+          <div class="card step">
+            <div class="step-h"><span class="step-n">3</span><span class="strong">语言与对齐引擎</span></div>
+            <div class="seg"><span class="on">中文</span><span>日文</span><span>英文</span><span>其它…</span></div>
+            <div class="engine">
+              <div class="art" style="width:38px;height:38px;border-radius:10px;--h:270"><svg class="ic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg></div>
+              <div class="grow"><div class="strong">SOFA 歌声强制对齐 <span class="pill ok" style="margin-left:6px">推荐</span></div><div class="cap">专为歌声训练，长音不被压扁；与声学起音误差 &lt; 0.1 s</div></div>
+              <span class="cap">v1.0.0</span>
+            </div>
+            <div class="opt" style="margin-top:8px"><div><div class="strong" style="font-size:13px">多音字读音检查<span class="ki">KI-5</span></div><div class="cap">「了/着/得/还」等对齐前确认，可套用读音覆盖词表</div></div><span class="toggle on"></span></div>
+            <div class="notice warn" style="margin-top:8px"><div class="grow"><b>选日文 / 英文时：</b>走 WhisperX（语音模型），长拖腔可能被压短（5.27s → 2.47s）<span class="ki">KI-3</span><div class="row gap8" style="margin-top:8px"><span class="toggle on" style="transform:scale(.82)"></span>按人声能量做时长保真　<span class="muted">英文粒度</span><div class="seg"><span class="on">按词</span><span>按字母均分</span></div><span class="ki">KI-7</span></div></div></div>
+          </div>
+
+          <div class="card step">
+            <div class="step-h"><span class="step-n">4</span><span class="strong">歌曲信息</span><span class="cap">写入 [ti] [ar] [al] 标签</span></div>
+            <div class="form3">
+              <div><div class="cap" style="margin-bottom:6px">曲名</div><div class="tb focus">晚风</div></div>
+              <div><div class="cap" style="margin-bottom:6px">歌手</div><div class="tb">示例歌手</div></div>
+              <div><div class="cap" style="margin-bottom:6px">专辑</div><div class="tb"><span class="ph">可选</span></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="side-panel">
+          <div class="card">
+            <div class="strong" style="margin-bottom:10px">输出与选项</div>
+            <div class="tb" style="margin-bottom:6px"><span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">D:\Music\cloudy music\晚风.lrc</span></div>
+            <div class="cap" style="margin-bottom:8px">与音频同目录同名 · UTF-8 无 BOM · LF</div>
+            <div class="opt"><span>时间戳精度</span><div class="seg"><span class="on">3 位</span><span>2 位</span></div></div>
+            <div class="opt"><span>整体提前量</span><span class="numbox">0.000 s</span></div>
+            <div class="opt"><div><div>行尾结束标签</div><div class="cap">防止末字未唱完就被切掉</div></div><span class="toggle on"></span></div>
+            <div class="opt"><div><div>附带译文行<span class="ki">新</span></div><div class="cap">默认仅用原文对齐</div></div><span class="toggle"></span></div>
+            <div class="opt"><div><div>完成后自动校验</div></div><span class="toggle on"></span></div>
+          </div>
+
+          <div class="card">
+            <div class="strong" style="margin-bottom:12px">将执行的 6 步流程</div>
+            <div class="pm"><span class="n">1</span><div><div class="t">确定歌词文本</div><div class="d">网易云 · 晚风（32 行）</div></div></div>
+            <div class="pm"><span class="n">2</span><div><div class="t">确定每句位置</div><div class="d">参考自带时间戳，跳过 ASR</div></div></div>
+            <div class="pm"><span class="n" style="color:var(--ok)">✓</span><div><div class="t">demucs 人声分离</div><div class="d">命中缓存 vocals.wav</div></div></div>
+            <div class="pm"><span class="n">4</span><div><div class="t">主唱检测<span class="ki">KI-1</span></div><div class="d">人声 1–4kHz 占比，无主唱则跳过</div></div></div>
+            <div class="pm"><span class="n">5</span><div><div class="t">SOFA 逐句对齐</div><div class="d">预计 40–60 秒（CPU）</div></div></div>
+            <div class="pm"><span class="n">6</span><div><div class="t">输出并校验</div><div class="d">三位小数 · 行尾标签</div></div></div>
+          </div>
+
+          <div class="row gap8">
+            <button class="btn lg">加入队列</button>
+            <button class="btn accent lg grow" style="justify-content:center" data-p="queue">开始对齐</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 3. 任务队列 ========== -->
+    <section class="page" id="p-queue">
+      <div class="hdr">
+        <div class="grow">
+          <div class="page-date">3 个任务 · 1 个进行中 · 设备：CUDA（RTX 4070）</div>
+          <h1 class="title">任务队列<span class="ki" style="font-size:11px;height:21px">KI-4 批量与进度</span></h1>
+        </div>
+        <span class="cap">并行</span><span class="numbox">2</span>
+        <div class="row gap8" style="margin:0 6px"><span class="cap">失败不中断</span><span class="toggle on"></span></div>
+        <button class="btn">全部暂停</button>
+        <button class="btn">清除已完成</button>
+      </div>
+
+      <div class="card job">
+        <div class="row gap16">
+          <div class="art" style="width:56px;height:56px;border-radius:14px;--h:250"><svg class="ic lg" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+          <div class="grow">
+            <div style="font-size:18px;font-weight:800">远方的信</div>
+            <div class="cap">夏木 · 4:05 · 中文 · SOFA 歌声对齐 · 网易云「远方的信」Δ1s</div>
+          </div>
+          <div style="text-align:right;margin-right:8px"><div class="strong">已用 01:24</div><div class="cap">预计剩余 ~00:50</div></div>
+          <button class="btn icon"><svg class="ic sm" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg></button>
+          <button class="btn icon"><svg class="ic sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+
+        <div class="stepper">
+          <div class="st done"><div class="c">✓</div><div class="t">确定歌词文本</div><div class="d">网易云 · 34 行</div></div>
+          <div class="st done"><div class="c">✓</div><div class="t">确定每句位置</div><div class="d">官方时间戳 · 34/34</div></div>
+          <div class="st run"><div class="c">3</div><div class="t">demucs 人声分离</div><div class="prog-s"><i></i></div><div class="d">62% · htdemucs</div></div>
+          <div class="st"><div class="c">4</div><div class="t">主唱检测</div><div class="d">等待中</div></div>
+          <div class="st"><div class="c">5</div><div class="t">SOFA 逐句对齐</div><div class="d">等待中</div></div>
+          <div class="st"><div class="c">6</div><div class="t">输出并校验</div><div class="d">等待中</div></div>
+        </div>
+
+        <div class="log">
+          <div><span class="a">18:42:05</span> 解码 远方的信.mp3 → 16 kHz mono（PyAV, fltp）</div>
+          <div><span class="a">18:42:06</span> 搜索网易云「远方的信」… 命中 3 条，按时长排序</div>
+          <div><span class="a">18:42:15</span> <span class="ok">✓</span> 选用：夏木 - 远方的信 (245s)，34 行（译文 34 行按同时间戳剔除）</div>
+          <div><span class="a">18:42:15</span> 参考歌词自带时间戳 34/34，跳过 ASR 句子定位</div>
+          <div><span class="a">18:42:16</span> <span class="w">!</span> 过滤创作信息行 2 行（作词 / 作曲）</div>
+          <div><span class="a">18:42:16</span> demucs htdemucs · 44100 Hz · device=cuda · 进度 62% (152.1s / 245.0s)</div>
+        </div>
+      </div>
+
+      <div class="sec-title">队列明细</div>
+      <div class="card">
+        <div class="qrow"><div class="art" style="width:38px;height:38px;--h:55"></div><div><div class="strong">ずっと隣で</div><div class="cap">Haruka · 日文 · WhisperX · ASR 文本</div></div><div><span class="pill neutral">等待中</span></div><div class="cap">预计 2 分钟</div><div class="row" style="justify-content:flex-end"><button class="btn ghost icon"><svg class="ic sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div></div>
+        <div class="qrow"><div class="art" style="width:38px;height:38px;--h:18"></div><div><div class="strong">晚风</div><div class="cap">示例歌手 · 中文 · SOFA · 32 行</div></div><div><span class="pill ok">已完成</span></div><div class="cap">校验通过 · 用时 0:52</div><div class="row" style="justify-content:flex-end"><button class="btn" data-p="editor">打开校对</button></div></div>
+        <div class="qrow"><div class="art" style="width:38px;height:38px;--h:168"></div><div><div class="strong">雨夜（人声曲）</div><div class="cap">群星 · 人声轨 1–4kHz 占比 0.05 &lt; 0.08</div></div><div><span class="pill warn">无主唱 · 跳过</span></div><div class="cap">未产出 LRC<span class="ki">KI-1</span></div><div class="row" style="justify-content:flex-end"><button class="btn ghost">仍然生成</button></div></div>
+      </div>
+    </section>
+
+    <!-- ========== 4. 编辑与校对 ========== -->
+    <section class="page" id="p-editor">
+      <div class="ed-top">
+        <div class="art" style="width:28px;height:28px;border-radius:7px;--h:18"></div>
+        <div style="margin-right:6px"><div class="strong" style="font-size:13px;line-height:1.2">晚风.lrc <span class="muted" style="font-weight:500">· 已修改</span></div><div class="cap" style="font-size:11px">SOFA · 32 行</div></div>
+        <div class="vsep"></div>
+        <button class="btn ghost">保存</button>
+        <button class="btn ghost">校验</button>
+        <button class="btn ghost">加 ❤️</button>
+        <button class="btn ghost">重对齐本行</button>
+        <div class="vsep"></div>
+        <span class="cap">偏移</span><span class="numbox">−0.150 s</span>
+        <span class="grow"></span>
+        <div class="seg"><span>原曲</span><span class="on">人声轨</span></div>
+        <button class="btn accent" style="margin-left:6px">导出 LRC</button>
+      </div>
+
+      <div class="ed-main">
+        <div class="lines">
+          <div class="lines-h"><span class="strong">歌词行</span><span class="cap">32 行 · 3 个提示</span></div>
+          <div class="lines-list" id="lineList"></div>
+        </div>
+
+        <div class="stage">
+          <div class="stage-top">
+            <div class="seg"><span class="on">律动预览</span><span>LRC 源码</span></div>
+            <span class="mono muted">00:10.000 / 03:12.000</span>
+          </div>
+          <div class="stage-body">
+            <div class="pv-dim">晚风吹过安静的街角</div>
+            <div class="pv-cur" id="pvCur"></div>
+            <div class="pv-tr">❤️ 我把心事写进旋律里 ❤️</div>
+            <div class="pv-dim" style="font-size:16.5px">唱给远方的你听</div>
+          </div>
+          <div class="stage-foot">
+            <button class="ctl"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/></svg></button>
+            <button class="ctl play"><svg class="ic sm fill" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg></button>
+            <button class="ctl"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg></button>
+            <span class="cap" style="margin-left:6px">倍速</span><div class="seg"><span>0.5×</span><span>0.75×</span><span class="on">1×</span></div>
+            <span class="grow"></span>
+            <span class="cap">拼音</span><span class="toggle on" style="transform:scale(.82)"></span>
+          </div>
+        </div>
+
+        <div class="props">
+          <div class="row gap12">
+            <div class="glyph-box">事</div>
+            <div><div class="strong">第 3 行 · 第 4 字</div><div class="cap">拼音 shi · 来源 SOFA</div><div style="margin-top:4px"><span class="pill ok">与起音吻合 ±0.03s</span></div></div>
+          </div>
+          <div class="kv">
+            <div><div class="lbl">起始</div><div class="numbox" style="width:100%">00:12.380</div></div>
+            <div><div class="lbl">结束</div><div class="numbox" style="width:100%">00:12.912</div></div>
+          </div>
+          <div class="row gap8"><button class="btn grow" style="justify-content:center">吸附到人声起音</button><button class="btn icon"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg></button></div>
+          <div style="height:1px;background:var(--line)"></div>
+          <div class="cap mono">[00:11.020] · 尾 &lt;00:14.630&gt; · 9 字 / 10 标签 ✓</div>
+          <div class="row"><span class="strong grow">校验与提示</span><span class="pill warn">3</span></div>
+          <div class="issues">
+            <div class="issue"><div><b>第 7 行</b> 行内跳变 3.4s<br><span class="muted">可能是长音「远」，建议对照人声包络</span></div></div>
+            <div class="issue"><div><b>第 9 行</b> 未找到，已剔除<span class="ki">KI-2</span><br><span class="muted">覆盖率 6% · 疑似剪辑版跳过</span></div></div>
+            <div class="issue"><div>多音字「得」读 de，可改 děi<span class="ki">KI-5</span></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="tl-tools">
+          <button class="btn ghost icon" style="width:26px;height:26px">−</button>
+          <button class="btn ghost icon" style="width:26px;height:26px">+</button>
+          <span class="cap" style="margin-left:6px">吸附起音</span><span class="toggle on" style="transform:scale(.76)"></span>
+          <span class="cap" style="margin-left:8px">联动后续字</span><span class="toggle" style="transform:scale(.76)"></span>
+          <span class="grow"></span>
+          <span class="cap">拖动字块边缘调整时间 · Alt+←/→ 微调 10ms · 空格 播放</span>
+        </div>
+        <div class="th">时间</div><div class="tr-cell ruler" id="ruler"></div>
+        <div class="th">原曲</div><div class="tr-cell"><canvas id="cvMix" style="width:100%;height:100%;display:block"></canvas></div>
+        <div class="th" style="color:var(--accent)">人声轨</div><div class="tr-cell"><canvas id="cvVoc" style="width:100%;height:100%;display:block"></canvas></div>
+        <div class="th">逐字</div><div class="tr-cell" id="trChars"></div>
+        <div class="th">行</div><div class="tr-cell" id="trLines"></div>
+        <div class="playhead" id="playhead"></div>
+      </div>
+    </section>
+
+    <!-- ========== 5. 工具箱 ========== -->
+    <section class="page" id="p-tools">
+      <div class="page-date">对已有 LRC 批量处理 · 支持拖拽文件或文件夹到卡片上</div>
+      <h1 class="title" style="margin-bottom:20px">工具箱</h1>
+      <div class="tools">
+        <div class="card tool"><div class="tool-ic" style="background:linear-gradient(135deg,#34c759,#0f9d58)"><svg class="ic lg" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></div><div class="t">校验逐字 LRC</div><div class="d">检查 BOM / CRLF、行首与首标签一致、标签倒序、行内跳变、行尾标签、跨行越界。</div><div class="f"><span class="mono faint">validate</span><button class="btn">选择文件</button></div></div>
+        <div class="card tool"><div class="tool-ic" style="background:linear-gradient(135deg,#ff6b9a,#e0245e)"><svg class="ic lg" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg></div><div class="t">双语歌词加 ❤️</div><div class="d">识别只有首尾双标签的中文翻译行，前后加 ❤️，保持其余字节不变。</div><div class="f"><span class="mono faint">hearts</span><button class="btn">选择文件</button></div></div>
+        <div class="card tool"><div class="tool-ic" style="background:linear-gradient(135deg,#5ac8fa,#007aff)"><svg class="ic lg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="t">小数位转换</div><div class="d">两位小数时间戳批量转为三位（末尾补 0，数值等价），统一全库格式。</div><div class="f"><span class="mono faint">convert</span><button class="btn">选择文件</button></div></div>
+        <div class="card tool"><div class="tool-ic" style="background:linear-gradient(135deg,#af52de,#7b2cbf)"><svg class="ic lg" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg></div><div class="t">人声分离</div><div class="d">demucs htdemucs 分离出人声与伴奏轨，可单独导出。</div><div class="f"><span class="mono faint">separate</span><button class="btn">选择音频</button></div></div>
+        <div class="card tool"><div class="tool-ic" style="background:linear-gradient(135deg,#ff9f0a,#ff6a00)"><svg class="ic lg" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div><div class="t">网易云歌词抓取</div><div class="d">按清洗后的关键词与时长搜索原文/翻译 LRC；自动限速避免 405。</div><div class="f"><span class="mono faint">fetch</span><button class="btn">搜索</button></div></div>
+        <div class="card tool"><div class="tool-ic" style="background:linear-gradient(135deg,#30d158,#00a389)"><svg class="ic lg" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div><div class="t">起音与主唱检测</div><div class="d">分析人声轨能量包络与 1–4kHz 占比，核对起音或筛除纯音乐。</div><div class="f"><span class="mono faint">rms_envelope</span><button class="btn">选择音频</button></div></div>
+      </div>
+
+      <div class="sec-title">最近一次校验 · 3 个文件</div>
+      <div class="vresult">
+        <div class="card" style="overflow:hidden">
+          <div class="vfile sel"><span class="pill warn">3</span><div class="grow"><div class="strong">青石巷.lrc</div><div class="cap">逐字行 28 / 30</div></div></div>
+          <div class="vfile"><span class="pill ok">✓</span><div class="grow"><div class="strong">晚风.lrc</div><div class="cap">逐字行 32 / 32</div></div></div>
+          <div class="vfile"><span class="pill ok">✓</span><div class="grow"><div class="strong">Paper Moon.lrc</div><div class="cap">逐字行 41 / 41</div></div></div>
+        </div>
+        <div class="card" style="padding:16px;display:flex;flex-direction:column;gap:10px">
+          <div class="notice warn"><div class="grow"><b>所有行都缺少行尾结束标签</b><div class="cap">播放器会把末字起点当行尾，末字未唱完就被切掉。</div></div><button class="btn">一键补齐</button></div>
+          <div class="notice warn"><div class="grow"><b>两位小数时间戳 214 个</b></div><button class="btn">转为三位</button></div>
+          <div class="notice accent"><div class="grow"><b>第 17 行 行内跳变 3.8s（真实拖腔）</b><div class="cap">已对照人声包络 61.80–64.14s，可忽略。</div></div><button class="btn" data-p="editor">打开校对</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 6. 设置（复刻 Cloudy 主题色 + 简洁分组） ========== -->
+    <section class="page" id="p-settings">
+      <div class="set-wrap">
+        <div class="page-date">项目根目录 D:\WindowsDev\Kiralrc · 环境就绪 · CUDA RTX 4070</div>
+        <h1 class="title" style="margin-bottom:20px">设置</h1>
+
+        <div class="sec-title" style="margin-top:0">外观与主题色</div>
+        <div class="set-group">
+          <div class="set-row">
+            <div><div class="t">外观模式</div><div class="d">浅色、深色或跟随系统</div></div>
+            <div class="r"><div class="seg" id="themeSeg"><span class="on" data-t="light">浅色</span><span data-t="dark">深色</span></div></div>
+          </div>
+          <div class="set-row">
+            <div><div class="t">主题色</div><div class="d">按钮、高亮以及窗口和侧栏都会带上淡淡的呼吸感染色</div></div>
+            <div class="r"><div class="swatches" id="setSwatches"></div></div>
+          </div>
+        </div>
+
+        <div class="sec-title">模型与运行环境</div>
+        <div class="set-group">
+          <div class="set-row"><span class="pill ok">存在</span><div><div class="t">SOFA 歌声对齐模型</div><div class="d mono">models/sofa/v1.0.0_mandarin_singing.ckpt</div></div><div class="r"><button class="btn">打开目录</button></div></div>
+          <div class="set-row"><span class="pill ok">存在</span><div><div class="t">SOFA 独立 Python（3.10）</div><div class="d mono">.venv-sofa/Scripts/python.exe</div></div><div class="r"><button class="btn">重新检测</button></div></div>
+          <div class="set-row"><span class="pill ok">存在</span><div><div class="t">faster-whisper large-v3（CT2）</div><div class="d mono">models/faster-whisper-large-v3</div></div><div class="r"><button class="btn accent">下载缺失模型</button></div></div>
+        </div>
+
+        <div class="sec-title">对齐与默认参数</div>
+        <div class="set-group">
+          <div class="set-row"><div><div class="t">时间戳小数位</div><div class="d">全库统一为三位：[mm:ss.SSS]</div></div><div class="r"><div class="seg"><span class="on">3 位</span><span>2 位</span></div></div></div>
+          <div class="set-row"><div><div class="t">无主唱自动跳过<span class="ki">KI-1</span></div><div class="d">人声轨 1–4kHz 能量占比低于阈值时判定为纯音乐 / 哼唱</div></div><div class="r"><span class="numbox">0.08</span><span class="toggle on"></span></div></div>
+          <div class="set-row"><div><div class="t">多音字读音覆盖<span class="ki">KI-5</span></div><div class="d">为「了/着/得/还」提供白名单或人工覆写词表</div></div><div class="r"><span class="mono cap">config/polyphone.toml</span><button class="btn">编辑词表</button></div></div>
+          <div class="set-row"><div><div class="t">英文 / 数字混排粒度<span class="ki">KI-7</span></div><div class="d">WhisperX 默认按词输出；可切换为按字母均分</div></div><div class="r"><div class="seg"><span class="on">按词</span><span>按字母均分</span></div></div></div>
+          <div class="set-row"><div><div class="t">歌词抓取间隔与代理</div><div class="d">匿名请求网易云限速 4.5s，避免 405</div></div><div class="r"><span class="numbox">4.5 s</span><div class="tb" style="width:155px"><span class="mono">127.0.0.1:7890</span></div><span class="toggle on"></span></div></div>
+        </div>
+
+        <div class="sec-title">缓存</div>
+        <div class="set-group">
+          <div class="set-row"><div><div class="t">中间产物缓存<span class="ki">KI-6</span></div><div class="d">work/ 下的人声轨与切片（每首 20–50 MB）· 对应 <span class="mono">kiralrc clean --days N</span></div></div><div class="r"><span class="cap">1.2 GB · 14 首</span><div class="tb" style="width:118px">清理 7 天前</div><button class="btn">立即清理</button></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 底部悬浮液态玻璃胶囊栏（非编辑器页面显示） -->
+    <div class="glass-dock" id="glassDock">
+      <div class="dock-song" data-p="editor">
+        <div class="dock-disc"></div>
+        <div style="min-width:0"><b>晚风 · 逐字校对中</b><span>示例歌手 · SOFA 对齐完成 · 32 行</span></div>
+      </div>
+      <div class="dock-center">
+        <div class="dock-ctls">
+          <button class="ctl"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/></svg></button>
+          <button class="ctl play"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="7 4 20 12 7 20 7 4"/></svg></button>
+          <button class="ctl"><svg class="ic sm fill" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg></button>
+        </div>
+        <div class="dock-prog"><span>01:12</span><div class="track"><i></i></div><span>03:12</span></div>
+      </div>
+      <div class="dock-end">
+        <span class="pill ok">人声轨就绪</span>
+        <button class="btn" data-p="editor">进入校对</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 外部设计稿导览条（支持实时切页、切 Cloudy 8 种主题色、切深浅、切 KI 标注） -->
+<div class="deck" id="deck">
+  <span data-p="library">曲库</span><span data-p="align">新建对齐</span><span data-p="queue">任务队列</span><span data-p="editor">编辑与校对</span><span data-p="tools">工具箱</span><span data-p="settings">设置</span>
+  <div class="dsep"></div>
+  <span id="deckSwatches" style="display:inline-flex;align-items:center;padding:0 4px"></span>
+  <div class="dsep"></div>
+  <span id="deckKi">🏷 标注</span>
+  <span id="deckTheme">◐ 深/浅</span>
+</div>
+
+<script>
+/* ---------- Cloudy 8 种主题色预设 ---------- */
+const ACCENTS=[
+  {id:'red',    name:'网易云红', hex:'#e03c2f', tint:false},
+  {id:'clay',   name:'陶土',     hex:'#D97757', tint:true},
+  {id:'amber',  name:'琥珀',     hex:'#E0A526', tint:true},
+  {id:'green',  name:'青草',     hex:'#4E9E60', tint:true},
+  {id:'teal',   name:'湖水',     hex:'#2E9191', tint:true},
+  {id:'blue',   name:'海蓝',     hex:'#3D7BD9', tint:true},
+  {id:'violet', name:'紫罗兰',   hex:'#7C5CD6', tint:true},
+  {id:'rose',   name:'玫瑰',     hex:'#D6608E', tint:true},
+];
+function setAccent(id){
+  const a=ACCENTS.find(x=>x.id===id)||ACCENTS[0];
+  document.documentElement.style.setProperty('--accent-raw',a.hex);
+  document.documentElement.style.setProperty('--accent',a.hex);
+  document.documentElement.classList.toggle('tinted',a.tint);
+  document.querySelectorAll('[data-acc]').forEach(el=>el.classList.toggle('on',el.dataset.acc===a.id));
+  requestAnimationFrame(drawAll);
+}
+const swSet=document.getElementById('setSwatches'), swDeck=document.getElementById('deckSwatches');
+ACCENTS.forEach(a=>{
+  const s1=document.createElement('div'); s1.className='sw'; s1.style.background=a.hex; s1.title=a.name; s1.dataset.acc=a.id; s1.onclick=()=>setAccent(a.id); swSet.appendChild(s1);
+  const s2=document.createElement('span'); s2.className='dot-sw'; s2.style.background=a.hex; s2.title=a.name; s2.dataset.acc=a.id; s2.onclick=()=>setAccent(a.id); swDeck.appendChild(s2);
+});
+
+/* ---------- 页面与主题切换 ---------- */
+const pages=['library','align','queue','editor','tools','settings'];
+function show(p){
+  if(!pages.includes(p)) p='library';
+  pages.forEach(x=>document.getElementById('p-'+x).classList.toggle('show',x===p));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('sel'));
+  const first=document.querySelector('.nav-item[data-p="'+p+'"]'); if(first) first.classList.add('sel');
+  document.querySelectorAll('.deck span[data-p]').forEach(s=>s.classList.toggle('on',s.dataset.p===p));
+  document.getElementById('glassDock').classList.toggle('hide',p==='editor');
+  history.replaceState(null,'','#'+p+location.search);
+  requestAnimationFrame(drawAll);
+}
+document.querySelectorAll('[data-p]').forEach(el=>el.addEventListener('click',()=>show(el.dataset.p)));
+
+function setDark(on){
+  document.documentElement.classList.toggle('dark',on);
+  document.querySelectorAll('#themeSeg span').forEach(s=>s.classList.toggle('on',(s.dataset.t==='dark')===on));
+  requestAnimationFrame(drawAll);
+}
+document.getElementById('themeBtn').onclick=()=>setDark(!document.documentElement.classList.contains('dark'));
+document.getElementById('deckTheme').onclick=()=>setDark(!document.documentElement.classList.contains('dark'));
+document.querySelectorAll('#themeSeg span').forEach(s=>s.onclick=()=>setDark(s.dataset.t==='dark'));
+document.getElementById('deckKi').onclick=()=>document.body.classList.toggle('noki');
+
+const qs=new URLSearchParams(location.search);
+setAccent(qs.get('accent')||'clay');
+if(qs.has('dark')) setDark(true);
+if(qs.has('shot')) document.body.classList.add('shot');
+if(qs.has('noki')) document.body.classList.add('noki');
+
+/* ---------- 演示数据 ---------- */
+const LINES=[
+  {t:'00:06.232',x:'晚风吹过安静的街角',s:'ok'},
+  {t:'00:08.560',x:'路灯把影子拉得很长',s:'ok'},
+  {t:'00:11.020',x:'我把心事写进旋律里',s:'ok',sel:true},
+  {t:'00:11.020',x:'❤️ I wrote my heart into the melody ❤️',s:'tr'},
+  {t:'00:14.880',x:'唱给远方的你听',s:'ok'},
+  {t:'00:18.400',x:'星星落在你的窗前',s:'ok'},
+  {t:'00:21.950',x:'像远——方的回声',s:'warn'},
+  {t:'00:27.300',x:'穿过城市的灯火',s:'ok'},
+  {t:'00:30.640',x:'穿过漫长的冬天',s:'cut'},
+  {t:'00:34.120',x:'嗯 那些没说出口的话',s:'ok'},
+  {t:'00:38.010',x:'都写在这一页',s:'ok'},
+  {t:'00:41.270',x:'等风再一次经过',s:'warn'},
+  {t:'00:44.600',x:'你会不会想起我',s:'ok'},
+];
+const ll=document.getElementById('lineList');
+LINES.forEach((l,i)=>{
+  const dot=l.s==='warn'?'<span style="color:var(--warn);font-weight:700">!</span>':l.s==='cut'?'<span style="color:var(--ink-3)">⊘</span>':l.s==='tr'?'<span style="color:var(--ink-3)">译</span>':'<span style="color:var(--ok)">✓</span>';
+  const tx=l.s==='cut'?`<span class="tx" style="text-decoration:line-through;color:var(--ink-3)">${l.x}</span>`:`<span class="tx">${l.x}</span>`;
+  ll.insertAdjacentHTML('beforeend',`<div class="ln ${l.sel?'sel':''} ${l.s==='tr'?'tr':''}"><span class="idx">${i+1}</span><span class="ts">${l.s==='cut'?'--:--.---':l.t}</span>${tx}${dot}</div>`);
+});
+const cur=[['路','lu'],['灯','deng'],['把','ba'],['影','ying'],['子','zi'],['拉','la'],['得','de'],['很','hen'],['长','chang']];
+const pv=document.getElementById('pvCur');
+cur.forEach((c,i)=>pv.insertAdjacentHTML('beforeend',`<div class="ch ${i<6?'done':i===6?'now':''}"><span class="py">${c[1]}</span><span class="hz">${c[0]}</span></div>`));
+
+/* ---------- 时间轴绘制 ---------- */
+const T0=6.0,T1=16.0;
+const CH=[
+ ['晚',6.232,6.61,0],['风',6.61,7.12,0],['吹',7.12,7.36,0],['过',7.36,7.62,0],['安',7.62,7.84,0],['静',7.84,8.05,0],['的',8.05,8.18,0],['街',8.18,8.33,0],['角',8.33,8.52,0],
+ ['路',8.56,8.80,1],['灯',8.80,9.05,1],['把',9.05,9.22,1],['影',9.22,9.48,1],['子',9.48,9.66,1],['拉',9.66,9.92,1],['得',9.92,10.10,1],['很',10.10,10.34,1],['长',10.34,10.96,1],
+ ['我',11.02,11.30,2],['把',11.30,11.52,2],['心',11.52,11.90,2],['事',12.38,12.912,2,'sel'],['写',12.912,13.20,2],['进',13.20,13.44,2],['旋',13.44,13.70,2],['律',13.70,14.02,2],['里',14.02,14.63,2],
+ ['唱',14.88,15.14,4],['给',15.14,15.40,4],['远',15.40,15.70,4],['方',15.70,15.98,4],
+];
+function x(t,w){return (t-T0)/(T1-T0)*w}
+function seeded(s){return ()=>{s=(s*16807)%2147483647;return s/2147483647}}
+function drawWave(cv,opts){
+  const r=cv.getBoundingClientRect(); if(!r.width) return;
+  const dpr=devicePixelRatio||1; cv.width=r.width*dpr; cv.height=r.height*dpr;
+  const g=cv.getContext('2d'); g.scale(dpr,dpr);
+  const css=getComputedStyle(document.documentElement);
+  const W=r.width,H=r.height,mid=H/2,rnd=seeded(opts.seed);
+  g.fillStyle=opts.color||css.getPropertyValue('--wave');
+  const step=opts.step||2.5;
+  for(let px=0;px<W;px+=step){
+    const t=opts.t0+(px/W)*(opts.t1-opts.t0);
+    const a=opts.amp(t)*(0.55+0.45*rnd());
+    const h=Math.max(1.2,a*(H/2-3));
+    g.fillRect(px,mid-h,step-0.8,h*2);
+  }
+}
+function vocAmp(t){for(const c of CH){if(t>=c[1]&&t<c[2]){const p=(t-c[1])/(c[2]-c[1]);return 0.35+0.6*Math.sin(Math.PI*Math.min(1,p*1.3+0.05));}}return 0.03}
+function mixAmp(t){return 0.45+0.25*Math.sin(t*3.1)+0.2*vocAmp(t)}
+function drawAll(){
+  const css=getComputedStyle(document.documentElement);
+  const mini=document.getElementById('miniWave');
+  if(mini.offsetParent) drawWave(mini,{seed:7,t0:0,t1:192,step:3,amp:t=>t<6?0.15:0.4+0.35*Math.abs(Math.sin(t/9))});
+  const tl=document.getElementById('timeline');
+  if(!tl.offsetParent) return;
+  drawWave(document.getElementById('cvMix'),{seed:3,t0:T0,t1:T1,amp:mixAmp});
+  drawWave(document.getElementById('cvVoc'),{seed:5,t0:T0,t1:T1,amp:vocAmp,color:css.getPropertyValue('--accent').trim()});
+  const ru=document.getElementById('ruler'),W=ru.clientWidth; ru.innerHTML='';
+  for(let t=T0;t<=T1+0.001;t+=0.25){
+    const major=Math.abs(t-Math.round(t))<0.001, half=Math.abs(t*2-Math.round(t*2))<0.001;
+    ru.insertAdjacentHTML('beforeend',`<div class="tk" style="left:${x(t,W)}px;height:${major?9:half?5:3}px"></div>`);
+    if(major) ru.insertAdjacentHTML('beforeend',`<div class="lb" style="left:${x(t,W)}px">00:${String(Math.floor(t)).padStart(2,'0')}</div>`);
+  }
+  const tc=document.getElementById('trChars'); tc.innerHTML='';
+  CH.forEach(c=>{const l=x(c[1],W),w=x(c[2],W)-l-2; tc.insertAdjacentHTML('beforeend',`<div class="cblk ${c[4]||''} ${c[3]===4?'next':''}" style="left:${l}px;width:${w}px">${c[0]}</div>`);});
+  [8.52,10.96,14.63].forEach(t=>tc.insertAdjacentHTML('beforeend',`<div class="endtag" style="left:${x(t,W)}px"></div>`));
+  const cv=document.getElementById('cvVoc').parentElement; cv.querySelectorAll('.onset').forEach(e=>e.remove());
+  [6.232,8.56,11.02,12.36,14.88].forEach(t=>cv.insertAdjacentHTML('beforeend',`<div class="onset" style="left:${x(t,W)}px"></div>`));
+  const tr=document.getElementById('trLines'); tr.innerHTML='';
+  [[6.232,8.52,'1  晚风吹过安静的街角'],[8.56,10.96,'2  路灯把影子拉得很长'],[11.02,14.63,'3  我把心事写进旋律里 · ❤️ 翻译'],[14.88,17,'5  唱给远方的你听']].forEach((b,i)=>{
+    const l=x(b[0],W),w=x(b[1],W)-l-2;
+    tr.insertAdjacentHTML('beforeend',`<div class="lblk ${i===2?'cur':''}" style="left:${l}px;width:${w}px">${b[2]}</div>`);
+  });
+  document.getElementById('playhead').style.left=(92+x(10.0,W))+'px';
+}
+addEventListener('resize',drawAll);
+show((location.hash||'#library').slice(1));
+
+/* ---------- 交互：所有开关、分段控件、表格行、候选行、歌词行与字块均可点击并带动画 ---------- */
+document.querySelectorAll('.toggle').forEach(t=>t.addEventListener('click',e=>{e.stopPropagation();t.classList.toggle('on');}));
+document.querySelectorAll('.seg').forEach(seg=>{
+  if(seg.id==='themeSeg') return;
+  seg.querySelectorAll('span').forEach(sp=>sp.addEventListener('click',()=>{
+    seg.querySelectorAll('span').forEach(x=>x.classList.remove('on'));
+    sp.classList.add('on');
+  }));
+});
+document.querySelectorAll('.tabs').forEach(tb=>{
+  tb.querySelectorAll('span').forEach(sp=>sp.addEventListener('click',()=>{
+    tb.querySelectorAll('span').forEach(x=>x.classList.remove('on'));
+    sp.classList.add('on');
+  }));
+});
+document.querySelectorAll('.track-list .trow:not(.head)').forEach(r=>r.addEventListener('click',e=>{
+  if(e.target.closest('button')) return;
+  r.classList.toggle('sel');
+  const ck=r.querySelector('.check');
+  if(ck){
+    ck.classList.toggle('on',r.classList.contains('sel'));
+    ck.innerHTML=r.classList.contains('sel')?'<svg class="ic" style="width:12px;height:12px" viewBox="0 0 24 24" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>':'';
+  }
+}));
+document.querySelectorAll('.src-opts .src').forEach(s=>s.addEventListener('click',()=>{
+  document.querySelectorAll('.src-opts .src').forEach(x=>{x.classList.remove('on');x.querySelector('.radio').classList.remove('on');});
+  s.classList.add('on'); s.querySelector('.radio').classList.add('on');
+}));
+document.querySelectorAll('.cands .cand').forEach(c=>c.addEventListener('click',()=>{
+  document.querySelectorAll('.cands .cand').forEach(x=>{x.classList.remove('on');x.querySelector('.radio').classList.remove('on');});
+  c.classList.add('on'); c.querySelector('.radio').classList.add('on');
+}));
+document.getElementById('lineList').addEventListener('click',e=>{
+  const ln=e.target.closest('.ln'); if(!ln) return;
+  document.querySelectorAll('#lineList .ln').forEach(x=>x.classList.remove('sel'));
+  ln.classList.add('sel');
+});
+document.getElementById('trChars').addEventListener('click',e=>{
+  const b=e.target.closest('.cblk'); if(!b) return;
+  document.querySelectorAll('#trChars .cblk').forEach(x=>x.classList.remove('sel'));
+  b.classList.add('sel');
+  const g=document.querySelector('.props .glyph-box'); if(g) g.textContent=b.textContent;
+});
+
+/* ---------- 鼠标拖拽：1) 窗口拖拽  2) 底部胶囊进度条拖拽  3) 时间轴播放头拖拽  4) 逐字块拖拽调时 ---------- */
+(()=>{
+  // 1) 拖动窗口（按住侧栏顶部品牌区、主区顶部 38px 空白处或编辑器顶栏空白处）
+  const win=document.getElementById('win');
+  let winX=0,winY=0,wDrag=null;
+  win.addEventListener('pointerdown',e=>{
+    if(e.button!==0) return;
+    if(e.target.closest('button,.btn,.ctl,.seg,.tb,.numbox,.toggle,.nav-item,.nav-recent,.side-now,.side-search,.wc,.cblk,.tr-cell,.track')) return;
+    const rect=win.getBoundingClientRect();
+    const inTop=e.clientY-rect.top<=46;
+    const inSide=e.target.closest('.side') && !e.target.closest('.nav-item,.nav-recent,.side-now,.side-search');
+    if(!inTop && !inSide) return;
+    wDrag={sx:e.clientX-winX, sy:e.clientY-winY};
+    win.setPointerCapture(e.pointerId);
+  });
+  win.addEventListener('pointermove',e=>{
+    if(!wDrag) return;
+    winX=e.clientX-wDrag.sx; winY=e.clientY-wDrag.sy;
+    win.style.transform=`translate(${winX}px,${winY}px)`;
+  });
+  win.addEventListener('pointerup',()=>{wDrag=null;});
+
+  // 2) 底部液态玻璃胶囊进度条拖拽
+  const dockTrack=document.querySelector('.dock-prog .track');
+  const dockFill=dockTrack.querySelector('i');
+  const dockTime=document.querySelector('.dock-prog span:first-child');
+  dockTrack.style.cursor='pointer';
+  let dDrag=false;
+  const seekDock=e=>{
+    const r=dockTrack.getBoundingClientRect();
+    const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    dockFill.style.width=(p*100).toFixed(1)+'%';
+    const sec=Math.round(p*192);
+    dockTime.textContent=`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+  };
+  dockTrack.addEventListener('pointerdown',e=>{dDrag=true;dockTrack.setPointerCapture(e.pointerId);seekDock(e);});
+  dockTrack.addEventListener('pointermove',e=>{if(dDrag) seekDock(e);});
+  dockTrack.addEventListener('pointerup',()=>{dDrag=false;});
+
+  // 3) 编辑器时间轴：拖动标尺或波形移动播放头
+  const tl=document.getElementById('timeline');
+  const ph=document.getElementById('playhead');
+  const stageTime=document.querySelector('.stage-top .mono');
+  const kvBoxes=document.querySelectorAll('.props .kv .numbox');
+  let phDrag=false, blkDrag=null;
+  const movePlayhead=clientX=>{
+    const ru=document.getElementById('ruler').getBoundingClientRect();
+    const p=Math.max(0,Math.min(1,(clientX-ru.left)/ru.width));
+    const t=T0+p*(T1-T0);
+    ph.style.left=(92+p*ru.width)+'px';
+    if(stageTime) stageTime.textContent=`00:${t.toFixed(3).padStart(6,'0')} / 03:12.000`;
+  };
+  ['ruler','cvMix','cvVoc'].forEach(id=>{
+    const el=document.getElementById(id);
+    const cell=el.classList.contains('tr-cell')?el:el.parentElement;
+    cell.style.cursor='ew-resize';
+    cell.addEventListener('pointerdown',e=>{
+      phDrag=true; cell.setPointerCapture(e.pointerId); movePlayhead(e.clientX);
+    });
+    cell.addEventListener('pointermove',e=>{if(phDrag) movePlayhead(e.clientX);});
+    cell.addEventListener('pointerup',()=>{phDrag=false;});
+  });
+
+  // 4) 编辑器逐字轨道：拖动任意字块（或左右边缘）实时调整该字起止时间
+  const tc=document.getElementById('trChars');
+  tc.addEventListener('pointerdown',e=>{
+    const b=e.target.closest('.cblk'); if(!b) return;
+    const idx=[...tc.querySelectorAll('.cblk')].indexOf(b);
+    if(idx<0||idx>=CH.length) return;
+    document.querySelectorAll('#trChars .cblk').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel');
+    const br=b.getBoundingClientRect();
+    const mode=(e.clientX-br.left<8)?'L':(br.right-e.clientX<8)?'R':'M';
+    blkDrag={idx, mode, sx:e.clientX, s0:CH[idx][1], e0:CH[idx][2]};
+    tc.setPointerCapture(e.pointerId);
+    const g=document.querySelector('.props .glyph-box'); if(g) g.textContent=CH[idx][0];
+    if(kvBoxes.length>=2){
+      kvBoxes[0].textContent='00:'+CH[idx][1].toFixed(3).padStart(6,'0');
+      kvBoxes[1].textContent='00:'+CH[idx][2].toFixed(3).padStart(6,'0');
+    }
+  });
+  tc.addEventListener('pointermove',e=>{
+    if(!blkDrag) return;
+    const W=tc.clientWidth||1;
+    const dt=((e.clientX-blkDrag.sx)/W)*(T1-T0);
+    const c=CH[blkDrag.idx];
+    if(blkDrag.mode==='L'){
+      c[1]=Math.max(T0,Math.min(blkDrag.e0-0.08,blkDrag.s0+dt));
+    }else if(blkDrag.mode==='R'){
+      c[2]=Math.min(T1,Math.max(blkDrag.s0+0.08,blkDrag.e0+dt));
+    }else{
+      const dur=blkDrag.e0-blkDrag.s0;
+      c[1]=Math.max(T0,Math.min(T1-dur,blkDrag.s0+dt));
+      c[2]=c[1]+dur;
+    }
+    const el=tc.querySelectorAll('.cblk')[blkDrag.idx];
+    if(el){
+      const l=x(c[1],W), w=x(c[2],W)-l-2;
+      el.style.left=l+'px'; el.style.width=Math.max(14,w)+'px';
+    }
+    if(kvBoxes.length>=2){
+      kvBoxes[0].textContent='00:'+c[1].toFixed(3).padStart(6,'0');
+      kvBoxes[1].textContent='00:'+c[2].toFixed(3).padStart(6,'0');
+    }
+    movePlayhead(tc.getBoundingClientRect().left+x(c[1],W));
+  });
+  tc.addEventListener('pointerup',()=>{blkDrag=null;});
+})();
+</script>
+</body>
+</html>

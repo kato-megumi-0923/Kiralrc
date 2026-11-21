@@ -1,0 +1,27 @@
+# Kiralrc 多音字读音覆盖词表（KI-5）
+# 键为词组或单字，值为空格分隔的无声调拼音（音节数必须与汉字数相等）
+
+[phrases]
+"还得" = "hai dei"
+"走在" = "zou zai"
+"看着" = "kan zhe"
+"笑着" = "xiao zhe"
+"听着" = "ting zhe"
+"吹着" = "chui zhe"
+"睡着" = "shui zhao"
+"觉得" = "jue de"
+"记得" = "ji de"
+"舍不得" = "she bu de"
+"音乐" = "yin yue"
+"快乐" = "kuai le"
+"长大" = "zhang da"
+"长夜" = "chang ye"
+"重逢" = "chong feng"
+"重新" = "chong xin"
+"行囊" = "xing nang"
+"一行泪" = "yi hang lei"
+"宿命" = "su ming"
+"温柔地" = "wen rou de"
+"静静地" = "jing jing de"
+"悄悄地" = "qiao qiao de"
+"慢慢地" = "man man de"

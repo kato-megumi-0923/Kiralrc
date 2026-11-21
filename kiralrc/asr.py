@@ -64,42 +64,103 @@ def _coverage(line: str, seg_text: str) -> float:
     return hit / len(lc)
 
 
-def assign_lines(lines: list[str], segments: list[dict]) -> list[tuple[float, str]]:
-    """把歌词行单调分配给 ASR 分段（行级 DP），返回 [(start, line)]。
+def assign_lines_detail(
+    lines: list[str],
+    segments: list[dict],
+    min_coverage: float | None = None,
+) -> tuple[list[tuple[float, str]], list[dict]]:
+    """全局对齐（DTW / 带跳行状态的单调 DP），返回 (已分配行, 被剔除的低覆盖率行)。
 
-    ASR 的**文字**可能错，但分段起止时间通常可信，所以只借它的时间骨架。
+    KI-2：当音频是 TV size / 剪辑版（跳过了某段主歌）时，被剪掉的歌词行在周围分段的
+    覆盖率低于 min_coverage，DP 会走「跳行」分支将其剔除，而不是硬塞进相邻分段。
     """
     if not segments or not lines:
-        return []
+        return [], []
+    if min_coverage is None:
+        min_coverage = float(config.opt("min_line_coverage", 0.22))
+
     n_seg, n_line = len(segments), len(lines)
-    cov = [[_coverage(l, s["text"]) for s in segments] for l in lines]
+    cov = []
+    for l in lines:
+        row = []
+        for j, s in enumerate(segments):
+            c = _coverage(l, s["text"])
+            if j + 1 < n_seg:
+                c = max(c, _coverage(l, s["text"] + segments[j + 1]["text"]) * 0.95)
+            row.append(c)
+        cov.append(row)
+
+    max_cov = max((max(r) for r in cov), default=0.0)
+    # 若整首歌覆盖率都极低（例如跨语种或无文本分段），则不做剔除兜底分配
+    allow_skip = max_cov >= min_coverage and min_coverage > 0.0
+    skip_reward = min_coverage - 1e-4 if allow_skip else -1e9
+    crowd_penalty = 0.12
 
     NEG = -1e9
     dp = [[NEG] * n_seg for _ in range(n_line)]
-    back = [[-1] * n_seg for _ in range(n_line)]
+    # parent[i][j] = (prev_j, matched: bool)
+    parent: list[list[tuple[int, bool]]] = [[(-1, True)] * n_seg for _ in range(n_line)]
+
     for j in range(n_seg):
-        dp[0][j] = cov[0][j]
+        if cov[0][j] >= skip_reward:
+            dp[0][j] = cov[0][j]
+            parent[0][j] = (j, True)
+        else:
+            dp[0][j] = skip_reward
+            parent[0][j] = (j, False)
+
     for i in range(1, n_line):
-        best, arg = NEG, -1
+        best_prev, arg_prev = NEG, 0
         for j in range(n_seg):
-            if dp[i - 1][j] >= best:  # 同分时取更靠后的段，避免重复句挤在一起
-                best, arg = dp[i - 1][j], j
-            dp[i][j] = best + cov[i][j]
-            back[i][j] = arg
+            # 1) 跳行（该行在剪辑版音频中被剪掉）
+            best_here = dp[i - 1][j] + skip_reward
+            p_here = (j, False)
+
+            # 2) 同段复用（两句歌词落在同一个 ASR 分段内，加轻微拥挤惩罚）
+            same_seg = dp[i - 1][j] + cov[i][j] - crowd_penalty
+            if same_seg >= best_here:
+                best_here = same_seg
+                p_here = (j, True)
+
+            # 3) 从更早的分段推进到当前分段 j（同分时取更靠后的段，避免重复句挤在一起）
+            if best_prev > NEG / 2:
+                adv = best_prev + cov[i][j]
+                if adv >= best_here:
+                    best_here = adv
+                    p_here = (arg_prev, True)
+
+            if dp[i - 1][j] >= best_prev:
+                best_prev, arg_prev = dp[i - 1][j], j
+
+            dp[i][j] = best_here
+            parent[i][j] = p_here
 
     j = max(range(n_seg), key=lambda k: dp[n_line - 1][k])
-    pick = [j]
-    for i in range(n_line - 1, 0, -1):
-        j = back[i][j]
-        pick.append(j)
-    pick.reverse()
+    choices: list[tuple[int, bool]] = []
+    for i in range(n_line - 1, -1, -1):
+        prev_j, matched = parent[i][j]
+        choices.append((j, matched))
+        j = prev_j
+    choices.reverse()
 
-    out, used = [], 0
-    for line, seg_idx in zip(lines, pick):
+    out: list[tuple[float, str]] = []
+    skipped: list[dict] = []
+    for idx, (line, (seg_idx, matched)) in enumerate(zip(lines, choices)):
+        c = cov[idx][seg_idx]
+        if not matched or (allow_skip and c < min_coverage):
+            skipped.append({"index": idx + 1, "text": line, "coverage": round(c, 3)})
+            continue
         seg = segments[seg_idx]
-        start = max(0.0, seg["start"])
+        start = max(0.0, float(seg["start"]))
         if out and start <= out[-1][0] + 0.2:
             start = out[-1][0] + 0.3
-        used += 1
         out.append((round(start, 3), line))
+
+    return out, skipped
+
+
+def assign_lines(lines: list[str], segments: list[dict],
+                 min_coverage: float | None = None) -> list[tuple[float, str]]:
+    """把歌词行单调分配给 ASR 分段（行级 DP），自动剔除剪辑版缺失行，返回 [(start, line)]。"""
+    out, _ = assign_lines_detail(lines, segments, min_coverage=min_coverage)
     return out

@@ -12,3 +12,6 @@ __pycache__/
 .vscode/
 .idea/
 .pytest_cache/
+# 构建与发布产物
+*.exe
+/dist/

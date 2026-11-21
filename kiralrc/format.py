@@ -11,10 +11,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-LINE_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{2,3})\](.*)$")
-TAG_RE = re.compile(r"<(\d{2}):(\d{2}\.\d{2,3})>")
+LINE_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{1,3})\](.*)$")
+TAG_RE = re.compile(r"<(\d{2}):(\d{2}\.\d{1,3})>")
 META_RE = re.compile(r"^\[(ti|ar|al|by|tool|offset|length|re|ve):", re.I)
-STAMP_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{2,3})\]")
+STAMP_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{1,3})\]")
 TS2_RE = re.compile(r"([\[<]\d{2}:\d{2}\.\d{2})([\]>])")
 
 
@@ -48,6 +48,8 @@ class Line:
         """
         if self.tag_count > 2:
             return True
+        if self.tag_count == len(self.text) + 1:
+            return True          # 单字行（<字><行尾>）也在这里
         return bool(self.chars) and len(self.chars) >= len(self.text)
 
     def render(self) -> str:
@@ -118,7 +120,10 @@ def _append_line(lrc: Lrc, start: float, body: str) -> None:
         return
 
     plain = TAG_RE.sub("", body)
-    enhanced = len(tags) > 2
+    # 逐字行的标签数 = 字数 + 1（每字一个 + 行尾）；译文行固定「首 + 尾」两个标签，
+    # 所以 2 个标签 + 1 个字 = 单字逐字行，2 个标签 + 多字 = 译文行。
+    # 另留一条 `> 2`，兜住 "My Wish" 这种一标签盖多字符的行。
+    enhanced = len(tags) > 2 or len(tags) == len(plain) + 1
     chars = []
     if enhanced:
         for idx, ch in enumerate(plain):

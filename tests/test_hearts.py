@@ -4,7 +4,7 @@ from kiralrc import hearts
 BILINGUAL = "\r\n".join([
     "[ti:t]",
     "[00:01.000]<00:01.000>あ<00:01.400>い<00:02.000>",
-    "[00:01.000]<00:01.000>爱<00:02.000>",
+    "[00:01.000]<00:01.000>爱意<00:02.000>",
     "",
 ])
 
@@ -15,7 +15,7 @@ def test_only_translation_lines(tmp_path):
     assert hearts.wrap(p) == 1
     out = p.read_bytes().decode("utf-8").split("\r\n")
     assert out[1].startswith("[00:01.000]<00:01.000>あ")      # 逐字行不动
-    assert "❤️爱❤️" in out[2] and out[2].endswith("<00:02.000>")  # 译文加心且保留行尾
+    assert "❤️爱意❤️" in out[2] and out[2].endswith("<00:02.000>")  # 译文加心且保留行尾
     assert p.read_bytes().count(b"\r\n") == 3                  # 换行风格不变
 
 

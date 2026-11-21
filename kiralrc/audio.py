@@ -100,3 +100,60 @@ def rms_envelope(audio: np.ndarray, sr: int = 16000, hop: float = 0.02) -> np.nd
     if m == 0:
         return np.zeros(0)
     return np.sqrt((audio[: m * n].reshape(m, n) ** 2).mean(axis=1))
+
+
+def vocal_activity(audio_or_path: np.ndarray | str | Path, sr: int = 16000,
+                   min_rms: float | None = None,
+                   min_mid_ratio: float | None = None) -> dict:
+    """检测人声轨是否存在有效主唱（KI-1：筛除纯音乐/伴奏/无词低能量轨）。
+
+    判定准则：
+    1. 人声轨 P90 RMS >= min_rms（默认 0.008）
+    2. 1~4kHz 歌声共振峰频段能量占总能量比例 >= min_mid_ratio（默认 0.08）
+    """
+    from . import config
+
+    if min_rms is None:
+        min_rms = float(config.opt("min_vocal_rms", 0.008))
+    if min_mid_ratio is None:
+        min_mid_ratio = float(config.opt("min_vocal_ratio", 0.08))
+
+    if isinstance(audio_or_path, (str, Path)):
+        audio = decode(audio_or_path, sr=sr)
+    else:
+        audio = np.asarray(audio_or_path, dtype=np.float32)
+
+    env = rms_envelope(audio, sr=sr, hop=0.02)
+    if len(env) == 0:
+        return {"has_vocal": False, "rms_p90": 0.0, "mid_ratio": 0.0,
+                "reason": "音频为空或过短"}
+
+    rms_p90 = float(np.percentile(env, 90))
+
+    win = min(len(audio), max(256, int(sr * 0.05)))
+    n_frames = len(audio) // win
+    if n_frames == 0:
+        mid_ratio = 0.0
+    else:
+        frames = audio[: n_frames * win].reshape(n_frames, win)
+        hann = np.hanning(win).astype(np.float32)
+        power = np.abs(np.fft.rfft(frames * hann, axis=1)) ** 2
+        freqs = np.fft.rfftfreq(win, d=1.0 / sr)
+        valid = freqs >= 40.0
+        mid = (freqs >= 1000.0) & (freqs <= 4000.0)
+        total_e = float(power[:, valid].sum())
+        mid_e = float(power[:, mid].sum())
+        mid_ratio = mid_e / total_e if total_e > 1e-12 else 0.0
+
+    reasons = []
+    if rms_p90 < min_rms:
+        reasons.append(f"人声能量过低 RMS={rms_p90:.4f}<{min_rms}")
+    if mid_ratio < min_mid_ratio:
+        reasons.append(f"1-4kHz 占比 {mid_ratio:.3f}<{min_mid_ratio}")
+
+    return {
+        "has_vocal": len(reasons) == 0,
+        "rms_p90": round(rms_p90, 4),
+        "mid_ratio": round(mid_ratio, 4),
+        "reason": "；".join(reasons) if reasons else "主唱正常",
+    }

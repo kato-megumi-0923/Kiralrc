@@ -23,3 +23,14 @@ lead = 0.0
 sep_sample_rate = 44100
 # 抓歌词的间隔（秒），避免 405
 lyric_interval = 4.5
+# KI-1: 主唱检测阈值（人声轨 1~4kHz 能量占比与 P90 RMS）
+min_vocal_ratio = 0.08
+min_vocal_rms = 0.008
+# KI-2: 剪辑版音频单行最低匹配覆盖率（低于此值视为该段被剪掉并剔除）
+min_line_coverage = 0.22
+# KI-3: 非中文长音按人声能量包络做时长保真
+restore_long_vowel = true
+# KI-5: 多音字自定义读音词表（相对项目根）
+polyphone_file = "polyphone.toml"
+# KI-7: 英文/数字逐字粒度："word"（按词）或 "char"（按字母均分）
+en_granularity = "word"

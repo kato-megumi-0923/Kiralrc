@@ -1,0 +1,200 @@
+package app
+
+import (
+	"image/png"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// Checks that the sidebar navigates across all six views and that the settings'
+// color swatches update the app's accent and appearance.
+func TestNavigationAndAccentSwitching(t *testing.T) {
+	t.Setenv("KIRALRC_NO_PREFS", "1")
+	a := newApp()
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+
+	for _, nav := range []struct {
+		label string
+		want  pageKind
+	}{
+		{"新建对齐", pageAlign},
+		{"任务队列", pageQueue},
+		{"编辑与校对", pageEditor},
+		{"工具箱", pageTools},
+		{"设置", pageSettings},
+		{"曲库", pageLibrary},
+	} {
+		if err := tt.Click(nav.label); err != nil {
+			t.Fatalf("click %s: %v", nav.label, err)
+		}
+		tt.Frame()
+		if a.page != nav.want {
+			t.Fatalf("after clicking %s: got page %v, want %v", nav.label, a.page, nav.want)
+		}
+	}
+
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("主题色：紫罗兰"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.accentID != "violet" || a.accentHex != "#7C5CD6" {
+		t.Fatalf("got accent %s (%s), want violet", a.accentID, a.accentHex)
+	}
+
+	// On startup, Library, Queue, Recents, and Editor should ALL start in a clean empty state.
+	if len(a.libFolders) != 0 || len(a.tracks) != 0 || len(a.recents) != 0 || len(a.queueItems) != 0 || a.queueActiveTitle != "" || a.edFile != "" {
+		t.Fatalf("expected completely clean empty state on startup")
+	}
+
+	// Simulate user adding a music folder and scanning it dynamically.
+	tmpMusic := t.TempDir()
+	lrc1 := filepath.Join(tmpMusic, "伍佰 - 突然的自我.lrc")
+	_ = os.WriteFile(filepath.Join(tmpMusic, "伍佰 - 突然的自我.flac"), []byte("RIFF"), 0o644)
+	_ = os.WriteFile(lrc1, []byte("[00:01.000]听见你说\n[00:04.000]朝阳起又落\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(tmpMusic, "ヨルシカ - 晴る.flac"), []byte("RIFF"), 0o644)
+	_ = os.WriteFile(filepath.Join(tmpMusic, "ヨルシカ - 晴る.lrc"), []byte("[00:01.000]<00:01.000>晴<00:01.500>る<00:02.000>\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(tmpMusic, "泽野弘之 - Battle (OST).flac"), []byte("RIFF"), 0o644)
+
+	a.libFolders = []string{tmpMusic}
+	a.tracks, a.libStats = a.scanLibrarySync()
+	if a.libStats.Total != 3 || a.libStats.Vocal != 2 || a.libStats.LineOnly != 1 || a.libStats.Enhanced != 1 || a.libStats.InstOST != 1 {
+		t.Fatalf("unexpected scanned library stats: %+v", a.libStats)
+	}
+
+	// Verify interactive selection on Library track rows, Align candidates, and Editor character blocks.
+	if err := tt.Click("曲库"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tIdx := -1
+	for i, tr := range a.tracks {
+		if tr.Title == "突然的自我" {
+			tIdx = i
+			break
+		}
+	}
+	if tIdx < 0 {
+		t.Fatal("track 突然的自我 not found in scanned tracks")
+	}
+	wasSel := a.tracks[tIdx].Selected
+	if err := tt.Click("突然的自我"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.tracks[tIdx].Selected == wasSel {
+		t.Fatalf("clicking track row should toggle selection")
+	}
+
+	if err := a.loadLrcFile(lrc1); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.recents) != 1 {
+		t.Fatalf("expected 1 recent item after loading LRC file, got %d", len(a.recents))
+	}
+	if err := tt.Click("编辑与校对"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("字块：你"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.edSelectedChar != 2 {
+		t.Fatalf("expected edSelectedChar=2 after clicking 字块：你, got %d", a.edSelectedChar)
+	}
+
+	// Verify mouse dragging on the sidebar resizer and editor waveform scrubber.
+	tt.Press(230, 300)
+	tt.Move(270, 300)
+	tt.Frame()
+	tt.Release(270, 300)
+	tt.Frame()
+	if a.sideWidthPx <= 232 {
+		t.Fatalf("expected sidebar width to increase after dragging resizer, got %v", a.sideWidthPx)
+	}
+
+	beforePh := a.edPlayhead
+	tt.Press(500, 710)
+	tt.Move(760, 710)
+	tt.Frame()
+	tt.Release(760, 710)
+	tt.Frame()
+	if a.edPlayhead == beforePh {
+		t.Fatalf("expected edPlayhead to change after dragging waveform scrubber, still %v", a.edPlayhead)
+	}
+}
+
+// Checks that loading an LRC file parses its enhanced character timestamps into
+// the editor's lines.
+func TestLoadLrcFileIntoEditor(t *testing.T) {
+	a := newApp()
+	p := filepath.Join(t.TempDir(), "test.lrc")
+	content := "[ti:测试]\n[00:01.000]<00:01.000>晚<00:01.400>风<00:02.000>\n"
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadLrcFile(p); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.edLines) != 1 || len(a.edLines[0].Chars) != 2 {
+		t.Fatalf("unexpected parsed lines: %+v", a.edLines)
+	}
+	if a.edLines[0].Chars[1].Ch != "风" || a.edLines[0].End != 2.0 {
+		t.Fatalf("unexpected char timing: %+v", a.edLines[0])
+	}
+}
+
+// With KIRALRC_FRAMES set to a directory, saves PNG frames of all six views.
+func TestRenderFrames(t *testing.T) {
+	dir := os.Getenv("KIRALRC_FRAMES")
+	if dir == "" {
+		t.Skip("set KIRALRC_FRAMES to save PNG frames")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scenes := []struct {
+		name   string
+		page   pageKind
+		accent string
+		dark   bool
+	}{
+		{"native-library", pageLibrary, "red", false},
+		{"native-align", pageAlign, "clay", false},
+		{"native-queue", pageQueue, "red", false},
+		{"native-editor", pageEditor, "red", false},
+		{"native-editor-dark", pageEditor, "violet", true},
+		{"native-tools", pageTools, "teal", false},
+		{"native-settings", pageSettings, "clay", false},
+	}
+	for _, sc := range scenes {
+		a := newApp()
+		a.page = sc.page
+		a.setAccent(sc.accent)
+		if sc.dark {
+			a.appearance = 1
+		}
+		tt := ui.NewTester(a.view, 1360, 860)
+		tt.SetDark(sc.dark)
+		tt.Advance(400 * time.Millisecond)
+		tt.Frame()
+		f, err := os.Create(filepath.Join(dir, sc.name+".png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(f, tt.Image()); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+}

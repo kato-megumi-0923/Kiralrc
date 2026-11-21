@@ -80,3 +80,14 @@ def test_programmatic_line_renders_enhanced():
     ln = fmt.Line(1.0, "你好", [("你", 1.0), ("好", 1.5)], 2.0)
     assert ln.enhanced
     assert ln.render() == "[00:01.000]<00:01.000>你<00:01.500>好<00:02.000>"
+
+
+def test_single_char_line_is_enhanced():
+    """单字行只有「字标签 + 行尾」两个标签，不能被当成译文行。"""
+    ln = fmt.parse("[00:26.747]<00:26.747>你<00:27.780>\n").lines[0]
+    assert ln.enhanced
+    assert ln.chars[0][0] == "你"
+    assert ln.end == pytest.approx(27.780)
+    # 真正的译文行（两个字以上）仍判为非逐字
+    tr = fmt.parse("[00:01.000]<00:01.000>中文翻译<00:02.000>\n").lines[0]
+    assert not tr.enhanced
