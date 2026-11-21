@@ -5,7 +5,7 @@
 核心思路只有一条：**时间必须由专门的对齐器从音频里算出来，不能靠 ASR 的句子边界去猜。**
 
 - 文本：优先使用参考歌词（支持多平台顺序拉取），ASR 只用来给每句找个大致位置；
-- 时间：按语种选用专门的强制对齐模型（中文走歌声专精 SOFA，日文走歌声专精 MMS，英文及其他语言走 WhisperX wav2vec2）；
+- 时间：按语种选用专门的歌声/歌词强制对齐模型（中文走 SOFA，日文走 NextFire MMS，英文及其他语言走 Echora-300M MMS）；
 - 所有对齐都在 **demucs 分离出的人声轨**上跑，因为伴奏会显著干扰对齐。
 
 ## 支持语言与对齐模型
@@ -13,8 +13,8 @@
 | 语言 | 强制对齐模型 | 文本 / 音素处理 | 特色支持 |
 |---|---|---|---|
 | **中文（`zh`）** | **SOFA**（`v1.0.0_mandarin_singing.ckpt`，歌声专精） | `pypinyin` + `opencpop-extension` 词典 | 支持 `polyphone.toml` 自定义多音字读音覆盖 |
-| **日文（`ja`）** | **MMS**（`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`，歌声专精） | `fugashi`（MeCab + unidic）精确注音切分 | 准确处理「は→わ」「へ→え」等助词及长音、促音、拗音 |
-| **英文（`en`）及其他** | **WhisperX**（`wav2vec2` CTC） | 词级 / 字符级对齐 | 支持 `en_granularity` 切换按词（`word`）或按字母（`char`），并按人声能量包络保真长音 |
+| **日文（`ja`）** | **NextFire MMS**（`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`，歌声专精） | `fugashi`（MeCab + unidic）精确注音切分 | 准确处理「は→わ」「へ→え」等助词及长音、促音、拗音 |
+| **英文（`en`）及其他** | **Echora-300M MMS**（`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`，多语歌词专精） | 24s 长滑窗 + 词级/音节级对齐 | 支持 `en_granularity` 切换按词（`word`）或按字母（`char`），并按人声能量包络保真长音 |
 
 > 前置定位与人声分离全语种统一采用 `demucs` + `faster-whisper-large-v3`。
 
@@ -53,8 +53,8 @@
 4. **主唱检测**：分析人声轨 1~4kHz 能量占比与 P90 RMS（`min_vocal_ratio` / `min_vocal_rms`），拦截纯音乐或无人声轨道。
 5. **分语种逐字强制对齐**（在分离后的人声轨上按句切片运行）：
    - **中文（`zh`）**：`pypinyin` + `polyphone.toml` 词表转拼音 → 在主环境用纯 PyTorch（CUDA/CPU）直接运行 **SOFA** 歌声模型对齐。
-   - **日文（`ja`）**：`fugashi`（MeCab + unidic）切分注音，结合人声能量包络避开上句拖音 → 运行 **NextFire MMS** 日语卡拉 OK 歌声模型对齐。
-   - **英文（`en`）**：24s 长滑窗全上下文计算发射概率 → 运行 **Echora-300M MMS** 多语歌词专精模型对齐，按 `en_granularity`（`word` / `char`）切分粒度，并按人声能量包络做长音时长保真（其他语种回退 WhisperX）。
+   - **日文（`ja`）**：`fugashi`（MeCab + unidic）切分注音，结合人声能量包络避开上句拖音 → 运行 **NextFire MMS** 日语歌声模型对齐。
+   - **英文（`en`）及其他**：24s 长滑窗全上下文计算发射概率 → 运行 **Echora-300M MMS** 多语歌词专精模型对齐，按 `en_granularity`（`word` / `char`）切分粒度，并按人声能量包络做长音时长保真。
 6. **回填译文与输出**：挂载对应中文译文行，写入 `[ti:]` / `[ar:]` / `[al:]` / `[by:]` 元信息并按统一格式输出。
 
 ## 输出格式
@@ -142,16 +142,15 @@ design/            UI 设计稿
 kiralrc/
   cli.py           命令行入口
   pipeline.py      端到端流程（定文本 → 定句子位置 → 分离 → 对齐 → 输出）
-  sofa.py          SOFA 调用与结果拼装
-  jp.py            WhisperX 多语言逐字对齐
+  sofa.py          内嵌 SOFA 推理与结果拼装
+  jp.py            日文（NextFire MMS）与英文/多语（Echora-300M MMS）逐字对齐
   asr.py           faster-whisper + 歌词行↔ASR 分段的单调 DP
   audio.py         解码（PyAV）、demucs 分离、能量包络、主唱检测
-  text.py          网易云抓歌词、拼音、多音字词表处理
+  text.py          多源抓歌词、拼音、多音字词表处理
   format.py        LRC 解析/格式化/校验/小数位转换
   hearts.py        双语加 ❤️
   legacy/          早期的一次性脚本（保留作参照，不再维护）
-tools/run_sofa.py  在 SOFA venv 里跑推理（绕开 torchcodec）
-third_party/SOFA/  SOFA 源码（MIT，已去 .git）
+third_party/SOFA/  SOFA 词典与参考源码（MIT，已去 .git）
 models/            CT2 whisper + SOFA ckpt
 scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_dir.py）
 ```
@@ -160,10 +159,10 @@ scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_
 
 | 部分 | 来源 | 说明 |
 |---|---|---|
-| `kiralrc/`、`tools/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
-| `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 原样引入，**未改其源码**；只由 `tools/run_sofa.py` 调用 |
+| `kiralrc/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
+| `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 保留词典与原版 LICENSE，推理已内嵌到 `kiralrc/sofa.py` |
 | `models/` | 本地下载（不提交到 Git） | CT2 whisper：`Systran/faster-whisper-large-v3`（经 ModelScope 镜像）<br>SOFA 权重：官方 Release `v1.0.0_mandarin_singing.ckpt` |
-| 依赖库 | PyPI | faster-whisper / demucs / whisperx / PyAV / pypinyin / torch … |
+| 依赖库 | PyPI | faster-whisper / demucs / transformers / PyAV / pypinyin / torch … |
 | `kiralrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
 
 ## 许可

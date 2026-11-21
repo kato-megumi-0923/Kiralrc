@@ -9,7 +9,7 @@ dependencies = [
     "torch>=2.0",
     "faster-whisper>=1.1",
     "demucs>=4.0",
-    "whisperx>=3.3",
+    "transformers>=4.40",
     "pypinyin>=0.49",
 ]
 
