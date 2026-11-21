@@ -59,6 +59,17 @@ python scripts/fetch_models.py
 
 `python -m kiralrc info` 可以检查路径和模型是否齐备。
 
+## 桌面端 GUI（Windows）
+
+除命令行外，项目还提供基于 Go 编写的桌面端 GUI（`kiralrc-gui.exe`），包含**曲库**、**新建对齐**、**任务队列**、**编辑与校对**、**工具箱**五个面板，支持音频试听、批量任务队列、逐字时间轴校对以及 `polyphone.toml` 多音字词表编辑。
+
+- **直接运行**：从 [Releases](https://github.com/kato-megumi-0923/Kiralrc/releases) 下载 `kiralrc-gui-windows-amd64.zip` 解压后运行 `kiralrc-gui.exe`（仍需本地已配置好 Python 对齐环境与模型）。
+- **从源码编译**（需要 Go 1.27+）：
+
+```bash
+go build -ldflags="-H windowsgui" -o kiralrc-gui.exe .
+```
+
 ## 用法
 
 ```bash
@@ -89,29 +100,34 @@ python -m kiralrc convert "歌曲.lrc"
 ## 目录
 
 ```
-config.toml        路径与默认参数（模型、venv、词典）
+config.toml        路径与默认参数（模型、venv、词典、主唱检测/长音保真/粒度等）
+polyphone.toml     多音字自定义读音词表
+main.go            Windows 桌面端 GUI 入口
+internal/app/      GUI 核心界面、任务调度与音频播放器
+assets/            应用图标资源
+design/            UI 设计稿
 kiralrc/
   cli.py           命令行入口
   pipeline.py      端到端流程（定文本 → 定句子位置 → 分离 → 对齐 → 输出）
   sofa.py          SOFA 调用与结果拼装
   jp.py            WhisperX 多语言逐字对齐
   asr.py           faster-whisper + 歌词行↔ASR 分段的单调 DP
-  audio.py         解码（PyAV）、demucs 分离、能量包络
-  text.py          网易云抓歌词、拼音
+  audio.py         解码（PyAV）、demucs 分离、能量包络、主唱检测
+  text.py          网易云抓歌词、拼音、多音字词表处理
   format.py        LRC 解析/格式化/校验/小数位转换
   hearts.py        双语加 ❤️
   legacy/          早期的一次性脚本（保留作参照，不再维护）
 tools/run_sofa.py  在 SOFA venv 里跑推理（绕开 torchcodec）
 third_party/SOFA/  SOFA 源码（MIT，已去 .git）
 models/            CT2 whisper + SOFA ckpt
-scripts/           模型下载、环境安装
+scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_dir.py）
 ```
 
 ## 代码来源
 
 | 部分 | 来源 | 说明 |
 |---|---|---|
-| `kiralrc/`、`tools/`、`tests/`、`scripts/`、`config.toml` | **本项目原创** | 约 1250 行 |
+| `kiralrc/`、`tools/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
 | `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 原样引入，**未改其源码**；只由 `tools/run_sofa.py` 调用 |
 | `models/` | 下载，不入库 | CT2 whisper：`Systran/faster-whisper-large-v3`（经 ModelScope 镜像）<br>SOFA 权重：官方 Release `v1.0.0_mandarin_singing.ckpt` |
 | 依赖库 | PyPI | faster-whisper / demucs / whisperx / PyAV / pypinyin / torch … |
