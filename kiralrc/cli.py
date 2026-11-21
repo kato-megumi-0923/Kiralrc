@@ -235,9 +235,11 @@ def _check_models() -> list[dict]:
     # 5) Japanese MeCab/unidic reading analyzer
     ja_g2p_ok = bool(importlib.util.find_spec("fugashi") and importlib.util.find_spec("unidic_lite"))
 
-    # 6) English WhisperX wav2vec2-base-960h
-    en_ckpt = torch_ckpt / "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
-    en_ok = en_ckpt.exists() and en_ckpt.stat().st_size > 100_000_000
+    # 6) English Echora MMS Lyrics Forced Aligner
+    en_dir = hf_hub / "models--hcX02--echora-mms-300m-multilingual-lyrics-forced-aligner"
+    en_snaps = list((en_dir / "snapshots").glob("*/model.safetensors")) if (en_dir / "snapshots").exists() else []
+    en_bins = list((en_dir / "snapshots").glob("*/pytorch_model.bin")) if (en_dir / "snapshots").exists() else []
+    en_ok = bool(en_snaps or en_bins)
 
     return [
         {"lang": "通用", "name": "Demucs 人声分离（htdemucs）", "path": demucs_path, "exists": demucs_ok},
@@ -246,7 +248,7 @@ def _check_models() -> list[dict]:
         {"lang": "中文", "name": "SOFA 独立运行环境（Python 3.10）", "path": sofa_py_path or ".venv-sofa/Scripts/python.exe", "exists": sofa_py_ok},
         {"lang": "日文", "name": "MMS 日语卡拉 OK 歌声模型（NextFire）", "path": str(ja_dir), "exists": ja_ok},
         {"lang": "日文", "name": "fugashi + unidic-lite（日语词法读音）", "path": "Python 环境内置（MeCab / UniDic）", "exists": ja_g2p_ok},
-        {"lang": "英文", "name": "WhisperX 英文对齐模型（wav2vec2-960h）", "path": str(en_ckpt), "exists": en_ok},
+        {"lang": "英文", "name": "MMS 英文/多语歌词模型（Echora-300M）", "path": str(en_dir), "exists": en_ok},
     ]
 
 

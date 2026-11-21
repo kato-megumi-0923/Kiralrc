@@ -1699,16 +1699,27 @@ func (a *app) viewEditor(c *ui.Context) {
 						}
 						maxRowUnits := max(6.0, float64(stageW-36)/cellPx)
 
+						glyphWidthUnits := func(s string) float64 {
+							rs := []rune(s)
+							if len(rs) == 0 {
+								return 0.5
+							}
+							total := 0.0
+							for _, ch := range rs {
+								if ch < 128 {
+									total += 0.65
+								} else {
+									total += 1.0
+								}
+							}
+							return total
+						}
 						var glyphRows [][]int
 						var curRow []int
 						rowUnits := 0.0
 						for gi, g := range a.edGlyphs {
-							r := []rune(g.Ch)
-							w := 1.0
+							w := glyphWidthUnits(g.Ch)
 							isSpace := strings.TrimSpace(g.Ch) == ""
-							if len(r) > 0 && r[0] < 128 {
-								w = 0.65
-							}
 							if len(curRow) > 0 && rowUnits+w > maxRowUnits {
 								// Try to wrap cleanly at the last space in curRow so English words don't break mid-word
 								splitAt := -1
@@ -1724,12 +1735,7 @@ func (a *app) viewEditor(c *ui.Context) {
 									curRow = tail
 									rowUnits = 0
 									for _, ti := range curRow {
-										tr := []rune(a.edGlyphs[ti].Ch)
-										if len(tr) > 0 && tr[0] < 128 {
-											rowUnits += 0.65
-										} else {
-											rowUnits += 1.0
-										}
+										rowUnits += glyphWidthUnits(a.edGlyphs[ti].Ch)
 									}
 								} else {
 									glyphRows = append(glyphRows, curRow)
@@ -1910,15 +1916,21 @@ func (a *app) viewEditor(c *ui.Context) {
 			})
 			right.Children(func() {
 				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-					gb := ui.Box(c).Size(50, 50).Radius(14).Center().Background(p.accent.Alpha(0.14))
+					gb := ui.Box(c).MinWidth(50).Height(50).PaddingX(8).Radius(14).Center().Background(p.accent.Alpha(0.14))
 					gb.Children(func() {
 						disp := curGlyph.Ch
 						fsize := float32(26)
 						if strings.TrimSpace(disp) == "" {
 							disp = "停顿"
 							fsize = 14
+						} else if nRunes := len([]rune(disp)); nRunes >= 6 {
+							fsize = 12.5
+						} else if nRunes >= 3 {
+							fsize = 15
+						} else if nRunes == 2 {
+							fsize = 19
 						}
-						ui.Text(c, disp).FontSize(fsize).FontWeight(800).TextColor(p.accent)
+						ui.Text(c, disp).FontSize(fsize).FontWeight(800).TextColor(p.accent).SingleLine()
 					})
 					ui.Column(c).Gap(2).Children(func() {
 						ui.Text(c, fmt.Sprintf("第 %d 行 · 第 %d 字", a.edSelectedLine+1, a.edSelectedChar+1)).FontSize(13.5).FontWeight(700)
@@ -2162,7 +2174,7 @@ func (a *app) viewEditor(c *ui.Context) {
 									if strings.TrimSpace(disp) == "" {
 										disp = "·"
 									}
-									ui.Text(c, disp).FontSize(13).FontWeight(700).TextColor(fg)
+									ui.Text(c, disp).FontSize(13).FontWeight(700).TextColor(fg).SingleLine()
 								})
 							})
 							// Dragging the block adjusts its duration (and neighbor boundary) in real time

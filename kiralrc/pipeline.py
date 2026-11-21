@@ -105,14 +105,15 @@ def resolve_reference(audio_path: Path, ref: Path | None,
     dur = round(au.duration(audio_path))
     hit = tx.best_match(kw, dur)
     if not hit:
-        return None, [], f"网易云没搜到「{kw}」，且没有参考文件"
+        return None, [], f"多源（网易云/QQ/酷狗/LRCLIB）均未搜到「{kw}」，且没有参考文件"
 
     p = config.work_dir() / (audio_path.stem[:40] + ".ref.lrc")
     merged = tx.merge_tlyric(hit["lrc"], hit.get("tlyric") or "")
     p.write_text(merged, encoding="utf-8")
     stamped = tx.lines_with_times(merged)
     lines = [t for _, t in stamped] if stamped else tx.ref_lines(p)
-    return p, lines, f"网易云 {hit['artist']} - {hit['name']} ({hit['duration']}s)"
+    src_lbl = hit.get("source") or "网易云"
+    return p, lines, f"{src_lbl} {hit['artist']} - {hit['name']} ({hit['duration']}s)"
 
 
 def _is_coarse_timestamps(stamped: list[tuple[float, str]]) -> bool:
@@ -216,14 +217,21 @@ def _extract_trans_map(ref_path: Path | None) -> dict[str, list[list[str]]]:
 
 
 def _fetch_missing_translations(audio_path: Path, total: float, query: str | None = None) -> dict[str, list[list[str]]]:
-    """外语歌曲本地 LRC 缺少中文译文时，自动尝试从网易云拉取 tlyric 补全。"""
+    """外语歌曲本地 LRC 缺少中文译文时，按顺序从网易云 → QQ音乐拉取中文译文补全。"""
     try:
         kw = query or tx.query_from_filename(audio_path.stem)
-        hit = tx.best_match(kw, round(total), interval=1.0)
-        if not hit or not (hit.get("tlyric") or "").strip():
-            return {}
-        merged = tx.merge_tlyric(hit["lrc"], hit["tlyric"])
-        return _build_trans_map_from_text(merged)
+        dur = round(total)
+        for fn in (
+            lambda: tx.netease_match(kw, dur, interval=1.0),
+            lambda: tx.qq_match(kw, dur),
+        ):
+            hit = fn()
+            if hit and (hit.get("tlyric") or "").strip():
+                merged = tx.merge_tlyric(hit["lrc"], hit["tlyric"])
+                tmap = _build_trans_map_from_text(merged)
+                if _has_any_trans(tmap):
+                    return tmap
+        return {}
     except Exception:
         return {}
 
@@ -385,11 +393,15 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     else:
         from . import jp
 
-        emit(5, f"{'MMS 日语歌声' if lang == 'ja' else f'WhisperX {lang}'} 逐句对齐", f"{len(rough)} 句")
+        stage_lbl = "MMS 日语歌声" if lang == "ja" else ("MMS 英文歌声" if lang == "en" else f"WhisperX {lang}")
+        emit(5, f"{stage_lbl} 逐句对齐", f"{len(rough)} 句")
         lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total,
                              en_granularity=en_granularity,
                              restore_long_vowel=restore_long_vowel)
-        by = "MMS 日语歌声逐字" if (lang == "ja" and any("MMS" in m for m in lrc.metas)) else f"WhisperX {lang} 逐字"
+        if any("MMS" in m for m in lrc.metas):
+            by = "MMS 日语歌声逐字" if lang == "ja" else "MMS 英文歌声逐字"
+        else:
+            by = f"WhisperX {lang} 逐字"
 
     emit(6, "输出并校验", f"{len(lrc.lines)} 行")
     tr_cnt = _attach_translations(lrc, trans_map)

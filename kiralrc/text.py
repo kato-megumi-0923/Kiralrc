@@ -1,6 +1,7 @@
 """歌词文本：网易云抓取、参考文本读取、汉字→拼音。"""
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -52,8 +53,8 @@ def netease_lyric(song_id: int) -> tuple[str, str]:
             (data.get("tlyric") or {}).get("lyric") or "")
 
 
-def best_match(keyword: str, duration: float | None = None, interval: float = 4.5) -> dict | None:
-    """按曲名搜索并挑时长最接近的条目。"""
+def netease_match(keyword: str, duration: float | None = None, interval: float = 4.5) -> dict | None:
+    """网易云音乐：按曲名搜索并挑时长最接近的条目。"""
     songs = netease_search(keyword)
     if not songs:
         return None
@@ -61,13 +62,161 @@ def best_match(keyword: str, duration: float | None = None, interval: float = 4.
         songs.sort(key=lambda s: abs(s["duration"] - duration))
     else:
         songs.sort(key=lambda s: s["duration"])
-    time.sleep(interval)
+    time.sleep(min(interval, 1.5))
     for cand in songs[:3]:
         lrc, tlrc = netease_lyric(cand["id"])
-        time.sleep(interval)
+        time.sleep(min(interval, 1.5))
         n = len([x for x in lrc.splitlines() if x.strip()])
         if n >= 8:
-            return {**cand, "lrc": lrc, "tlyric": tlrc, "lines": n}
+            return {**cand, "source": "网易云", "lrc": lrc, "tlyric": tlrc, "lines": n}
+    return None
+
+
+def qq_match(keyword: str, duration: float | None = None) -> dict | None:
+    """QQ 音乐：搜索并拉取原词 + 中文译文。"""
+    try:
+        payload = json.dumps({
+            "req_1": {
+                "method": "DoSearchForQQMusicDesktop",
+                "module": "music.search.SearchCgiService",
+                "param": {"query": keyword, "num_per_page": 5, "page_num": 1},
+            }
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://u.y.qq.com/cgi-bin/musicu.fcg",
+            data=payload,
+            headers={"User-Agent": UA, "Referer": "https://y.qq.com/", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+        songs = (((data.get("req_1") or {}).get("data") or {}).get("body") or {}).get("song", {}).get("list") or []
+        if not songs:
+            return None
+        cands = []
+        for s in songs:
+            mid = s.get("mid") or ""
+            if not mid:
+                continue
+            singer = ",".join(a.get("name", "") for a in (s.get("singer") or []))
+            cands.append({
+                "id": mid,
+                "name": s.get("name") or "",
+                "artist": singer,
+                "duration": int(s.get("interval") or 0),
+            })
+        if not cands:
+            return None
+        if duration:
+            cands.sort(key=lambda s: abs(s["duration"] - duration))
+        for cand in cands[:3]:
+            lurl = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid={cand['id']}&format=json&nobase64=0"
+            lreq = urllib.request.Request(lurl, headers={"User-Agent": UA, "Referer": "https://y.qq.com/"})
+            with urllib.request.urlopen(lreq, timeout=12) as r:
+                ld = json.loads(r.read().decode("utf-8", errors="replace"))
+            lrc = base64.b64decode(ld.get("lyric") or "").decode("utf-8", errors="replace") if ld.get("lyric") else ""
+            tlrc = base64.b64decode(ld.get("trans") or "").decode("utf-8", errors="replace") if ld.get("trans") else ""
+            n = len([x for x in lrc.splitlines() if x.strip()])
+            if n >= 8:
+                return {**cand, "source": "QQ音乐", "lrc": lrc, "tlyric": tlrc, "lines": n}
+    except Exception:
+        return None
+    return None
+
+
+def kugou_match(keyword: str, duration: float | None = None) -> dict | None:
+    """酷狗音乐：搜歌取 hash 再拉取 LRC。"""
+    try:
+        kw = urllib.parse.quote(keyword)
+        req = urllib.request.Request(
+            f"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={kw}&page=1&pagesize=5",
+            headers={"User-Agent": UA},
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            info = ((json.loads(r.read().decode("utf-8", errors="replace")).get("data") or {}).get("info")) or []
+        if not info:
+            return None
+        if duration:
+            info.sort(key=lambda s: abs(int(s.get("duration") or 0) - duration))
+        for s in info[:3]:
+            h = s.get("hash") or ""
+            dur_s = int(s.get("duration") or 0)
+            if not h:
+                continue
+            sreq = urllib.request.Request(
+                f"https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&hash={h}&duration={dur_s * 1000}",
+                headers={"User-Agent": UA},
+            )
+            with urllib.request.urlopen(sreq, timeout=12) as r:
+                cands = json.loads(r.read().decode("utf-8", errors="replace")).get("candidates") or []
+            if not cands:
+                continue
+            c0 = cands[0]
+            dreq = urllib.request.Request(
+                f"https://lyrics.kugou.com/download?ver=1&client=pc&id={c0['id']}&accesskey={c0['accesskey']}&fmt=lrc&charset=utf8",
+                headers={"User-Agent": UA},
+            )
+            with urllib.request.urlopen(dreq, timeout=12) as r:
+                dd = json.loads(r.read().decode("utf-8", errors="replace"))
+            lrc = base64.b64decode(dd.get("content") or "").decode("utf-8", errors="replace") if dd.get("content") else ""
+            n = len([x for x in lrc.splitlines() if x.strip()])
+            if n >= 8:
+                return {
+                    "source": "酷狗音乐",
+                    "id": h,
+                    "name": s.get("songname") or "",
+                    "artist": s.get("singername") or "",
+                    "duration": dur_s,
+                    "lrc": lrc,
+                    "tlyric": "",
+                    "lines": n,
+                }
+    except Exception:
+        return None
+    return None
+
+
+def lrclib_match(keyword: str, duration: float | None = None) -> dict | None:
+    """LRCLIB：免鉴权国际歌词库，适合欧美 / 日文 / 独立音乐兜底。"""
+    try:
+        kw = urllib.parse.quote(keyword)
+        req = urllib.request.Request(f"https://lrclib.net/api/search?q={kw}", headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            arr = json.loads(r.read().decode("utf-8", errors="replace"))
+        synced = [x for x in (arr or []) if isinstance(x, dict) and (x.get("syncedLyrics") or "").strip()]
+        if not synced:
+            return None
+        if duration:
+            synced.sort(key=lambda s: abs(float(s.get("duration") or 0) - duration))
+        s0 = synced[0]
+        lrc = s0["syncedLyrics"]
+        n = len([x for x in lrc.splitlines() if x.strip()])
+        if n >= 8:
+            return {
+                "source": "LRCLIB",
+                "id": s0.get("id") or 0,
+                "name": s0.get("trackName") or "",
+                "artist": s0.get("artistName") or "",
+                "duration": round(float(s0.get("duration") or 0)),
+                "lrc": lrc,
+                "tlyric": "",
+                "lines": n,
+            }
+    except Exception:
+        return None
+    return None
+
+
+def best_match(keyword: str, duration: float | None = None, interval: float = 4.5) -> dict | None:
+    """多源顺序兜底搜歌词：网易云 → QQ音乐 → 酷狗音乐 → LRCLIB。"""
+    for fn in (
+        lambda: netease_match(keyword, duration, interval=interval),
+        lambda: qq_match(keyword, duration),
+        lambda: kugou_match(keyword, duration),
+        lambda: lrclib_match(keyword, duration),
+    ):
+        hit = fn()
+        if hit:
+            return hit
     return None
 
 

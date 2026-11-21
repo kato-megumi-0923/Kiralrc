@@ -18,6 +18,7 @@ SPEAKER_TAG_RE = re.compile(r"【[^】]*】")
 KANA_CHAR_RE = re.compile(r"^[\u3041-\u3096\u30a1-\u30faー]$")
 SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
 MMS_JA_MODEL_ID = "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"
+MMS_EN_MODEL_ID = "hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner"
 
 _warned: set[str] = set()
 
@@ -200,7 +201,7 @@ def _align_ja_mms_karaoke(
         seg_start = max(0.0, t0 - 0.30)
         if rows and rows[-1].end is not None and rows[-1].end < t0 + 0.35:
             seg_start = max(seg_start, rows[-1].end - 0.05)
-        if rows and len(env_20ms) > 0:
+        if rows and len(env_20ms) > 0 and (nxt - t0) >= 2.0:
             # 检查 [seg_start, t0+0.60] 内是否存在「先高能量(上句尾音) -> 明显换气低谷 -> 再起音」
             f0 = max(0, int(seg_start / 0.02))
             f1 = min(len(env_20ms) - 1, int((t0 + 0.60) / 0.02))
@@ -215,8 +216,8 @@ def _align_ja_mms_karaoke(
                     if after_peak > valley * 1.6:
                         seg_start = (f0 + min_rel) * 0.02
         max_line_dur = max(5.0, len(rom_chars) * 0.45) + 2.0
-        if i + 1 < len(lines) and nxt > t0 + 0.6:
-            seg_end_t = min(dur, nxt + 0.45, t0 + max_line_dur)
+        if i + 1 < len(lines) and nxt > t0:
+            seg_end_t = min(dur, max(nxt + 0.45, seg_start + 1.0), t0 + max_line_dur)
         else:
             seg_end_t = min(dur, t0 + max_line_dur)
         s_idx = int(seg_start * 16000)
@@ -456,6 +457,203 @@ def _clamp_rows(rows: list[fmt.Line]) -> list[fmt.Line]:
     return rows
 
 
+def _compute_chunked_emissions(
+    model,
+    audio: np.ndarray,
+    dur: float,
+    dev: str,
+    chunk_sec: float = 24.0,
+    overlap_sec: float = 3.0,
+):
+    """按长滑窗（默认 24s 窗 + 前后各 3s 重叠上下文）计算整首人声的 CTC log_softmax 发射概率。
+
+    避免逐句切出 1~2 秒短音频送入 300M Transformer 时因缺乏前后声学上下文导致词尾塌缩/漏词，
+    同时将前向推理次数从几十次降到约 8~12 次。
+    """
+    import torch
+
+    sr = 16000
+    n_samples = len(audio)
+    total_dur = n_samples / float(sr) if n_samples > 0 else dur
+    stride_sec = max(4.0, chunk_sec - 2.0 * overlap_sec)
+
+    parts = []
+    core_s = 0.0
+    while core_s < total_dur - 1e-4:
+        core_e = min(total_dur, core_s + stride_sec)
+        win_s = max(0.0, core_s - overlap_sec)
+        win_e = min(total_dur, core_e + overlap_sec)
+        s_idx = int(round(win_s * sr))
+        e_idx = min(n_samples, int(round(win_e * sr)))
+        seg = audio[s_idx:e_idx]
+        if len(seg) < 400:
+            break
+
+        inp = torch.tensor(seg, dtype=torch.float32, device=dev).unsqueeze(0)
+        inp = (inp - inp.mean()) / (inp.std() + 1e-7)
+        with torch.no_grad():
+            em_c = torch.log_softmax(model(inp).logits, dim=-1).cpu()
+
+        t_c = em_c.shape[1]
+        fd_c = (len(seg) / float(sr)) / float(t_c)
+        k0 = 0 if core_s <= 1e-6 else int(round((core_s - win_s) / fd_c))
+        k1 = t_c if core_e >= total_dur - 1e-4 else int(round((core_e - win_s) / fd_c))
+        k0 = max(0, min(k0, t_c))
+        k1 = max(k0, min(k1, t_c))
+        if k1 > k0:
+            parts.append(em_c[:, k0:k1, :])
+        core_s = core_e
+
+    if not parts:
+        return None, 0.02
+    em_full = torch.cat(parts, dim=1)
+    frame_dur = total_dur / float(em_full.shape[1])
+    return em_full, frame_dur
+
+
+def _align_en_mms_lyrics(
+    audio: np.ndarray,
+    lines: list[tuple[float, str]],
+    dur: float,
+    device: str = "cuda",
+    en_granularity: str | None = None,
+) -> list[fmt.Line]:
+    """使用 hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner（多语歌声歌词专精模型）做英文逐字/逐词对齐。"""
+    import math
+    import torch
+    import torchaudio
+    from transformers import AutoModelForCTC, AutoTokenizer
+    from . import audio as au
+
+    if en_granularity is None:
+        en_granularity = str(config.opt("en_granularity", "word"))
+
+    dev = device if (device == "cuda" and torch.cuda.is_available()) else "cpu"
+    try:
+        tok = AutoTokenizer.from_pretrained(MMS_EN_MODEL_ID, local_files_only=True)
+        model = AutoModelForCTC.from_pretrained(MMS_EN_MODEL_ID, local_files_only=True)
+    except Exception:
+        tok = AutoTokenizer.from_pretrained(MMS_EN_MODEL_ID)
+        model = AutoModelForCTC.from_pretrained(MMS_EN_MODEL_ID)
+    model = model.to(dev).eval()
+    vocab = tok.get_vocab()
+    pad_id = tok.pad_token_id if tok.pad_token_id is not None else 29
+    env_20ms = au.rms_envelope(audio, sr=16000, hop=0.02)
+
+    # 整首长滑窗一次性计算全上下文 CTC 发射概率，彻底避免 1~2s 短句孤立切片的 Transformer 上下文塌缩
+    em_full, frame_dur = _compute_chunked_emissions(model, audio, dur, dev)
+    if em_full is None or em_full.shape[1] == 0:
+        return []
+
+    rows: list[fmt.Line] = []
+    for i, (t0, text) in enumerate(lines):
+        nxt = lines[i + 1][0] if i + 1 < len(lines) else dur
+        tag_mask = _speaker_tag_mask(text)
+
+        # 提取英文字符 -> token 序列，并记录词边界以支持 word / char 两种粒度
+        rom_chars: list[str] = []
+        char_to_rom: dict[int, int] = {}
+        word_groups: list[list[int]] = []
+        cur_word: list[int] = []
+        for ci, ch in enumerate(text):
+            if tag_mask[ci]:
+                if cur_word:
+                    word_groups.append(cur_word)
+                    cur_word = []
+                continue
+            lo = ch.lower()
+            if ("a" <= lo <= "z" or lo == "'") and lo in vocab and lo != "|":
+                char_to_rom[ci] = len(rom_chars)
+                rom_chars.append(lo)
+                cur_word.append(ci)
+            else:
+                if cur_word:
+                    word_groups.append(cur_word)
+                    cur_word = []
+        if cur_word:
+            word_groups.append(cur_word)
+
+        if not rom_chars:
+            continue
+
+        seg_start = max(0.0, t0 - 0.30)
+        if rows and rows[-1].end is not None and rows[-1].end < t0 + 0.35:
+            seg_start = max(seg_start, rows[-1].end - 0.05)
+        if rows and len(env_20ms) > 0 and (nxt - t0) >= 2.0:
+            f0_e = max(0, int(seg_start / 0.02))
+            f1_e = min(len(env_20ms) - 1, int((t0 + 0.60) / 0.02))
+            if f1_e > f0_e + 6:
+                win = env_20ms[f0_e:f1_e + 1]
+                head_peak = float(np.max(win[:min(8, len(win))]))
+                min_rel = int(np.argmin(win))
+                valley = float(win[min_rel])
+                if head_peak > 0.08 and min_rel >= 2 and min_rel < len(win) - 2 and valley < head_peak * 0.48:
+                    after_peak = float(np.max(win[min_rel + 1:]))
+                    if after_peak > valley * 1.6:
+                        seg_start = (f0_e + min_rel) * 0.02
+
+        max_line_dur = max(5.0, len(rom_chars) * 0.35) + 2.0
+        if i + 1 < len(lines) and nxt > t0:
+            # 紧凑快句（间隔 < 2.0s）右扩收紧到 +0.15s，避免末字漂移到下一句的词上
+            tail_pad = 0.15 if (nxt - t0) < 2.0 else 0.35
+            seg_end_t = min(dur, max(nxt + tail_pad, seg_start + 0.8), t0 + max_line_dur)
+        else:
+            seg_end_t = min(dur, t0 + max_line_dur)
+
+        f0 = max(0, int(seg_start / frame_dur))
+        f1 = min(em_full.shape[1], int(math.ceil(seg_end_t / frame_dur)))
+        em = em_full[:, f0:f1, :]
+        win_t0 = f0 * frame_dur
+
+        if em.shape[1] <= len(rom_chars) + 3:
+            continue
+        # 英文快歌/说唱词密，通配符惩罚设为 -5.0，防止把真实的短句首尾词吞掉
+        star_id = em.shape[-1]
+        star_col = torch.full((em.shape[0], em.shape[1], 1), -5.0, dtype=em.dtype)
+        em_star = torch.cat([em, star_col], dim=-1)
+        targets = torch.tensor([[star_id] + [vocab[c] for c in rom_chars] + [star_id]], dtype=torch.int32)
+        aligned, scores = torchaudio.functional.forced_align(em_star, targets, blank=pad_id)
+        spans = torchaudio.functional.merge_tokens(aligned[0], scores[0], blank=pad_id)
+        if len(spans) == len(rom_chars) + 2:
+            spans = spans[1:-1]
+        elif len(spans) != len(rom_chars):
+            continue
+
+        char_time: dict[int, tuple[float, float]] = {}
+        for wg in word_groups:
+            r_first = char_to_rom[wg[0]]
+            r_last = char_to_rom[wg[-1]]
+            ws = round(win_t0 + spans[r_first].start * frame_dur, 3)
+            we = round(max(ws + 0.04, win_t0 + spans[r_last].end * frame_dur), 3)
+            for ci in wg:
+                if en_granularity == "char":
+                    ri = char_to_rom[ci]
+                    cs = round(win_t0 + spans[ri].start * frame_dur, 3)
+                    ce = round(max(cs + 0.02, win_t0 + spans[ri].end * frame_dur), 3)
+                    char_time[ci] = (cs, ce)
+                else:
+                    char_time[ci] = (ws, we)
+
+        first_sung_idx = min(char_time.keys())
+        first_t = char_time[first_sung_idx][0]
+        placed: list[tuple[str, float]] = []
+        last_end = first_t
+        for ci, ch in enumerate(text):
+            if tag_mask[ci]:
+                placed.append((ch, first_t if ci < first_sung_idx else last_end))
+            elif ci in char_time:
+                cs, ce = char_time[ci]
+                placed.append((ch, cs))
+                last_end = max(last_end, ce)
+            else:
+                placed.append((ch, last_end))
+
+        end_t = max(last_end, placed[-1][1] + 0.08)
+        rows.append(fmt.Line(placed[0][1], text, placed, round(end_t, 3)))
+
+    return rows
+
+
 def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja",
                 total: float | None = None, device: str = "cuda",
                 en_granularity: str | None = None,
@@ -465,10 +663,15 @@ def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja"
     audio = au.decode(vocal_wav, 16000)
     dur = total or len(audio) / 16000
 
-    # 日语优先走卡拉OK歌声专精模型 NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn
-    if lang == "ja":
+    # 日语优先走 NextFire 日语卡拉OK歌声模型；英文优先走 Echora MMS 多语歌词专精模型
+    if lang in ("ja", "en"):
         try:
-            rows = _align_ja_mms_karaoke(audio, lines, dur, device=device)
+            if lang == "ja":
+                rows = _align_ja_mms_karaoke(audio, lines, dur, device=device)
+                by_tag = "[by:MMS 日语歌声逐字]"
+            else:
+                rows = _align_en_mms_lyrics(audio, lines, dur, device=device, en_granularity=en_granularity)
+                by_tag = "[by:MMS 英文歌声逐字]"
             if rows:
                 rows = _clamp_rows(rows)
                 if restore_long_vowel is None:
@@ -477,9 +680,9 @@ def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja"
                     env = au.rms_envelope(audio, sr=16000, hop=0.02)
                     rows = restore_sustain(rows, env, hop=0.02, total=dur)
                     rows = _clamp_rows(rows)
-                return fmt.Lrc(["[by:MMS 日语歌声逐字]"], rows)
+                return fmt.Lrc([by_tag], rows)
         except Exception as e:                      # 模型没下全 / 依赖缺失时退回 WhisperX
-            _warn(f"MMS 日语模型不可用，回退 WhisperX：{type(e).__name__}: {e}")
+            _warn(f"MMS {lang} 歌声模型不可用，回退 WhisperX：{type(e).__name__}: {e}")
 
     from whisperx import alignment as wx
 

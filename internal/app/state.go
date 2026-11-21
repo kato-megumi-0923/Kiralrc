@@ -399,7 +399,7 @@ func newApp() *app {
 			{Lang: "中文", Name: "SOFA 独立运行环境（Python 3.10）", Path: ".venv-sofa/Scripts/python.exe", Exists: false},
 			{Lang: "日文", Name: "MMS 日语卡拉 OK 歌声模型（NextFire）", Path: "~/.cache/huggingface/hub/models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn", Exists: false},
 			{Lang: "日文", Name: "fugashi + unidic-lite（日语词法读音）", Path: "Python 环境内置（MeCab / UniDic）", Exists: false},
-			{Lang: "英文", Name: "WhisperX 英文对齐模型（wav2vec2-960h）", Path: "~/.cache/torch/hub/checkpoints/wav2vec2_fairseq_base_ls960_asr_ls960.pth", Exists: false},
+			{Lang: "英文", Name: "MMS 英文/多语歌词模型（Echora-300M）", Path: "~/.cache/huggingface/hub/models--hcX02--echora-mms-300m-multilingual-lyrics-forced-aligner", Exists: false},
 		},
 	}
 	a.loadPrefs()
@@ -1876,6 +1876,44 @@ func (a *app) shiftAllLyrics(delta float64) {
 	a.edModified = true
 }
 
+func isAsciiNonSpace(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	for _, r := range s {
+		if r >= 128 {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeSameTsAsciiWords collapses word-level English LRC tags (where every letter of a word
+// shares the same <mm:ss.SSS> start tag and 0ms duration until the last letter) into whole-word
+// tokens so the editor timeline, preview, and inspector operate on full words ("being", "frankly")
+// instead of single trailing letters ("g", "y"). CJK/Japanese speaker tags (e.g. 【合】) and
+// char-level English (distinct timestamps per letter) are left untouched.
+func mergeSameTsAsciiWords(chars []lyricChar) []lyricChar {
+	if len(chars) < 2 {
+		return chars
+	}
+	out := make([]lyricChar, 0, len(chars))
+	for _, cur := range chars {
+		if len(out) > 0 {
+			prev := &out[len(out)-1]
+			if math.Abs(cur.Start-prev.Start) < 0.001 &&
+				prev.End-prev.Start < 0.001 &&
+				isAsciiNonSpace(prev.Ch) && isAsciiNonSpace(cur.Ch) {
+				prev.Ch += cur.Ch
+				prev.End = cur.End
+				continue
+			}
+		}
+		out = append(out, cur)
+	}
+	return out
+}
+
 func formatLrcLine(ln lyricLine) string {
 	var sb strings.Builder
 	if len(ln.Chars) > 0 {
@@ -2027,6 +2065,7 @@ func (a *app) loadLrcFile(path string) error {
 					chars = append(chars, lyricChar{Ch: string(r), Start: cs, End: ce})
 				}
 			}
+			chars = mergeSameTsAsciiWords(chars)
 			lastLoc := tagLocs[len(tagLocs)-1]
 			end = parseSec(body[lastLoc[2]:lastLoc[3]], body[lastLoc[4]:lastLoc[5]])
 			if len(body[lastLoc[1]:]) > 0 {
