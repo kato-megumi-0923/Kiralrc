@@ -1,5 +1,5 @@
 [project]
-name = "lrcstudio"
+name = "karalrc"
 version = "0.1.0"
 description = "给歌曲生成逐字（卡拉OK）LRC：SOFA 歌声对齐 + faster-whisper + demucs"
 requires-python = ">=3.10"
@@ -14,11 +14,11 @@ dependencies = [
 ]
 
 [project.scripts]
-lrcstudio = "lrcstudio.cli:main"
+karalrc = "karalrc.cli:main"
 
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["lrcstudio"]
+packages = ["karalrc"]

@@ -1,5 +1,5 @@
 """双语加 ❤️ 的测试。"""
-from lrcstudio import hearts
+from karalrc import hearts
 
 BILINGUAL = "\r\n".join([
     "[ti:t]",

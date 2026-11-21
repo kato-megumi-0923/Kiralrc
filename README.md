@@ -1,4 +1,4 @@
-# lrcstudio
+# karalrc
 
 给歌曲补**逐字（卡拉OK）LRC 歌词**的工具。
 
@@ -21,7 +21,7 @@
 
 还有一条经验：**不要拿网易云官方 LRC 当校验基准**。它对应的是另一版母带，
 本地文件可能比它多 0.7s 前导静音——用它校验会得出「我很准」的错误结论。
-判断准不准，要看**人声轨的能量包络**（见 `lrcstudio/audio.py: rms_envelope`）。
+判断准不准，要看**人声轨的能量包络**（见 `karalrc/audio.py: rms_envelope`）。
 
 ## 输出格式
 
@@ -57,25 +57,25 @@ uv pip install --python .venv-sofa/Scripts/python.exe torch torchaudio \
 python scripts/fetch_models.py
 ```
 
-`python -m lrcstudio info` 可以检查路径和模型是否齐备。
+`python -m karalrc info` 可以检查路径和模型是否齐备。
 
 ## 用法
 
 ```bash
 # 音频 → 逐字 LRC（自动搜网易云歌词；也可以 --ref 指定歌词文件）
-python -m lrcstudio align "歌曲.mp3" --ti 曲名 --ar 歌手
+python -m karalrc align "歌曲.mp3" --ti 曲名 --ar 歌手
 
 # 日文
-python -m lrcstudio align "song.mp3" --lang ja
+python -m karalrc align "song.mp3" --lang ja
 
 # 校验格式
-python -m lrcstudio validate "歌曲.lrc"
+python -m karalrc validate "歌曲.lrc"
 
 # 双语歌词给翻译行加 ❤️
-python -m lrcstudio hearts "歌曲.lrc"
+python -m karalrc hearts "歌曲.lrc"
 
 # 两位小数 → 三位
-python -m lrcstudio convert "歌曲.lrc"
+python -m karalrc convert "歌曲.lrc"
 ```
 
 `align` 会把中间产物放在 `work/<歌名>_<hash>/`：`vocals.wav`（分离出的人声）、
@@ -86,7 +86,7 @@ python -m lrcstudio convert "歌曲.lrc"
 
 ```
 config.toml        路径与默认参数（模型、venv、词典）
-lrcstudio/
+karalrc/
   cli.py           命令行入口
   pipeline.py      端到端流程（定文本 → 定句子位置 → 分离 → 对齐 → 输出）
   sofa.py          SOFA 调用与结果拼装
@@ -107,11 +107,11 @@ scripts/           模型下载、环境安装
 
 | 部分 | 来源 | 说明 |
 |---|---|---|
-| `lrcstudio/`、`tools/`、`tests/`、`scripts/`、`config.toml` | **本项目原创** | 约 1250 行 |
+| `karalrc/`、`tools/`、`tests/`、`scripts/`、`config.toml` | **本项目原创** | 约 1250 行 |
 | `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 原样引入，**未改其源码**；只由 `tools/run_sofa.py` 调用 |
 | `models/` | 下载，不入库 | CT2 whisper：`Systran/faster-whisper-large-v3`（经 ModelScope 镜像）<br>SOFA 权重：官方 Release `v1.0.0_mandarin_singing.ckpt` |
 | 依赖库 | PyPI | faster-whisper / demucs / whisperx / PyAV / pypinyin / torch … |
-| `lrcstudio/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
+| `karalrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
 
 要公开的话：保留 `third_party/SOFA/LICENSE`，并在文档里注明模型来源即可（SOFA 为 MIT）。
 本项目自身代码建议同样以 MIT 发布。

@@ -1,7 +1,7 @@
 """格式层单元测试（不需要模型/音频）。"""
 import pytest
 
-from lrcstudio import format as fmt
+from karalrc import format as fmt
 
 SAMPLE = """[ti:测试]
 [ar:某人]

@@ -1,4 +1,4 @@
-"""命令行入口：python -m lrcstudio <命令>"""
+"""命令行入口：python -m karalrc <命令>"""
 from __future__ import annotations
 
 import argparse
@@ -102,7 +102,7 @@ def cmd_info(a) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="lrcstudio", description="歌词逐字对齐工具")
+    ap = argparse.ArgumentParser(prog="karalrc", description="歌词逐字对齐工具")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("align", help="音频 → 逐字 LRC")
