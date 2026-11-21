@@ -136,17 +136,6 @@ scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_
 要公开的话：保留 `third_party/SOFA/LICENSE`，并在文档里注明模型来源即可（SOFA 为 MIT）。
 本项目自身代码建议同样以 MIT 发布。
 
-## 坑（都是踩过的）
-
-- **PyAV packed 格式**：`layout="stereo"` + `format="flt"` 的 `to_ndarray()` 是 `(1, n*ch)`
-  交错数组，直接 concat 会让时长翻倍；立体声一律用 `fltp`。
-- **ct2 的 CUDA**：需要把 `torch/lib` 加进 `os.add_dll_directory`，否则报找不到 `cublas64_12.dll`。
-- **SOFA 不能整首跑**：它在乐句上训练，3 分钟整首会塌到开头。按句切片，且每段长度上限按字数算
-  （~0.85s/字），否则遇到长间奏会把一句摊到几十秒。
-- **torchaudio 2.11 要 torchcodec**：`tools/run_sofa.py` 里强制走 SOFA 自带的 librosa 分支。
-- **代理**：本机 `https_proxy=127.0.0.1:4029` 会掐断白名单外域名的 TLS；模型走
-  `127.0.0.1:7890`（FlClash）或 GitHub 镜像 `gh-proxy.com`。
-
 ## 许可
 
 本项目代码以 MIT 发布（见 `LICENSE`）。`third_party/SOFA` 为其原作者的 MIT 代码（见其 `LICENSE`），
