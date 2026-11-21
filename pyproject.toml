@@ -1,7 +1,7 @@
 [project]
 name = "kiralrc"
 version = "0.1.0"
-description = "给歌曲生成逐字（卡拉OK）LRC：SOFA 歌声对齐 + faster-whisper + demucs"
+description = "给歌曲生成逐字 LRC：SOFA 歌声对齐 + faster-whisper + demucs"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

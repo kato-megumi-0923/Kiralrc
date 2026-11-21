@@ -1,11 +1,11 @@
 # Kiralrc
 
-给歌曲补**逐字（卡拉OK）LRC 歌词**的工具。
+给歌曲补**逐字 LRC 歌词**的工具。
 
 核心思路只有一条：**时间必须由专门的对齐器从音频里算出来，不能靠 ASR 的句子边界去猜。**
 
 - 文本：优先用官方歌词（网易云），ASR 只用来给每句找个大致位置；
-- 时间：按语种选用专门的强制对齐模型（中文走歌声专精 SOFA，日文走卡拉OK歌声专精 MMS，英文及其他语言走 WhisperX wav2vec2）；
+- 时间：按语种选用专门的强制对齐模型（中文走歌声专精 SOFA，日文走歌声专精 MMS，英文及其他语言走 WhisperX wav2vec2）；
 - 所有对齐都在 **demucs 分离出的人声轨**上跑，因为伴奏会显著干扰对齐。
 
 ## 支持语言与对齐模型
@@ -13,7 +13,7 @@
 | 语言 | 强制对齐模型 | 文本 / 音素处理 | 特色支持 |
 |---|---|---|---|
 | **中文（`zh`）** | **SOFA**（`v1.0.0_mandarin_singing.ckpt`，歌声专精） | `pypinyin` + `opencpop-extension` 词典 | 支持 `polyphone.toml` 自定义多音字读音覆盖 |
-| **日文（`ja`）** | **MMS Karaoke**（`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`，卡拉OK歌声专精） | `fugashi`（MeCab + unidic）精确注音切分 | 准确处理「は→わ」「へ→え」等助词及长音、促音、拗音 |
+| **日文（`ja`）** | **MMS**（`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`，歌声专精） | `fugashi`（MeCab + unidic）精确注音切分 | 准确处理「は→わ」「へ→え」等助词及长音、促音、拗音 |
 | **英文（`en`）及其他** | **WhisperX**（`wav2vec2` CTC） | 词级 / 字符级对齐 | 支持 `en_granularity` 切换按词（`word`）或按字母（`char`），并按人声能量包络保真长音 |
 
 > 前置定位与人声分离全语种统一采用 `demucs` + `faster-whisper-large-v3`。
