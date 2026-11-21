@@ -127,9 +127,15 @@ python -m kiralrc convert "歌曲.lrc"
 `segments/`（按句切片的 wav + 拼音 lab）、`segments/htk/words/*.lab`（对齐结果）。
 同一首歌重跑会复用已分离的人声。
 
-## 已知问题
+## 版本更新内容
 
-见 [`docs/known-issues.md`](docs/known-issues.md)：哪些坑已经修好（别再改回去）、哪些还需要设计。
+- **多语歌声/歌词专精模型全面替换 WhisperX**：
+  - 中文（`zh`）：SOFA 推理直接内嵌进主环境（不再需要独立 `.venv-sofa` 与旧依赖），跳过 `【...】` 演唱者标注，并支持 `polyphone.toml` 多音字自定义词表。
+  - 日文（`ja`）：切换为 **NextFire MMS** 日语歌声模型，结合 `fugashi` 词法读音与人声能量包络防吞尾音。
+  - 英文（`en`）及其他多语种：切换为 **Echora-300M MMS** 多语歌词模型（24s 长滑窗 + 长音能量包络保真 + `en_granularity` 词/字粒度切换）。
+- **多源歌词拉取与兜底**：支持 `网易云 → QQ音乐 → 酷狗音乐 → LRCLIB` 顺序兜底匹配、相似度打分与单曲网易云 ID 指定；全网无词时标记 `skipped_nolyrics` 并支持 `--asr-fallback` 听写兜底与分段优化。
+- **Windows 桌面端 GUI**：新增 Go 编写的 `kiralrc-gui.exe`，提供曲库管理、新建对齐、任务队列、逐字编辑与校对、音频试听及工具箱。
+- **管线鲁棒性提升**：支持主唱检测（过滤纯音乐）、剪辑版缺失行自动剔除、空对齐结果拦截与更详细的已知问题修复（详情见 [`docs/known-issues.md`](docs/known-issues.md)）。
 
 ## 目录
 
