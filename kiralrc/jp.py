@@ -149,6 +149,10 @@ def _align_ja_mms_karaoke(
             out_toks.append((tail, tail))
         return out_toks
 
+    # 预先计算人声包络，用于避免切片向前吞进上一句未唱完的拖音（如慢歌句尾延长超过参考时间戳）
+    from . import audio as au
+    env_20ms = au.rms_envelope(audio, sr=16000, hop=0.02)
+
     rows: list[fmt.Line] = []
     for i, (t0, text) in enumerate(lines):
         nxt = lines[i + 1][0] if i + 1 < len(lines) else dur
@@ -192,10 +196,24 @@ def _align_ja_mms_karaoke(
         if not rom_chars:
             continue
 
-        # 切片范围：绝不往前侵入上一句已对齐的唱腔尾音；遇到长间奏时也限制上限，不把几十秒间奏塞进单句
+        # 切片范围：绝不往前侵入上一句已对齐的唱腔尾音；若参考起点恰好落在上句拖音中，自动延后到换气低谷
         seg_start = max(0.0, t0 - 0.30)
         if rows and rows[-1].end is not None and rows[-1].end < t0 + 0.35:
             seg_start = max(seg_start, rows[-1].end - 0.05)
+        if rows and len(env_20ms) > 0:
+            # 检查 [seg_start, t0+0.60] 内是否存在「先高能量(上句尾音) -> 明显换气低谷 -> 再起音」
+            f0 = max(0, int(seg_start / 0.02))
+            f1 = min(len(env_20ms) - 1, int((t0 + 0.60) / 0.02))
+            if f1 > f0 + 6:
+                win = env_20ms[f0:f1 + 1]
+                # 窗口前段有明显上句尾音能量
+                head_peak = float(np.max(win[:min(8, len(win))]))
+                min_rel = int(np.argmin(win))
+                valley = float(win[min_rel])
+                if head_peak > 0.08 and min_rel >= 2 and min_rel < len(win) - 2 and valley < head_peak * 0.48:
+                    after_peak = float(np.max(win[min_rel + 1:]))
+                    if after_peak > valley * 1.6:
+                        seg_start = (f0 + min_rel) * 0.02
         max_line_dur = max(5.0, len(rom_chars) * 0.45) + 2.0
         if i + 1 < len(lines) and nxt > t0 + 0.6:
             seg_end_t = min(dur, nxt + 0.45, t0 + max_line_dur)
