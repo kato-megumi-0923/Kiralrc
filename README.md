@@ -166,9 +166,6 @@ scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_
 | 依赖库 | PyPI | faster-whisper / demucs / whisperx / PyAV / pypinyin / torch … |
 | `kiralrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
 
-要公开的话：保留 `third_party/SOFA/LICENSE`，并在文档里注明模型来源即可（SOFA 为 MIT）。
-本项目自身代码建议同样以 MIT 发布。
-
 ## 许可
 
 本项目代码以 MIT 发布（见 `LICENSE`）。`third_party/SOFA` 为其原作者的 MIT 代码（见其 `LICENSE`），
