@@ -82,6 +82,10 @@ python -m kiralrc convert "歌曲.lrc"
 `segments/`（按句切片的 wav + 拼音 lab）、`segments/htk/words/*.lab`（对齐结果）。
 同一首歌重跑会复用已分离的人声。
 
+## 已知问题
+
+见 [`docs/known-issues.md`](docs/known-issues.md)：哪些坑已经修好（别再改回去）、哪些还需要设计。
+
 ## 目录
 
 ```
