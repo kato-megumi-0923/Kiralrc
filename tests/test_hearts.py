@@ -30,3 +30,27 @@ def test_skip_credits(tmp_path):
     p = tmp_path / "a.lrc"
     p.write_bytes("[00:00.000]<00:00.000>QQ音乐享有本翻译作品的著作权<00:01.000>\r\n".encode())
     assert hearts.wrap(p) == 0
+
+
+def test_bilingual_reference_dedup(tmp_path):
+    """双语歌词里译文和原词共用时间戳，不能被当成独立歌词行。"""
+    from kiralrc import text as tx
+
+    body = "\n".join([
+        "[00:01.00]日文第一句",
+        "[00:01.00]中文翻译一",
+        "[00:05.00]日文第二句",
+        "[00:05.01]中文翻译二",
+        "[00:09.00]日文第三句",
+    ])
+    assert tx.lines_with_times(body) == [(1.0, "日文第一句"), (5.0, "日文第二句"),
+                                        (9.0, "日文第三句")]
+
+
+def test_query_from_filename():
+    from kiralrc import text as tx
+
+    assert tx.query_from_filename("02 - 好想好想 - 赵薇") == "好想好想 赵薇"
+    assert tx.query_from_filename("艾秩曼+-+白狐（TV+Version）") == "艾秩曼 白狐"
+    assert tx.query_from_filename("[110316]ソラノシズク") == "ソラノシズク"
+    assert tx.query_from_filename("1986年のマリリン") == "1986年のマリリン"

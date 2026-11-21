@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 LINE_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{2,3})\](.*)$")
 TAG_RE = re.compile(r"<(\d{2}):(\d{2}\.\d{2,3})>")
 META_RE = re.compile(r"^\[(ti|ar|al|by|tool|offset|length|re|ve):", re.I)
+STAMP_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{2,3})\]")
 TS2_RE = re.compile(r"([\[<]\d{2}:\d{2}\.\d{2})([\]>])")
 
 
@@ -39,10 +40,15 @@ class Line:
     def enhanced(self) -> bool:
         """逐字行：除首尾两个时间标签外，行内还有逐字标签。
 
+        两种来源都要认：
+        - 解析出来的（tag_count 记录标签数，`> 2` 即逐字）；
+        - 程序里直接构造的（没设 tag_count，但 chars 与文字一一对应）。
         不能用「标签数 >= 字数」判断——含 "My " 这类多字符 token 的行，
         一个标签会盖住多个字符。
         """
-        return self.tag_count > 2
+        if self.tag_count > 2:
+            return True
+        return bool(self.chars) and len(self.chars) >= len(self.text)
 
     def render(self) -> str:
         if not self.enhanced:
@@ -68,7 +74,10 @@ class Lrc:
 
 
 def parse(path_or_text: str | bytes) -> Lrc:
-    """解析 LRC：文件路径或文本内容都行。"""
+    """解析 LRC：文件路径或文本内容都行。
+
+    支持：逐字标签、纯文本行、一行挂多个时间戳（副歌复用）。
+    """
     if isinstance(path_or_text, bytes):
         text = path_or_text.decode("utf-8-sig")
     elif "\n" in path_or_text:
@@ -85,30 +94,42 @@ def parse(path_or_text: str | bytes) -> Lrc:
         if META_RE.match(s):
             lrc.metas.append(s)
             continue
-        m = LINE_RE.match(s)
-        if not m:
+
+        # 一行可能挂多个时间戳（副歌复用时很常见），逐个展开
+        stamps, rest = [], s
+        while True:
+            m = STAMP_RE.match(rest)
+            if not m:
+                break
+            stamps.append(to_sec(m.group(1), m.group(2)))
+            rest = rest[m.end():]
+        if not stamps:
             continue
-        start = to_sec(m.group(1), m.group(2))
-        body = m.group(3)
-        tags = list(TAG_RE.finditer(body))
-        if not tags:
-            lrc.lines.append(Line(start, body.strip()))
-            continue
-        plain = TAG_RE.sub("", body)
-        enhanced = len(tags) > 2
-        chars = []
-        if enhanced:
-            for idx, ch in enumerate(plain):
-                t = (to_sec(tags[idx].group(1), tags[idx].group(2))
-                     if idx < len(tags) else (chars[-1][1] if chars else start))
-                chars.append((ch, t))
-        # 行尾标签：逐字行是「字数 + 1 个标签」，纯翻译行则是「首 + 尾」两个标签
-        end = None
-        if len(tags) >= 2 and (enhanced or len(tags) == 2):
-            end = to_sec(tags[-1].group(1), tags[-1].group(2))
-        lrc.lines.append(Line(start, plain, chars, end, len(tags)))
+        for start in stamps:
+            _append_line(lrc, start, rest)
     return lrc
 
+
+def _append_line(lrc: Lrc, start: float, body: str) -> None:
+    """把一行内容（可能带逐字标签）追加成 Line。"""
+    tags = list(TAG_RE.finditer(body))
+    if not tags:
+        lrc.lines.append(Line(start, body.strip()))
+        return
+
+    plain = TAG_RE.sub("", body)
+    enhanced = len(tags) > 2
+    chars = []
+    if enhanced:
+        for idx, ch in enumerate(plain):
+            t = (to_sec(tags[idx].group(1), tags[idx].group(2))
+                 if idx < len(tags) else (chars[-1][1] if chars else start))
+            chars.append((ch, t))
+    # 行尾标签：逐字行是「字数 + 1 个标签」，纯翻译行则是「首 + 尾」两个标签
+    end = None
+    if len(tags) >= 2 and (enhanced or len(tags) == 2):
+        end = to_sec(tags[-1].group(1), tags[-1].group(2))
+    lrc.lines.append(Line(start, plain, chars, end, len(tags)))
 
 def write(path: str | Path, lrc: Lrc, newline: str = "\n") -> None:
     data = newline.join(lrc.metas + [ln.render() for ln in lrc.lines]) + newline

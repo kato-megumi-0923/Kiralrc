@@ -58,3 +58,25 @@ def test_validate_passes_on_good(tmp_path):
     p = tmp_path / "ok.lrc"
     p.write_bytes(SAMPLE.encode("utf-8"))
     assert fmt.validate_enhanced(p) == []
+
+
+# --- 回归：解析层曾经踩过的坑 ---
+
+def test_multi_timestamp_line_expands():
+    """[00:01][00:15]副歌 —— 一行挂多个时间戳要展开成多行。"""
+    lrc = fmt.parse("[00:01.000][00:15.000]重复副歌\n")
+    assert [(l.start, l.text) for l in lrc.lines] == [(1.0, "重复副歌"), (15.0, "重复副歌")]
+
+
+def test_multi_timestamp_with_enhanced_body():
+    lrc = fmt.parse("[00:01.000][00:09.000]<00:01.000>你<00:01.500>好<00:02.000>\n")
+    assert len(lrc.lines) == 2
+    assert lrc.lines[0].enhanced and lrc.lines[1].enhanced
+    assert lrc.lines[1].chars[0][1] == 1.0        # 逐字时间是原样（不做偏移）
+
+
+def test_programmatic_line_renders_enhanced():
+    """SOFA/WhisperX 里直接构造的 Line 没有 tag_count，也必须按逐字渲染。"""
+    ln = fmt.Line(1.0, "你好", [("你", 1.0), ("好", 1.5)], 2.0)
+    assert ln.enhanced
+    assert ln.render() == "[00:01.000]<00:01.000>你<00:01.500>好<00:02.000>"

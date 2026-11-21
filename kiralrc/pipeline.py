@@ -49,9 +49,12 @@ def resolve_reference(audio_path: Path, ref: Path | None,
                       query: str | None = None) -> tuple[Path | None, list[str], str]:
     """返回 (参考文件, 歌词行, 说明)。"""
     if ref and Path(ref).exists():
-        return Path(ref), tx.ref_lines(ref), f"参考文件 {Path(ref).name}"
+        body = Path(ref).read_text(encoding="utf-8-sig")
+        stamped = tx.lines_with_times(body)
+        lines = [t for _, t in stamped] if len(stamped) >= 6 else tx.ref_lines(ref)
+        return Path(ref), lines, f"参考文件 {Path(ref).name}"
 
-    kw = query or audio_path.stem.replace("_", " ")
+    kw = query or tx.query_from_filename(audio_path.stem)
     dur = round(au.duration(audio_path))
     hit = tx.best_match(kw, dur)
     if not hit:
@@ -59,31 +62,18 @@ def resolve_reference(audio_path: Path, ref: Path | None,
 
     p = config.work_dir() / (audio_path.stem[:40] + ".ref.lrc")
     p.write_text(hit["lrc"], encoding="utf-8")
-    return p, tx.ref_lines(p), f"网易云 {hit['artist']} - {hit['name']} ({hit['duration']}s)"
+    stamped = tx.lines_with_times(hit["lrc"])
+    lines = [t for _, t in stamped] if stamped else tx.ref_lines(p)
+    return p, lines, f"网易云 {hit['artist']} - {hit['name']} ({hit['duration']}s)"
 
 
 def line_times(ref_path: Path | None, lines: list[str], audio_path: Path,
                cache: Path, lang: str) -> list[tuple[float, str]]:
     """每句的起始时间：参考 LRC 自带时间戳优先，否则 ASR 估。"""
     if ref_path:
-        body = Path(ref_path).read_text(encoding="utf-8-sig")
-        stamped = TS.findall(body)
+        stamped = tx.lines_with_times(Path(ref_path).read_text(encoding="utf-8-sig"))
         if len(stamped) >= max(6, len(lines) - 2):
-            out = []
-            for raw in body.splitlines():
-                s = raw.strip()
-                if s.startswith("[") and "]" in s:
-                    head, rest = s.split("]", 1)
-                    try:
-                        mm, ss = head.strip("[]").split(":")
-                        t = int(mm) * 60 + float(ss)
-                    except ValueError:
-                        continue
-                    rest = rest.strip()
-                    if rest and not tx.CREDIT_RE.match(rest):
-                        out.append((round(t, 3), rest))
-            if out:
-                return out
+            return stamped
 
     from . import asr
 
@@ -93,6 +83,12 @@ def line_times(ref_path: Path | None, lines: list[str], audio_path: Path,
         json.dumps({"words": words, "segments": segs, "duration": dur}, ensure_ascii=False),
         encoding="utf-8")
     return asr.assign_lines(lines, segs)
+
+
+def _metas(ti: str, ar: str, al: str, by: str) -> list[str]:
+    """统一的头部：ti / ar / al / by，空字段跳过。"""
+    return [x for x in (f"[ti:{ti}]" if ti else "", f"[ar:{ar}]" if ar else "",
+                        f"[al:{al}]" if al else "", f"[by:{by}]") if x]
 
 
 def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = "zh",
@@ -121,14 +117,13 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
         if missing:
             note += f" | 拼音异常 {len(missing)} 处"
         sofa.run(seg_dir)
-        lrc = sofa.build_lrc(meta, seg_dir / "htk" / "words", ti=ti, ar=ar, al=al)
+        lrc = sofa.build_lrc(meta, seg_dir / "htk" / "words")
+        by = "SOFA 歌声对齐"
     else:
         from . import jp
 
         lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total)
-        if ti:
-            lrc.metas.insert(0, f"[ti:{ti}]")
-        if ar:
-            lrc.metas.insert(1 if ti else 0, f"[ar:{ar}]")
+        by = f"WhisperX {lang} 逐字"
 
+    lrc.metas = _metas(ti, ar, al, by)
     return lrc, note

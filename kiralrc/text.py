@@ -14,6 +14,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
 HEADERS = {"User-Agent": UA, "Referer": "https://music.163.com/"}
 META_RE = re.compile(r"^\[(ti|ar|al|by|tool|offset|length):", re.I)
+TRACK_RE = re.compile(r"^\s*\d{1,3}\s*[-._]\s*")
+BRACKET_RE = re.compile(r"[\(\[（【][^\)\]）】]*[\)\]）】]")
+DASH_RE = re.compile(r"\s*[-–—]{1,}\s*")
 CREDIT_RE = re.compile(r"^\s*(作词|作曲|编曲|制作|出品|监制|混音|母带|演唱|OP|SP)\s*[:：]")
 
 
@@ -94,3 +97,37 @@ def pinyin_syllables(text: str) -> list[str]:
     """整句转无声调拼音（拼音数 == 汉字数），非汉字自动丢弃。"""
     from pypinyin import Style, lazy_pinyin
     return lazy_pinyin(text, style=Style.NORMAL, errors=lambda x: None)
+
+
+def lines_with_times(text: str, dup_tol: float = 0.06) -> list[tuple[float, str]]:
+    """从带时间戳的歌词里取 [(时间, 行)]，同一时间戳的第二行按「译文」丢弃。
+
+    网易云的双语歌词就是「原词 + 译文」共用同一个时间戳；不处理的话译文会被
+    当成独立歌词行，行数翻倍、对齐全乱。
+    """
+    from . import format as fmt
+
+    out: list[tuple[float, str]] = []
+    for ln in fmt.parse(text).lines:
+        t = ln.text.strip()
+        if not t or CREDIT_RE.match(t):
+            continue
+        if out and abs(ln.start - out[-1][0]) < dup_tol:
+            continue
+        out.append((ln.start, t))
+    return out
+
+
+def query_from_filename(stem: str) -> str:
+    """文件名 → 网易云搜索词。
+
+    "02 - 好想好想 - 赵薇"        -> "好想好想 赵薇"
+    "艾秩曼+-+白狐（TV+Version）" -> "艾秩曼 白狐"
+    "[110316]ソラノシズク"        -> "ソラノシズク"
+    """
+    s = BRACKET_RE.sub(" ", stem)
+    s = TRACK_RE.sub("", s)
+    s = s.replace("_", " ").replace("+", " ").replace("\u3000", " ")
+    s = DASH_RE.sub(" ", s)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip(" -._")
