@@ -4,7 +4,7 @@
     2. 定每句起始时间：参考歌词本身带时间戳就直接用，否则用 ASR + 行级 DP 估；
     3. demucs 分离人声（缓存）；
     4. 主唱检测（KI-1）：筛除纯音乐/无主唱曲目；
-    5. 中文走 SOFA 歌声对齐，其它语言走 WhisperX（带长音保真 KI-3 与英文粒度 KI-7）；
+    5. 中文走 SOFA 歌声对齐，日文走 NextFire MMS，英文及其它多语种走 Echora-300M MMS（带长音保真 KI-3 与英文粒度 KI-7）；
     6. 输出三位小数、带行尾标签的逐字 LRC。
 """
 from __future__ import annotations
@@ -195,7 +195,7 @@ def _metas(ti: str, ar: str, al: str, by: str) -> list[str]:
 
 
 def _detect_lyrics_lang(lines: list[str], fallback: str = "zh") -> str:
-    """根据实际歌词文本自动纠正语言（如中文歌名「(英文翻唱)」实际唱英文时自动切到 en 走 WhisperX）。"""
+    """根据实际歌词文本自动纠正语言（如中文歌名「(英文翻唱)」实际唱英文时自动切到 en 走 Echora-300M MMS）。"""
     if not lines:
         return fallback
     kana = sum(1 for ln in lines for ch in ln if "\u3040" <= ch <= "\u30ff")
@@ -515,6 +515,9 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
 
     if used_asr_fallback:
         by = f"{asr_engine_name} 听写 + {by}"
+
+    if not lrc.lines:
+        raise RuntimeError(f"逐字对齐未产出有效歌词行（lang={lang}），已中止以免写入空 LRC")
 
     emit(6, "输出并校验", f"{len(lrc.lines)} 行")
     tr_cnt = _attach_translations(lrc, trans_map)

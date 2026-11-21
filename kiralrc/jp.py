@@ -1,7 +1,7 @@
-"""非中文语言（以日文为主）的逐字对齐：WhisperX wav2vec2 CTC，逐句在**人声轨**上跑。
+"""非中文语言的逐字歌声对齐（在 demucs 分离人声轨上跑）：
 
-SOFA 只有中文歌声模型；日文/英文用 WhisperX。
-注意 wav2vec2 是语音模型，长音会被压扁，所以务必喂 demucs 分离后的人声，
+- 日文（ja）：NextFire MMS 日语卡拉 OK 歌声模型 + fugashi（MeCab / UniDic）词法读音
+- 英文（en）及其它多语种：Echora-300M MMS 多语歌词歌声模型 + 拉丁化映射
 并在对齐后用人声能量包络做「时长保真」后处理（KI-3）。
 """
 from __future__ import annotations
