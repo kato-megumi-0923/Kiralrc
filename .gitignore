@@ -1,11 +1,10 @@
 # 虚拟环境与模型
 .venv-sofa/
 models/
-# 中间产物
-work/
-out/
-sofa/
-ref/
+# 中间产物（注意用 / 锚定根目录，否则会把 third_party/SOFA 也忽略掉）
+/work/
+/out/
+/ref/
 # Python
 __pycache__/
 *.pyc
