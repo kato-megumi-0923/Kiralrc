@@ -162,7 +162,7 @@ scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_
 |---|---|---|
 | `kiralrc/`、`tools/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
 | `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 原样引入，**未改其源码**；只由 `tools/run_sofa.py` 调用 |
-| `models/` | 下载，不入库 | CT2 whisper：`Systran/faster-whisper-large-v3`（经 ModelScope 镜像）<br>SOFA 权重：官方 Release `v1.0.0_mandarin_singing.ckpt` |
+| `models/` | 本地下载（不提交到 Git） | CT2 whisper：`Systran/faster-whisper-large-v3`（经 ModelScope 镜像）<br>SOFA 权重：官方 Release `v1.0.0_mandarin_singing.ckpt` |
 | 依赖库 | PyPI | faster-whisper / demucs / whisperx / PyAV / pypinyin / torch … |
 | `kiralrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
 
