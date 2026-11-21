@@ -583,11 +583,14 @@ func (a *app) viewLibrary(c *ui.Context) {
 				vocalPct = float64(st.Enhanced) * 100.0 / float64(st.Vocal)
 			}
 
-			ui.Row(c).AlignItems(ui.End).Gap(12).Children(func() {
+			ui.Row(c).AlignItems(ui.End).Gap(8).Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, strings.Join(a.libFolders, " · ")+" · 上次扫描 "+a.libScanTime).FontSize(11.5).FontWeight(600).TextColor(p.muted)
 					ui.Text(c, "曲库").FontSize(28).FontWeight(800)
 				})
+				if pillButton(c.Key("lib-refresh-top"), iconRefresh, "刷新", p.surface2, p.text).Clicked() {
+					a.refreshLibrary()
+				}
 				if pillButton(c.Key("lib-clear-folders"), nil, "移除文件夹", p.surface2, p.muted).Clicked() {
 					a.clearLibraryFolders()
 					return
@@ -610,13 +613,16 @@ func (a *app) viewLibrary(c *ui.Context) {
 				ui.Column(c).Grow(1).Gap(4).Children(func() {
 					ui.Text(c, fmt.Sprintf("本地曲库总览 · 共 %d 首音频（有效人声 %d 首 · 已排除纯音乐 / OST / 伴奏 %d 首）",
 						st.Total, st.Vocal, st.InstTotal)).FontSize(12).FontWeight(600).TextColor(white.Alpha(0.78))
-					ui.Text(c, fmt.Sprintf("还有 %d 首人声歌曲可升级为逐字歌词", needUpgrade)).FontSize(26).FontWeight(800).TextColor(white)
-					ui.Text(c, fmt.Sprintf("%d 首逐字已就绪 · %d 首仅整行时间 · %d 首人声缺词   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
-						st.Enhanced, st.LineOnly, st.Missing, st.InstPure, st.InstOST, st.InstAccomp)).FontSize(12.5).TextColor(white.Alpha(0.88))
+					ui.Text(c, fmt.Sprintf("还有 %d 首人声歌曲待升级或待补词", needUpgrade)).FontSize(26).FontWeight(800).TextColor(white)
+					nfSub := ""
+					if st.NotFound > 0 {
+						nfSub = fmt.Sprintf("（含 %d 首全网未搜到）", st.NotFound)
+					}
+					ui.Text(c, fmt.Sprintf("%d 首逐字已就绪 · %d 首仅整行时间 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
+						st.Enhanced, st.LineOnly, st.Missing, nfSub, st.InstPure, st.InstOST, st.InstAccomp)).FontSize(12.5).TextColor(white.Alpha(0.88))
 					ui.Row(c).Gap(8).Margin(12, 0, 0, 0).Children(func() {
-						if pillButton(c.Key("hero-batch"), iconPlay, fmt.Sprintf("批量升级整行歌词（%d）", needUpgrade), white, ui.Hex("#1d1d1f")).Clicked() {
-							a.enqueueFromLibrary()
-							a.navigate(pageQueue, 1)
+						if pillButton(c.Key("hero-batch"), iconPlay, fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly), white, ui.Hex("#1d1d1f")).Clicked() {
+							a.enqueueLineOnlyTracks()
 						}
 						if pillButton(c.Key("hero-folder"), iconFolder, "添加文件夹", ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
 							a.pickLibraryFolder()
@@ -650,21 +656,27 @@ func (a *app) viewLibrary(c *ui.Context) {
 				})
 			})
 
-			// 3 Stat Cards (hover lift + click switches filter tab!)
-			ui.Row(c.Key("stats")).Gap(14).AlignItems(ui.Stretch).Children(func() {
+			// 4 Stat Cards (hover lift + active border + click switches filter tab!)
+			ui.Row(c.Key("stats")).Gap(12).AlignItems(ui.Stretch).Children(func() {
+				nfBadge := ""
+				if st.NotFound > 0 {
+					nfBadge = fmt.Sprintf("%d 首全网无词", st.NotFound)
+				}
 				stats := []struct {
-					key, n, l string
-					ic        *ui.SVG
-					bg, fg    ui.Color
-					filter    int
+					key, n, badge, l string
+					ic               *ui.SVG
+					bg, fg           ui.Color
+					filter           int
 				}{
-					{"ready", fmt.Sprintf("%d", st.Enhanced), fmt.Sprintf("逐字 LRC · 可直接卡拉 OK（占人声 %.1f%%）", vocalPct), iconCheck, p.okBg, p.ok, 2},
-					{"upgrade", fmt.Sprintf("%d", needUpgrade), fmt.Sprintf("仅整行时间 · 可升级为逐字（%d 首人声缺词）", st.Missing), iconNote, p.accent.Alpha(0.12), p.accent, 1},
-					{"inst", fmt.Sprintf("%d", st.InstTotal), fmt.Sprintf("已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d", st.InstPure, st.InstOST, st.InstAccomp), iconWave, p.surface2, p.muted, 3},
+					{"ready", fmt.Sprintf("%d", st.Enhanced), "", fmt.Sprintf("逐字就绪 · 占人声 %.1f%%", vocalPct), iconCheck, p.okBg, p.ok, 2},
+					{"upgrade", fmt.Sprintf("%d", st.LineOnly), "", "仅整行 LRC · 可直接升级逐字", iconNote, p.accent.Alpha(0.12), p.accent, 1},
+					{"nolyrics", fmt.Sprintf("%d", st.Missing), nfBadge, "无歌词 · 支持 ID / 手填 / ASR", iconWarn, p.warnBg, p.warn, 3},
+					{"inst", fmt.Sprintf("%d", st.InstTotal), "", fmt.Sprintf("已排除：纯音乐 %d · OST %d · 伴奏 %d", st.InstPure, st.InstOST, st.InstAccomp), iconWave, p.surface2, p.muted, 4},
 				}
 				for _, sItem := range stats {
 					s := sItem
-					card := ui.ButtonBase(c.Key("stat-"+s.key)).Grow(1).Basis(0).Padding(15, 18, 15, 18).Gap(14).Radius(16).
+					activeCard := a.libFilter == s.filter
+					card := ui.ButtonBase(c.Key("stat-"+s.key)).Grow(1).Basis(0).MinWidth(0).Padding(14, 15, 14, 15).Gap(12).Radius(16).
 						AlignItems(ui.Center).Label(s.l).FocusRing(false)
 					cardBg := p.surface
 					if card.Hovered() {
@@ -675,36 +687,48 @@ func (a *app) viewLibrary(c *ui.Context) {
 					if card.Pressed() {
 						lift = ui.Pose{Scale: 0.98}
 					} else if card.Hovered() {
-						lift = ui.Pose{Y: -3, Scale: 1.01}
+						lift = ui.Pose{Y: -2, Scale: 1.01}
 					}
 					card.AnimatePose(lift, ui.Snappy)
-					card.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 16, 1) })
+					card.Draw(func(pt *ui.Painter, r ui.Rect) {
+						if activeCard {
+							pt.Stroke(r, p.accent, 16, 1.5)
+						} else {
+							pt.Stroke(r, p.hairline, 16, 1)
+						}
+					})
 					card.Children(func() {
-						ib := ui.Box(c).Size(40, 40).Radius(12).Center().Background(s.bg)
+						ib := ui.Box(c).Size(38, 38).Radius(12).Shrink(0).Center().Background(s.bg)
 						ib.Children(func() { ui.Icon(c, s.ic).Size(18, 18).TextColor(s.fg) })
-						ui.Column(c).Gap(2).Children(func() {
-							ui.Text(c, s.n).FontSize(23).FontWeight(800).TextColor(p.text).SingleLine()
-							ui.Text(c, s.l).FontSize(12).TextColor(p.muted).SingleLine()
+						ui.Column(c).MinWidth(0).Grow(1).Gap(2).Children(func() {
+							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, s.n).FontSize(22).FontWeight(800).TextColor(p.text).SingleLine()
+								if s.badge != "" {
+									statusPill(c, s.badge, p.warnBg, p.warn)
+								}
+							})
+							ui.Text(c, s.l).FontSize(11.5).TextColor(p.muted).SingleLine()
 						})
 					})
 					if card.Clicked() {
-						a.libFilter = s.filter
+						a.setLibFilter(s.filter)
 					}
 				}
 			})
 
-			// Filter bar with Cloudy sliding selection pill (Match: tabPillMatch{})
-			ui.Row(c.Key("filter-bar")).Gap(6).Margin(6, 0, 0, 0).AlignItems(ui.Center).Children(func() {
+			// 5-Tab Filter bar with Cloudy sliding selection pill (Match: tabPillMatch{})
+			ui.Row(c.Key("filter-bar")).Gap(6).Margin(4, 0, 0, 0).AlignItems(ui.Center).Children(func() {
 				tabs := []string{
 					fmt.Sprintf("有效人声 %d", st.Vocal),
-					fmt.Sprintf("待升级逐字 %d", needUpgrade),
+					fmt.Sprintf("待升级逐字 %d", st.LineOnly),
 					fmt.Sprintf("逐字就绪 %d", st.Enhanced),
+					fmt.Sprintf("无歌词 %d", st.Missing),
 					fmt.Sprintf("纯音乐 / OST / 伴奏 %d", st.InstTotal),
 				}
 				for i, tl := range tabs {
 					idx, label := i, tl
 					on := a.libFilter == idx
-					btn := ui.ButtonBase(c.Key(fmt.Sprintf("tab-%d", idx))).Height(32).PaddingX(15).Radius(999).
+					btn := ui.ButtonBase(c.Key(fmt.Sprintf("tab-%d", idx))).Height(32).PaddingX(14).Radius(999).
 						Center().Label(label).Selected(on).FocusRing(false)
 					bg := ui.Transparent
 					if btn.Hovered() && !on {
@@ -731,27 +755,32 @@ func (a *app) viewLibrary(c *ui.Context) {
 						ui.Box(c.Key("tab-tx")).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().PassThrough().Children(func() {
 							ui.Text(c, label).FontSize(13).FontWeight(700).TextColor(fg).SingleLine()
 						})
-						// Invisible sizer so the button keeps its natural width
 						ui.Text(c, label).FontSize(13).FontWeight(700).TextColor(ui.Transparent).SingleLine()
 					})
 					if btn.Clicked() {
-						a.libFilter = idx
+						a.setLibFilter(idx)
 					}
 				}
 				ui.Box(c).Grow(1)
-				statusPill(c, fmt.Sprintf("纯音乐 %d", st.InstPure), p.surface2, p.muted)
-				statusPill(c, fmt.Sprintf("OST 原声 %d", st.InstOST), p.surface2, p.muted)
-				statusPill(c, fmt.Sprintf("伴奏 %d", st.InstAccomp), p.surface2, p.muted)
+				if a.libFilter == 4 {
+					statusPill(c, fmt.Sprintf("纯音乐 %d", st.InstPure), p.surface2, p.muted)
+					statusPill(c, fmt.Sprintf("OST 原声 %d", st.InstOST), p.surface2, p.muted)
+					statusPill(c, fmt.Sprintf("伴奏 %d", st.InstAccomp), p.surface2, p.muted)
+				}
 			})
 
-			// Batch selection action bar (select tracks -> click "开始对齐歌词")
+			// Dynamic batch action bar
 			selTracks := a.selectedLibraryTracks()
 			selCount := len(selTracks)
 			actionBar := ui.Row(c.Key("batch-bar")).FillWidth().Padding(10, 14, 10, 14).Gap(10).Radius(14).
 				AlignItems(ui.Center).Background(p.surface)
 			actionBar.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
 			actionBar.Children(func() {
-				ui.Text(c, fmt.Sprintf("已选择 %d 首歌曲", selCount)).FontSize(13).FontWeight(700)
+				if a.libFilter == 3 {
+					ui.Text(c, fmt.Sprintf("已选择 %d 首无歌词歌曲", selCount)).FontSize(13).FontWeight(700)
+				} else {
+					ui.Text(c, fmt.Sprintf("已选择 %d 首歌曲", selCount)).FontSize(13).FontWeight(700)
+				}
 				if pillButton(c.Key("lib-sel-all"), nil, "全选本页", p.surface2, p.text).Clicked() {
 					a.setVisibleTracksSelected(true)
 				}
@@ -761,7 +790,29 @@ func (a *app) viewLibrary(c *ui.Context) {
 					}
 				}
 				ui.Box(c).Grow(1)
-				if selCount > 0 {
+				if a.libFilter == 3 {
+					idBtnBg, idBtnFg := p.surface2, p.text
+					if a.libBatchIdOpen {
+						idBtnBg, idBtnFg = p.accent.Alpha(0.14), p.accent
+					}
+					if pillButton(c.Key("lib-batch-id-toggle"), iconLink, "批量填网易云 ID", idBtnBg, idBtnFg).Clicked() {
+						a.libBatchIdOpen = !a.libBatchIdOpen
+						if a.libBatchIdOpen {
+							a.libExpandedPath = ""
+							a.libExpandedMode = ""
+						}
+					}
+					if pillButton(c.Key("lib-retry-search"), nil, "重试全网搜索", p.surface2, p.text).Clicked() {
+						a.enqueueNoLyricsRetrySearch(selTracks)
+					}
+					asrLabel := "本地 ASR 识别并对齐"
+					if selCount > 0 {
+						asrLabel = fmt.Sprintf("本地 ASR 识别并对齐（%d 首）", selCount)
+					}
+					if pillButton(c.Key("lib-batch-asr"), iconMic, asrLabel, p.accent, p.onAccent).Clicked() {
+						a.enqueueNoLyricsAsr(selTracks)
+					}
+				} else if selCount > 0 {
 					if pillButton(c.Key("lib-start-align"), iconPlay, fmt.Sprintf("开始对齐歌词（%d 首）", selCount), p.accent, p.onAccent).Clicked() {
 						a.enqueueFromLibrary()
 						a.navigate(pageQueue, 1)
@@ -771,49 +822,100 @@ func (a *app) viewLibrary(c *ui.Context) {
 				}
 			})
 
-			// Track list (clickable selection with animated highlight + spring feedback)
+			// Expandable "批量填网易云 ID" Drawer (only in 无歌词 Tab when open)
+			if a.libFilter == 3 && a.libBatchIdOpen {
+				if a.libBatchIdInputs == nil {
+					a.libBatchIdInputs = make(map[string]string)
+				}
+				targets := a.batchIdTargetTracks()
+				filledCount := 0
+				for _, t := range targets {
+					if parseNeteaseID(a.libBatchIdInputs[t.FullPath]) != "" {
+						filledCount++
+					}
+				}
+				drawer := ui.Column(c.Key("batch-id-drawer")).FillWidth().Padding(16, 16, 16, 16).Gap(10).Radius(16).Background(p.surface)
+				drawer.Draw(func(pt *ui.Painter, r ui.Rect) {
+					pt.Stroke(r, p.accent, 16, 1.2)
+				})
+				drawer.Children(func() {
+					ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+						ui.Column(c).Grow(1).Gap(2).Children(func() {
+							ui.Text(c, "批量填写网易云歌曲 ID").FontSize(14).FontWeight(700)
+							ui.Text(c, "部分冷门/特典曲搜索不到但支持按 ID 直接下载歌词，直接粘贴浏览器地址栏 URL 即可自动提取 ID").FontSize(11.5).TextColor(p.muted)
+						})
+						if pillButton(c.Key("batch-id-close"), nil, "收起", p.surface2, p.muted).Clicked() {
+							a.libBatchIdOpen = false
+						}
+					})
+					if len(targets) == 0 {
+						ui.Text(c, "当前没有无歌词歌曲").FontSize(12.5).TextColor(p.muted)
+					}
+					for ti, t := range targets {
+						if ti >= 20 {
+							break
+						}
+						tPath := t.FullPath
+						val := a.libBatchIdInputs[tPath]
+						pid := parseNeteaseID(val)
+						rowBox := ui.Row(c.Key(fmt.Sprintf("bid-row-%d", ti))).FillWidth().Padding(8, 12, 8, 12).Gap(10).Radius(12).
+							AlignItems(ui.Center).Background(p.bg)
+						rowBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 12, 1) })
+						rowBox.Children(func() {
+							ui.Column(c).Width(210).Shrink(0).Gap(1).Children(func() {
+								ui.Text(c, t.Title).FontSize(13).FontWeight(700).SingleLine()
+								ui.Text(c, fmt.Sprintf("%s · %s", t.Artist, t.Lang)).FontSize(11).TextColor(p.muted).SingleLine()
+							})
+							inBox := ui.Row(c).Grow(1).MinWidth(0).Padding(6, 10, 6, 10).Radius(9).AlignItems(ui.Center).Background(p.surface)
+							inBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 9, 1) })
+							inBox.Children(func() {
+								ui.TextInputBase(c.Key(fmt.Sprintf("bid-in-%d", ti)), &val).Grow(1).MinWidth(0).Height(22).
+									FontSize(12.5).TextColor(p.text).Background(ui.Transparent).
+									Placeholder("粘贴网易云歌曲 ID 或详情页 URL（如 music.163.com/#/song?id=30967650）").FocusRing(false)
+							})
+							a.libBatchIdInputs[tPath] = val
+							if pid != "" {
+								statusPill(c, "✓ ID: "+pid, p.okBg, p.ok)
+							} else {
+								statusPill(c, "待填写", p.surface2, p.muted)
+							}
+						})
+					}
+					ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+						ui.Text(c, "提示：未填写的行会自动跳过，不影响其它歌曲入队").FontSize(12).TextColor(p.muted).Grow(1)
+						if pillButton(c.Key("batch-id-cancel"), nil, "取消", p.surface2, p.muted).Clicked() {
+							a.libBatchIdOpen = false
+						}
+						if pillButton(c.Key("batch-id-submit"), nil, fmt.Sprintf("一键下载并入队（已填 %d 首）", filledCount), p.accent, p.onAccent).Clicked() {
+							a.enqueueBatchNetease()
+						}
+					})
+				})
+			}
+
+			// Track list (clickable selection with animated highlight + inline drawers in 无歌词 tab)
 			listCard := ui.Column(c.Key("track-table")).FillWidth().Gap(3)
 			listCard.Children(func() {
+				isNlTab := a.libFilter == 3
+				actColW := float32(72)
+				if isNlTab {
+					actColW = 236
+				}
 				ui.Row(c.Key("thead")).Height(34).PaddingX(12).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Box(c).Width(22)
-					ui.Text(c, "标题").Width(260).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "艺术家").Width(120).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "时长").Width(60).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "歌词状态").Width(100).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "语言").Width(64).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "标题").Width(250).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "艺术家").Width(110).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "歌词状态").Width(96).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "语言").Width(56).FontSize(11.5).FontWeight(600).TextColor(p.faint)
 					ui.Text(c, "备注").Grow(1).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Box(c).Width(72)
+					ui.Text(c, "操作").Width(actColW).FontSize(11.5).FontWeight(600).TextColor(p.faint)
 				})
 				shown := 0
 				for i := range a.tracks {
 					idx := i
 					tr := &a.tracks[idx]
-					if q := strings.TrimSpace(strings.ToLower(a.libQuery)); q != "" {
-						if !strings.Contains(strings.ToLower(tr.Title), q) &&
-							!strings.Contains(strings.ToLower(tr.Artist), q) &&
-							!strings.Contains(strings.ToLower(tr.File), q) {
-							continue
-						}
-					}
-					isInst := tr.Status == "inst_pure" || tr.Status == "inst_ost" || tr.Status == "inst_accomp"
-					// Filter tracks according to a.libFilter
-					switch a.libFilter {
-					case 0:
-						if isInst {
-							continue
-						}
-					case 1:
-						if tr.Status != "line_only" && tr.Status != "missing" {
-							continue
-						}
-					case 2:
-						if tr.Status != "enhanced" {
-							continue
-						}
-					case 3:
-						if !isInst {
-							continue
-						}
+					if !a.trackMatchesFilter(tr) {
+						continue
 					}
 					shown++
 					if shown > 80 {
@@ -837,12 +939,10 @@ func (a *app) viewLibrary(c *ui.Context) {
 					})
 
 					row.Children(func() {
-						// Clickable main area (click toggles checkbox selection; double-click opens in Editor!)
-						mainBtn := ui.ButtonBase(c.Key(fmt.Sprintf("tr-main-%d", idx))).Grow(1).FillHeight().Gap(12).
+						mainBtn := ui.ButtonBase(c.Key(fmt.Sprintf("tr-main-%d", idx))).Grow(1).MinWidth(0).FillHeight().Gap(12).
 							AlignItems(ui.Center).Background(ui.Transparent).Label(tr.Title).FocusRing(false)
 						mainBtn.Children(func() {
-							// Animated checkbox indicator
-							cb := ui.Box(c).Size(18, 18).Radius(6).Center()
+							cb := ui.Box(c).Size(18, 18).Radius(6).Shrink(0).Center()
 							cbFill := cb.AnimateColor("cbf", map[bool]ui.Color{true: p.accent, false: ui.Transparent}[tr.Selected], ui.Animation{Duration: 140 * time.Millisecond})
 							cb.Background(cbFill)
 							cb.Draw(func(pt *ui.Painter, r ui.Rect) {
@@ -854,23 +954,24 @@ func (a *app) viewLibrary(c *ui.Context) {
 								cb.Children(func() { ui.Icon(c, iconCheck).Size(12, 12).TextColor(p.onAccent) })
 							}
 
-							ui.Row(c).Width(260).Gap(12).AlignItems(ui.Center).Children(func() {
+							ui.Row(c).Width(250).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
 								artCover(c, tr.Hue, 36, 8, nil)
-								ui.Column(c).MinWidth(0).Gap(1).Children(func() {
+								ui.Column(c).MinWidth(0).Grow(1).Gap(1).Children(func() {
 									ui.Text(c, tr.Title).FontSize(13.5).FontWeight(700).TextColor(p.text).SingleLine()
 									ui.Text(c, tr.File).FontSize(11.5).TextColor(p.muted).SingleLine()
 								})
 							})
-							ui.Text(c, tr.Artist).Width(120).FontSize(13).TextColor(p.text).SingleLine()
-							ui.Text(c, tr.Duration).Width(60).FontSize(13).TextColor(p.muted).SingleLine()
-							ui.Box(c).Width(100).AlignItems(ui.Start).Children(func() {
+							ui.Text(c, tr.Artist).Width(110).Shrink(0).FontSize(13).TextColor(p.text).SingleLine()
+							ui.Box(c).Width(96).Shrink(0).AlignItems(ui.Start).Children(func() {
 								switch tr.Status {
 								case "enhanced":
 									statusPill(c, "逐字", p.okBg, p.ok)
 								case "line_only":
 									statusPill(c, "仅整行", p.accent.Alpha(0.14), p.accent)
+								case "nolyrics_notfound":
+									statusPill(c, "全网无词", p.warnBg, p.warn)
 								case "missing":
-									statusPill(c, "缺歌词", p.warnBg, p.warn)
+									statusPill(c, "本地缺词", p.surface2, p.muted)
 								case "inst_pure":
 									statusPill(c, "纯音乐", p.surface2, p.muted)
 								case "inst_ost":
@@ -881,10 +982,10 @@ func (a *app) viewLibrary(c *ui.Context) {
 									statusPill(c, "已跳过", p.surface2, p.muted)
 								}
 							})
-							ui.Box(c).Width(64).AlignItems(ui.Start).Children(func() {
+							ui.Box(c).Width(56).Shrink(0).AlignItems(ui.Start).Children(func() {
 								statusPill(c, tr.Lang, p.surface2, p.muted)
 							})
-							ui.Text(c, tr.Note).Grow(1).FontSize(12).TextColor(p.muted).SingleLine()
+							ui.Text(c, tr.Note).Grow(1).MinWidth(0).FontSize(12).TextColor(p.muted).SingleLine()
 						})
 						if mainBtn.DoubleClicked() {
 							a.openTrackInEditor(tr)
@@ -892,17 +993,145 @@ func (a *app) viewLibrary(c *ui.Context) {
 							tr.Selected = !tr.Selected
 						}
 
-						// Independent action icons on the right (not nested inside ButtonBase so clicks always fire!)
-						ui.Row(c).Width(72).Gap(4).Justify(ui.End).Children(func() {
-							if iconButton(c.Key(fmt.Sprintf("tr-align-%d", idx)), iconPlay, 13, p.muted, "对齐 "+tr.Title).Clicked() {
-								a.setAlignAudioPath(tr.FullPath)
-								a.navigate(pageAlign, 1)
+						if isNlTab {
+							isExp := strings.EqualFold(a.libExpandedPath, tr.FullPath)
+							idOn := isExp && a.libExpandedMode == "netease"
+							manOn := isExp && a.libExpandedMode == "manual"
+							rowPill := func(key, label string, bg, fg ui.Color) ui.Element {
+								b := ui.ButtonBase(c.Key(key)).Height(28).PaddingX(10).Radius(999).Center().
+									Background(bg).Label(label).FocusRing(false)
+								b.Children(func() {
+									ui.Text(c, label).FontSize(11.5).FontWeight(700).TextColor(fg).SingleLine()
+								})
+								return b
 							}
-							if iconButton(c.Key(fmt.Sprintf("tr-edit-%d", idx)), iconEdit, 14, p.muted, "校对 "+tr.Title).Clicked() {
-								a.openTrackInEditor(tr)
-							}
-						})
+							ui.Row(c).Width(actColW).Shrink(0).Gap(6).Justify(ui.End).AlignItems(ui.Center).Children(func() {
+								idBg, idFg := p.surface2, p.text
+								if idOn {
+									idBg, idFg = p.accent, p.onAccent
+								}
+								if rowPill(fmt.Sprintf("nl-id-%d", idx), "网易云 ID", idBg, idFg).Clicked() {
+									a.toggleInlineDrawer(tr, "netease")
+								}
+								manBg, manFg := p.surface2, p.text
+								if manOn {
+									manBg, manFg = p.accent, p.onAccent
+								}
+								if rowPill(fmt.Sprintf("nl-man-%d", idx), "手动填词", manBg, manFg).Clicked() {
+									a.toggleInlineDrawer(tr, "manual")
+								}
+								if rowPill(fmt.Sprintf("nl-asr-%d", idx), "本地 ASR", p.accent.Alpha(0.13), p.accent).Clicked() {
+									a.enqueueNoLyricsAsr([]trackItem{*tr})
+								}
+							})
+						} else {
+							ui.Row(c).Width(actColW).Shrink(0).Gap(4).Justify(ui.End).Children(func() {
+								if iconButton(c.Key(fmt.Sprintf("tr-align-%d", idx)), iconPlay, 13, p.muted, "对齐 "+tr.Title).Clicked() {
+									a.setAlignAudioPath(tr.FullPath)
+									a.navigate(pageAlign, 1)
+								}
+								if iconButton(c.Key(fmt.Sprintf("tr-edit-%d", idx)), iconEdit, 14, p.muted, "校对 "+tr.Title).Clicked() {
+									a.openTrackInEditor(tr)
+								}
+							})
+						}
 					})
+
+					// Inline Drawer under the expanded no-lyrics row (网易云 ID / 手动填词)
+					if isNlTab && strings.EqualFold(a.libExpandedPath, tr.FullPath) {
+						if a.libExpandedMode == "netease" {
+							pid := parseNeteaseID(a.libSingleIdInput)
+							dr := ui.Column(c.Key(fmt.Sprintf("dr-nid-%d", idx))).FillWidth().Margin(2, 12, 8, 12).
+								Padding(12, 14, 12, 14).Gap(10).Radius(14).Background(p.surface)
+							dr.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
+							dr.Children(func() {
+								ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "通过网易云歌曲 ID 直接下载歌词并对齐").FontSize(12.5).FontWeight(700).Grow(1)
+									if pid != "" {
+										statusPill(c, "✓ 已识别 ID: "+pid, p.okBg, p.ok)
+									} else {
+										statusPill(c, "支持纯数字或完整歌曲链接", p.surface2, p.muted)
+									}
+								})
+								ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+									inBox := ui.Row(c).Grow(1).MinWidth(0).Padding(7, 10, 7, 10).Radius(10).AlignItems(ui.Center).Background(p.bg)
+									inBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 10, 1) })
+									inBox.Children(func() {
+										ui.TextInputBase(c.Key(fmt.Sprintf("nid-in-%d", idx)), &a.libSingleIdInput).Grow(1).MinWidth(0).Height(22).
+											FontSize(12.5).TextColor(p.text).Background(ui.Transparent).
+											Placeholder("例如：30967650 或 https://music.163.com/#/song?id=30967650").FocusRing(false)
+									})
+									if pillButton(c.Key(fmt.Sprintf("nid-go-%d", idx)), nil, "下载歌词并对齐", p.accent, p.onAccent).Clicked() {
+										a.enqueueSingleNetease(tr, a.libSingleIdInput)
+									}
+									if pillButton(c.Key(fmt.Sprintf("nid-close-%d", idx)), nil, "收起", p.surface2, p.muted).Clicked() {
+										a.toggleInlineDrawer(tr, "netease")
+									}
+								})
+							})
+						} else if a.libExpandedMode == "manual" {
+							nLines := countNonEmptyLines(a.libManualText)
+							dr := ui.Column(c.Key(fmt.Sprintf("dr-man-%d", idx))).FillWidth().Margin(2, 12, 8, 12).
+								Padding(12, 14, 12, 14).Gap(10).Radius(14).Background(p.surface)
+							dr.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
+							dr.Children(func() {
+								ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "手动输入参考歌词").FontSize(12.5).FontWeight(700)
+									segmented(c.Key(fmt.Sprintf("man-lang-%d", idx)), &a.libManualLang, "中文", "日文", "英文")
+									ui.Box(c).Grow(1)
+									if pillButton(c.Key(fmt.Sprintf("man-paste-%d", idx)), nil, "从剪贴板粘贴", p.surface2, p.text).Clicked() {
+										a.pasteClipboardToManual()
+									}
+									if pillButton(c.Key(fmt.Sprintf("man-imp-%d", idx)), nil, "导入 .txt/.lrc", p.surface2, p.text).Clicked() {
+										a.importManualLyricsFile()
+									}
+									if pillButton(c.Key(fmt.Sprintf("man-np-%d", idx)), nil, "用记事本编辑", p.surface2, p.text).Clicked() {
+										a.openManualLyricsInNotepad(tr)
+									}
+									if a.libManualFilePath != "" {
+										if pillButton(c.Key(fmt.Sprintf("man-reload-%d", idx)), nil, "读取记事本", p.surface2, p.accent).Clicked() {
+											a.reloadManualLyricsFromFile()
+										}
+									}
+								})
+								// Multi-line preview box (shows pasted/imported/notepad lyrics) + quick single-line input fallback
+								prevBox := ui.Column(c.Key(fmt.Sprintf("man-prev-%d", idx))).FillWidth().Padding(10, 12, 10, 12).Gap(3).Radius(10).Background(p.bg)
+								prevBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 10, 1) })
+								prevBox.Children(func() {
+									if nLines == 0 {
+										ui.Text(c, "请点击上方「从剪贴板粘贴」、「导入 .txt/.lrc」或「用记事本编辑」填入歌词（纯文本即可，无需时间戳）…").
+											FontSize(12).TextColor(p.faint)
+									} else {
+										lines := strings.Split(strings.ReplaceAll(a.libManualText, "\r\n", "\n"), "\n")
+										shownL := 0
+										for _, l := range lines {
+											l = strings.TrimSpace(l)
+											if l == "" {
+												continue
+											}
+											ui.Text(c, l).FontSize(12.5).TextColor(p.text).SingleLine()
+											shownL++
+											if shownL >= 6 {
+												if nLines > 6 {
+													ui.Text(c, fmt.Sprintf("… 其余 %d 行已加载", nLines-6)).FontSize(11.5).TextColor(p.muted)
+												}
+												break
+											}
+										}
+									}
+								})
+								ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+									ui.Text(c, fmt.Sprintf("当前 %d 行 · 将自动走 ASR 句定位 + 歌声逐字强制对齐", nLines)).FontSize(11.5).TextColor(p.muted).Grow(1)
+									if pillButton(c.Key(fmt.Sprintf("man-cancel-%d", idx)), nil, "取消", p.surface2, p.muted).Clicked() {
+										a.toggleInlineDrawer(tr, "manual")
+									}
+									if pillButton(c.Key(fmt.Sprintf("man-go-%d", idx)), nil, "保存参考词并开始对齐", p.accent, p.onAccent).Clicked() {
+										a.enqueueSingleManual(tr)
+									}
+								})
+							})
+						}
+					}
 				}
 			})
 		})
@@ -1077,7 +1306,7 @@ func (a *app) viewAlign(c *ui.Context) {
 							statusPill(c, "3", p.accent.Alpha(0.14), p.accent)
 							ui.Text(c, "语言与对齐引擎").FontSize(14).FontWeight(700)
 						})
-						segmented(c, &a.alignLang, "中文 (SOFA)", "日文 (WhisperX)", "英文 (WhisperX)", "其它")
+						segmented(c, &a.alignLang, "中文 (SOFA)", "日文 (MMS 歌声)", "英文 (Echora MMS)", "其它")
 
 						ui.Row(c).FillWidth().Padding(12, 14, 12, 14).Gap(12).Radius(12).AlignItems(ui.Center).Background(p.bg).Children(func() {
 							artCover(c, 270, 36, 9, iconMic)
@@ -1086,11 +1315,14 @@ func (a *app) viewAlign(c *ui.Context) {
 									ui.Text(c, "SOFA 中文歌声强制对齐 · 推荐").FontSize(13.5).FontWeight(700)
 									ui.Text(c, "专为歌声训练，长音不被压扁；与声学起音误差 < 0.1 s").FontSize(11.5).TextColor(p.muted)
 								} else if a.alignLang == 1 {
-									ui.Text(c, "MMS 日语卡拉 OK 歌声对齐 + MeCab 词法读音").FontSize(13.5).FontWeight(700)
+									ui.Text(c, "NextFire MMS 日语卡拉 OK 歌声对齐 + MeCab 词法读音").FontSize(13.5).FontWeight(700)
 									ui.Text(c, "在 demucs 分离人声轨上逐音素对齐，并用人声包络恢复长拖腔").FontSize(11.5).TextColor(p.muted)
+								} else if a.alignLang == 2 {
+									ui.Text(c, "Echora-300M MMS 英文歌词歌声对齐 + 能量时长保真").FontSize(13.5).FontWeight(700)
+									ui.Text(c, "24s 长滑窗全上下文计算发射概率，按词/字母切分并保留长拖腔").FontSize(11.5).TextColor(p.muted)
 								} else {
-									ui.Text(c, "WhisperX 英文强制对齐 + 能量时长保真").FontSize(13.5).FontWeight(700)
-									ui.Text(c, "在 demucs 分离人声轨上逐句对齐，并用人声包络恢复长拖腔").FontSize(11.5).TextColor(p.muted)
+									ui.Text(c, "Echora-300M MMS 多语歌声对齐 + 能量时长保真").FontSize(13.5).FontWeight(700)
+									ui.Text(c, "支持法/德/西/韩等多语种：自动拉丁化映射并在人声轨上逐字/逐词对齐").FontSize(11.5).TextColor(p.muted)
 								}
 							})
 							statusPill(c, "就绪", p.okBg, p.ok)
@@ -1102,6 +1334,14 @@ func (a *app) viewAlign(c *ui.Context) {
 								ui.Text(c, "「了/着/得/还」等对齐前自动套用 polyphone.toml 覆盖词表").FontSize(11.5).TextColor(p.muted)
 							})
 							settingSwitch(c.Key("sw-poly"), &a.alignPolyCheck, "多音字读音检查")
+						})
+
+						ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+							ui.Column(c).Grow(1).Gap(1).Children(func() {
+								ui.Text(c, "鬼畜 / 波形起音优先").FontSize(13).FontWeight(600)
+								ui.Text(c, "适合鬼畜调音、人力 VOCALOID、重度电音：先按人声波形起音与能量谷切分，SOFA 作锚点参考").FontSize(11.5).TextColor(p.muted)
+							})
+							settingSwitch(c.Key("sw-waveform-first"), &a.alignWaveformFirst, "鬼畜 / 波形起音优先")
 						})
 
 						notice := ui.Column(c).FillWidth().Padding(12, 14, 12, 14).Gap(8).Radius(12).Background(p.warnBg)
@@ -1152,7 +1392,7 @@ func (a *app) viewAlign(c *ui.Context) {
 							{"2", "确定每句位置", "自带时间戳或 ASR 句子定位"},
 							{"3", "demucs 人声分离", "htdemucs 44.1 kHz 分离人声轨"},
 							{"4", "主唱检测", "人声 1–4kHz 占比，无主唱跳过"},
-							{"5", "逐字强制对齐", "SOFA（中文）/ WhisperX（日英）"},
+							{"5", "逐字强制对齐", "SOFA（中文）/ MMS 歌声（日英）"},
 							{"6", "输出并校验", "三位小数 · 行尾结束标签"},
 						}
 						for _, st := range steps {
@@ -1286,7 +1526,7 @@ func (a *app) viewQueue(c *ui.Context) {
 						{2, "2. 定每句位置", "时间戳 / ASR 定位"},
 						{3, "3. 人声分离", "htdemucs 分离"},
 						{4, "4. 主唱检测", "1–4kHz 占比"},
-						{5, "5. 逐字对齐", "SOFA / WhisperX"},
+						{5, "5. 逐字对齐", "SOFA / MMS 歌声"},
 						{6, "6. 输出校验", "三位小数 · 行尾标签"},
 					}
 					ui.Row(c.Key("stepper")).FillWidth().Gap(8).Children(func() {
@@ -1496,8 +1736,19 @@ func (a *app) viewEditor(c *ui.Context) {
 					ui.Text(c, a.edSub).FontSize(11).TextColor(p.muted).SingleLine()
 				})
 			})
-			if pillButton(c.Key("ed-open"), iconFolder, "打开 LRC", p.surface, p.text).Clicked() {
+			if pillButton(c.Key("ed-open"), nil, "打开 LRC", p.surface, p.text).Clicked() {
 				a.pickLrcFile()
+			}
+			refBtn := ui.ButtonBase(c.Key("ed-refresh")).Size(34, 34).Radius(17).Center().
+				Label("从磁盘重新加载 LRC").FocusRing(false)
+			refBg := p.surface
+			if refBtn.Hovered() {
+				refBg = p.surface2
+			}
+			refBtn.Background(refBtn.AnimateColor("bg", refBg, ui.Animation{Duration: 120 * time.Millisecond}))
+			refBtn.Children(func() { ui.Icon(c, iconRefresh).Size(14, 14).TextColor(p.text) })
+			if refBtn.Clicked() && a.edPath != "" {
+				a.refreshEditor()
 			}
 			if pillButton(c.Key("ed-valid"), nil, "校验", p.surface, p.text).Clicked() && a.edPath != "" {
 				a.validateCurrentLrc()
@@ -1544,12 +1795,39 @@ func (a *app) viewEditor(c *ui.Context) {
 						for i, ln := range a.edLines {
 							idx, line := i, ln
 							sel := a.edSelectedLine == idx
+							if a.edEditingLine == idx {
+								editRow := ui.Row(c.Key(fmt.Sprintf("ed-ln-edit-%d", idx))).FillWidth().Height(36).PaddingX(8).Gap(6).Radius(8).
+									AlignItems(ui.Center).Background(p.bg)
+								editRow.Draw(func(pt *ui.Painter, r ui.Rect) {
+									pt.Stroke(r, p.accent, 8, 1.5)
+								})
+								editRow.Children(func() {
+									ui.Text(c, fmt.Sprintf("%d", line.Index)).Width(18).FontSize(11).TextColor(p.accent)
+									in := ui.TextInputBase(c.Key(fmt.Sprintf("ed-ln-in-%d", idx)), &a.edEditingText).Grow(1).MinWidth(0).Height(24).
+										FontSize(12.5).TextColor(p.text).Background(ui.Transparent).AutoFocus().FocusRing(false)
+									if in.Submitted() {
+										a.commitEditLyricLine()
+									}
+									okBtn := ui.ButtonBase(c.Key(fmt.Sprintf("ed-ln-ok-%d", idx))).Size(22, 22).Radius(6).Center().
+										Background(p.accent).Label("确认修改").FocusRing(false)
+									okBtn.Children(func() { ui.Icon(c, iconCheck).Size(12, 12).TextColor(p.onAccent) })
+									if okBtn.Clicked() {
+										a.commitEditLyricLine()
+									}
+								})
+								continue
+							}
 							rowH := float32(31)
 							if line.Translation != "" {
 								rowH = 44
 							}
 							row := ui.ButtonBase(c.Key(fmt.Sprintf("ed-ln-%d", idx))).FillWidth().Height(rowH).PaddingX(10).Gap(6).Radius(8).
 								AlignItems(ui.Center).Label(line.Text).Selected(sel).FocusRing(false)
+							row.ContextMenu(func(m *ui.Menu) {
+								if m.Item("编辑此行歌词").Chosen() {
+									a.beginEditLyricLine(idx)
+								}
+							})
 							bg := ui.Transparent
 							if row.Hovered() && !sel {
 								bg = p.hover
@@ -1585,7 +1863,9 @@ func (a *app) viewEditor(c *ui.Context) {
 									ui.Text(c, line.Text).Grow(1).FontSize(12.5).FontWeight(weight).TextColor(txCol).SingleLine()
 								}
 							})
-							if row.Clicked() {
+							if row.DoubleClicked() {
+								a.beginEditLyricLine(idx)
+							} else if row.Clicked() {
 								a.selectEditorLine(idx)
 								a.seekPlayback(line.Start)
 							}
@@ -1603,42 +1883,93 @@ func (a *app) viewEditor(c *ui.Context) {
 				}
 			})
 			stage.Children(func() {
-				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					prevMode := a.edPreviewMode
 					segmented(c, &a.edPreviewMode, "律动预览", "LRC 源码")
+					if a.edPreviewMode != prevMode && a.edPreviewMode == 0 {
+						a.edSrcEditing = false
+					}
+					if a.edPreviewMode == 1 {
+						srcBtn := func(key, label string, bg, fg ui.Color) ui.Element {
+							b := ui.ButtonBase(c.Key(key)).Height(28).PaddingX(12).Radius(999).Center().
+								Background(bg).Label(label).FocusRing(false)
+							b.Children(func() {
+								ui.Text(c, label).FontSize(12).FontWeight(700).TextColor(fg).SingleLine()
+							})
+							return b
+						}
+						if !a.edSrcEditing {
+							if srcBtn("ed-src-edit", "编辑", p.surface2, p.text).Clicked() {
+								a.beginEditLrcSource()
+							}
+						} else {
+							if srcBtn("ed-src-cancel", "放弃", p.surface2, p.muted).Clicked() {
+								a.cancelEditLrcSource()
+							}
+							if srcBtn("ed-src-save", "保存", p.accent, p.onAccent).Clicked() {
+								a.saveEditLrcSource()
+							}
+						}
+					}
 					ui.Box(c).Grow(1)
 					ui.Text(c, fmtSec(curGlyph.Start)+" / "+fmtSec(curLine.End)).FontSize(12).TextColor(p.muted)
 				})
 
 				if a.edPreviewMode == 1 {
 					srcCard := ui.Box(c.Key("ed-src-box")).Grow(1).FillWidth().Margin(10, 0, 8, 0).Radius(14).Background(p.surface)
-					srcCard.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
+					srcCard.Draw(func(pt *ui.Painter, r ui.Rect) {
+						if a.edSrcEditing {
+							pt.Stroke(r, p.accent.Alpha(0.38), 14, 1)
+						} else {
+							pt.Stroke(r, p.hairline, 14, 1)
+						}
+					})
 					srcCard.Children(func() {
-						ssc := ui.Scroll(c.Key("ed-src-scroll")).TrackScroll(&a.edSrcScroll).Fill()
-						ssc.Children(func() {
-							ui.Column(c).FillWidth().Padding(10, 14, 10, 14).Gap(3).Children(func() {
-								for si, ln := range a.edLines {
-									sIdx, line := si, ln
-									isCur := sIdx == a.edSelectedLine
-									bg := ui.Transparent
-									fg := p.muted
-									weight := 500
-									if isCur {
-										bg = p.accent.Alpha(0.12)
-										fg = p.accent
-										weight = 700
+						if a.edSrcEditing {
+							ta := ui.TextAreaBase(c.Key("ed-src-textarea"), &a.edSrcText).Fill().Padding(14, 20, 14, 20).
+								FontSize(12).LineHeight(1.75).TextColor(p.text.Alpha(0.80)).
+								SelectionColor(p.accent.Alpha(0.18)).Background(ui.Transparent).AutoFocus().FocusRing(false)
+							if a.edSrcNeedCaret {
+								ta.SetTextSelection(a.edSrcInitCaret, a.edSrcInitCaret)
+								a.edSrcNeedCaret = false
+							}
+						} else {
+							ssc := ui.Scroll(c.Key("ed-src-scroll")).TrackScroll(&a.edSrcScroll).Fill()
+							ssc.Children(func() {
+								ui.Column(c).FillWidth().Padding(10, 14, 10, 14).Gap(3).Children(func() {
+									for si, ln := range a.edLines {
+										sIdx, line := si, ln
+										isCur := sIdx == a.edSelectedLine
+										bg := ui.Transparent
+										fg := p.muted
+										weight := 500
+										if isCur {
+											bg = p.accent.Alpha(0.12)
+											fg = p.accent
+											weight = 700
+										}
+										sRow := ui.ButtonBase(c.Key(fmt.Sprintf("src-ln-%d", sIdx))).FillWidth().Padding(4, 8, 4, 8).Radius(6).
+											Justify(ui.Start).Background(bg).Label(line.Text).FocusRing(false)
+										if isCur && a.edSrcScrollToSelected {
+											sb := ssc.LayoutBounds()
+											rb := sRow.LayoutBounds()
+											if sb.H > 0 && rb.H > 0 {
+												delta := (rb.Y + rb.H/2) - (sb.Y + sb.H/2)
+												a.edSrcScroll.Y = max(0, a.edSrcScroll.Y+delta)
+												a.edSrcScrollToSelected = false
+											}
+										}
+										sRow.Children(func() {
+											ui.Text(c, formatLrcLine(line)).FontSize(12).FontWeight(weight).TextColor(fg)
+										})
+										if sRow.Clicked() {
+											a.selectEditorLine(sIdx)
+											a.seekPlayback(line.Start)
+										}
 									}
-									sRow := ui.ButtonBase(c.Key(fmt.Sprintf("src-ln-%d", sIdx))).FillWidth().Padding(4, 8, 4, 8).Radius(6).
-										Background(bg).Label(line.Text).FocusRing(false)
-									sRow.Children(func() {
-										ui.Text(c, formatLrcLine(line)).FontSize(12).FontWeight(weight).TextColor(fg)
-									})
-									if sRow.Clicked() {
-										a.selectEditorLine(sIdx)
-										a.seekPlayback(line.Start)
-									}
-								}
+								})
 							})
-						})
+						}
 					})
 				} else {
 					previewArea := ui.Box(c.Key("ed-pv-area")).Grow(1).FillWidth().ClipX()
@@ -1954,23 +2285,23 @@ func (a *app) viewEditor(c *ui.Context) {
 				})
 
 				ui.Row(c).Gap(8).Children(func() {
-					b1 := ui.Column(c).Grow(1).Basis(0).Padding(8, 10, 8, 10).Radius(10).Background(p.surface)
+					b1 := ui.Column(c).Grow(1).Basis(0).Padding(8, 10, 8, 10).Radius(10).AlignItems(ui.Center).Background(p.surface)
 					b1.Children(func() {
 						ui.Text(c, "起始").FontSize(11).TextColor(p.muted)
 						ui.Text(c, fmtSec(curGlyph.Start)).FontSize(12.5).FontWeight(700)
 					})
-					b2 := ui.Column(c).Grow(1).Basis(0).Padding(8, 10, 8, 10).Radius(10).Background(p.surface)
+					b2 := ui.Column(c).Grow(1).Basis(0).Padding(8, 10, 8, 10).Radius(10).AlignItems(ui.Center).Background(p.surface)
 					b2.Children(func() {
 						ui.Text(c, "结束").FontSize(11).TextColor(p.muted)
 						ui.Text(c, fmtSec(curGlyph.End)).FontSize(12.5).FontWeight(700)
 					})
 				})
 
-				ui.Row(c).Gap(6).Children(func() {
-					if pillButton(c.Key("ed-shift-back"), nil, "提前 50ms", p.surface2, p.text).Grow(1).Justify(ui.Center).Clicked() {
+				ui.Row(c).Gap(8).Children(func() {
+					if pillButton(c.Key("ed-shift-back"), nil, "-50ms", p.surface2, p.text).Grow(1).Basis(0).Justify(ui.Center).Clicked() {
 						a.shiftAllLyrics(-0.05)
 					}
-					if pillButton(c.Key("ed-shift-fwd"), nil, "延后 50ms", p.surface2, p.text).Grow(1).Justify(ui.Center).Clicked() {
+					if pillButton(c.Key("ed-shift-fwd"), nil, "+50ms", p.surface2, p.text).Grow(1).Basis(0).Justify(ui.Center).Clicked() {
 						a.shiftAllLyrics(0.05)
 					}
 				})
@@ -2493,7 +2824,7 @@ func (a *app) viewSettings(c *ui.Context) {
 				ui.Row(c).Height(54).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(1).Children(func() {
 						ui.Text(c, "英文 / 数字混排粒度").FontSize(13.5).FontWeight(600)
-						ui.Text(c, "WhisperX 默认按词输出；可切换为按字母均分词时长").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "Echora-300M 默认按词输出；可切换为按字母切分").FontSize(12).TextColor(p.muted)
 					})
 					segmented(c, &a.setEnMode, "按词", "按字母均分")
 				})

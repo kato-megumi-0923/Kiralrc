@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -45,7 +46,7 @@ type trackItem struct {
 	FullPath string
 	LrcPath  string
 	Duration string
-	Status   string // "enhanced", "line_only", "missing", "inst_pure", "inst_ost", "inst_accomp"
+	Status   string // "enhanced", "line_only", "missing", "nolyrics_notfound", "inst_pure", "inst_ost", "inst_accomp"
 	Lang     string
 	Note     string
 	Lines    int
@@ -57,7 +58,8 @@ type libStats struct {
 	Vocal      int
 	Enhanced   int
 	LineOnly   int
-	Missing    int
+	Missing    int // 无歌词总数（本地缺词 + 全网无词）
+	NotFound   int // 其中：多源均未搜到的「全网无词」数量
 	InstTotal  int
 	InstPure   int
 	InstOST    int
@@ -82,17 +84,20 @@ type lyricLine struct {
 }
 
 type queueItem struct {
-	Title     string
-	Artist    string
-	Sub       string
-	AudioPath string
-	LrcPath   string
-	Lang      string
-	NeteaseID string // 单曲手动指定的网易云歌曲 ID / 链接（避免批量任务串 ID）
-	Status    string // "waiting", "running", "done", "skipped", "failed"
-	Stage     int    // 0..6 live stage for this song
-	Note      string
-	Hue       float32
+	Title       string
+	Artist      string
+	Sub         string
+	AudioPath   string
+	LrcPath     string
+	Lang        string
+	NeteaseID   string // 单曲手动指定的网易云歌曲 ID / 链接（避免批量任务串 ID）
+	RefPath     string // 单曲手动参考歌词文件（--ref）
+	AsrFallback   bool   // 是否显式开启 --asr-fallback 本地人声听写兜底
+	WaveformFirst bool   // 是否开启 --waveform-first 鬼畜 / 波形起音优先模式
+	Status      string // "waiting", "running", "done", "skipped", "failed"
+	Stage       int    // 0..6 live stage for this song
+	Note        string
+	Hue         float32
 }
 
 type modelStatusItem struct {
@@ -158,16 +163,25 @@ type app struct {
 	recents     []recentItem
 
 	// 1. 曲库（默认未添加文件夹，用户点击添加后再扫描）
-	libFolders  []string
-	libScanning bool
-	libScanDone int
-	libScanAll  int
-	libScanTime string
-	libStats    libStats
-	libFilter   int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:纯音乐/OST/伴奏
-	libQuery    string
-	tracks      []trackItem
-	libScroll   ui.ScrollState
+	libFolders        []string
+	libScanning       bool
+	libScanDone       int
+	libScanAll        int
+	libScanTime       string
+	libStats          libStats
+	libFilter         int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏
+	libQuery          string
+	tracks            []trackItem
+	libScroll         ui.ScrollState
+	notFoundPaths     map[string]bool   // 持久化：多源均未搜到的「全网无词」音频路径（小写归一化）
+	libBatchIdOpen    bool              // 无歌词 Tab：顶部「批量填网易云 ID」抽屉是否展开
+	libBatchIdInputs  map[string]string // 批量填 ID 抽屉输入值（key=AudioPath）
+	libExpandedPath   string            // 无歌词 Tab：当前展开行内抽屉的音频路径
+	libExpandedMode   string            // "netease" | "manual"
+	libSingleIdInput  string            // 单曲网易云 ID 输入值
+	libManualText     string            // 单曲手动参考词多行文本
+	libManualLang     int               // 单曲手动参考词语言：0:中文 1:日文 2:英文
+	libManualFilePath string            // 用记事本编辑时的落盘路径
 
 	// 2. 新建对齐
 	alignAudio       string
@@ -178,6 +192,7 @@ type app struct {
 	alignBatchDir       string
 	alignBatchTracks    []trackItem
 	alignIgnoreRefTimes bool
+	alignWaveformFirst  bool // 鬼畜 / 波形起音优先模式（--waveform-first）
 	alignSource         int // 0:优先本地LRC(无则搜网易云) 1:手动指定参考文件 2:强制搜网易云
 	alignSearch    string
 	alignCandidate int
@@ -239,7 +254,14 @@ type app struct {
 	edPlayhead     float64
 	edSelectedLine int
 	edSelectedChar int
-	edMetas        []string
+	edEditingLine  int // -1 表示未处于行内编辑状态
+	edEditingText  string
+	edSrcEditing          bool   // LRC 源码是否处于直接编辑模式
+	edSrcText             string // LRC 源码编辑缓冲
+	edSrcInitCaret        int    // 进入编辑时初始光标位置（按 rune 偏移定位到当前选中行）
+	edSrcNeedCaret        bool   // 首帧应用初始光标位置
+	edSrcScrollToSelected bool   // 选中行变更时自动滚动 LRC 源码到可视区域
+	edMetas               []string
 	edLines        []lyricLine
 	edIssues       []string
 	edLineScroll   ui.ScrollState
@@ -277,6 +299,8 @@ type userPrefs struct {
 	Appearance       int      `json:"appearance"`
 	AccentID         string   `json:"accent_id,omitempty"`
 	RecentPaths      []string `json:"recent_paths,omitempty"`
+	NotFoundPaths    []string `json:"not_found_paths,omitempty"`
+	Volume           *float64 `json:"volume,omitempty"`
 }
 
 func prefsPath() string {
@@ -333,6 +357,63 @@ func (a *app) loadPrefs() {
 			})
 		}
 	}
+	if a.notFoundPaths == nil {
+		a.notFoundPaths = make(map[string]bool)
+	}
+	for _, np := range up.NotFoundPaths {
+		if norm := normPathKey(np); norm != "" {
+			a.notFoundPaths[norm] = true
+		}
+	}
+	if up.Volume != nil && *up.Volume >= 0 && *up.Volume <= 1 {
+		a.volume = *up.Volume
+		a.muted = a.volume == 0
+		if a.volume > 0 {
+			a.preMuteVol = a.volume
+		}
+	}
+}
+
+func normPathKey(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.Clean(p))
+}
+
+func (a *app) markTrackNotFound(audioPath string) {
+	key := normPathKey(audioPath)
+	if key == "" {
+		return
+	}
+	if a.notFoundPaths == nil {
+		a.notFoundPaths = make(map[string]bool)
+	}
+	if !a.notFoundPaths[key] {
+		a.notFoundPaths[key] = true
+		a.savePrefs()
+	}
+	for i := range a.tracks {
+		if normPathKey(a.tracks[i].FullPath) == key && (a.tracks[i].Status == "missing" || a.tracks[i].Status == "nolyrics_notfound") {
+			if a.tracks[i].Status == "missing" {
+				a.libStats.NotFound++
+			}
+			a.tracks[i].Status = "nolyrics_notfound"
+			a.tracks[i].Note = "多源均未搜到 · 批量跑库已自动跳过"
+		}
+	}
+}
+
+func (a *app) clearTrackNotFound(audioPath string) {
+	key := normPathKey(audioPath)
+	if key == "" || a.notFoundPaths == nil {
+		return
+	}
+	if a.notFoundPaths[key] {
+		delete(a.notFoundPaths, key)
+		a.savePrefs()
+	}
 }
 
 func (a *app) savePrefs() {
@@ -348,6 +429,12 @@ func (a *app) savePrefs() {
 			rpaths = append(rpaths, r.Path)
 		}
 	}
+	var nfPaths []string
+	for k := range a.notFoundPaths {
+		nfPaths = append(nfPaths, k)
+	}
+	sort.Strings(nfPaths)
+	vol := a.volume
 	up := userPrefs{
 		QueueConcurrency: a.queueConcurrency,
 		QueueKeepGoing:   &kg,
@@ -355,6 +442,8 @@ func (a *app) savePrefs() {
 		Appearance:       a.appearance,
 		AccentID:         a.accentID,
 		RecentPaths:      rpaths,
+		NotFoundPaths:    nfPaths,
+		Volume:           &vol,
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)
@@ -385,6 +474,7 @@ func newApp() *app {
 		edSpeedMode:        2,
 		edShowPinyin:       true,
 		edSnapOnset:        true,
+		edEditingLine:      -1,
 		sideWidthPx:        232,
 		setAutoSkipNoVocal: true,
 		setVocalRatio:      "0.08",
@@ -397,8 +487,7 @@ func newApp() *app {
 		setModels: []modelStatusItem{
 			{Lang: "通用", Name: "Demucs 人声分离（htdemucs）", Path: "~/.cache/torch/hub/checkpoints/955717e8-8726e21a.th", Exists: false},
 			{Lang: "通用", Name: "faster-whisper large-v3（ASR 句级定位）", Path: "models/faster-whisper-large-v3", Exists: false},
-			{Lang: "中文", Name: "SOFA 中文歌声对齐模型", Path: "models/sofa/v1.0.0_mandarin_singing.ckpt", Exists: false},
-			{Lang: "中文", Name: "SOFA 独立运行环境（Python 3.10）", Path: ".venv-sofa/Scripts/python.exe", Exists: false},
+			{Lang: "中文", Name: "SOFA 中文歌声对齐模型（主环境直跑）", Path: "models/sofa/v1.0.0_mandarin_singing.ckpt", Exists: false},
 			{Lang: "日文", Name: "MMS 日语卡拉 OK 歌声模型（NextFire）", Path: "~/.cache/huggingface/hub/models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn", Exists: false},
 			{Lang: "日文", Name: "fugashi + unidic-lite（日语词法读音）", Path: "Python 环境内置（MeCab / UniDic）", Exists: false},
 			{Lang: "英文", Name: "MMS 英文/多语歌词模型（Echora-300M）", Path: "~/.cache/huggingface/hub/models--hcX02--echora-mms-300m-multilingual-lyrics-forced-aligner", Exists: false},
@@ -690,17 +779,24 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		if lrcRaw == "" {
 			st.Missing++
 			lang := guessLang("", stem)
+			status := "missing"
+			note := "尚未搜索过全网歌词"
+			if a.notFoundPaths != nil && a.notFoundPaths[normPathKey(f.full)] {
+				status = "nolyrics_notfound"
+				note = "多源均未搜到 · 批量跑库已自动跳过"
+				st.NotFound++
+			}
 			items = append(items, trackItem{
-				Selected: true,
+				Selected: false,
 				Title:    title,
 				Artist:   artist,
 				File:     fileInfo,
 				FullPath: f.full,
 				LrcPath:  lrcPath,
 				Duration: "—",
-				Status:   "missing",
+				Status:   status,
 				Lang:     lang,
-				Note:     "缺失 LRC · 将自动搜索或走 ASR 对齐",
+				Note:     note,
 				Hue:      hue,
 			})
 			continue
@@ -742,8 +838,12 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		} else {
 			st.LineOnly++
 			engine := "SOFA 逐字"
-			if lang != "中文" {
-				engine = "WhisperX 逐字"
+			if lang == "日文" {
+				engine = "MMS 日语逐字"
+			} else if lang == "英文" {
+				engine = "MMS 英文逐字"
+			} else if lang != "中文" {
+				engine = "MMS 多语逐字"
 			}
 			items = append(items, trackItem{
 				Selected: st.LineOnly <= 12,
@@ -811,7 +911,7 @@ func (a *app) runKiralrcCLI(args ...string) {
 func (a *app) checkModels() {
 	paths := [3]string{
 		"models/sofa/v1.0.0_mandarin_singing.ckpt",
-		".venv-sofa/Scripts/python.exe",
+		"third_party/SOFA/dictionary/opencpop-extension.txt",
 		"models/faster-whisper-large-v3",
 	}
 	roots := []string{"."}
@@ -1084,16 +1184,38 @@ func (a *app) pickLrcFile() {
 	}()
 }
 
+func (a *app) setLibFilter(f int) {
+	a.libFilter = f
+	if f != 3 {
+		a.libBatchIdOpen = false
+		a.libExpandedPath = ""
+		a.libExpandedMode = ""
+	}
+}
+
+func isNoLyricsStatus(status string) bool {
+	return status == "missing" || status == "nolyrics_notfound"
+}
+
 func (a *app) trackMatchesFilter(tr *trackItem) bool {
+	if q := strings.TrimSpace(strings.ToLower(a.libQuery)); q != "" {
+		if !strings.Contains(strings.ToLower(tr.Title), q) &&
+			!strings.Contains(strings.ToLower(tr.Artist), q) &&
+			!strings.Contains(strings.ToLower(tr.File), q) {
+			return false
+		}
+	}
 	isInst := tr.Status == "inst_pure" || tr.Status == "inst_ost" || tr.Status == "inst_accomp"
 	switch a.libFilter {
 	case 0:
 		return !isInst
 	case 1:
-		return tr.Status == "line_only" || tr.Status == "missing"
+		return tr.Status == "line_only"
 	case 2:
 		return tr.Status == "enhanced"
 	case 3:
+		return isNoLyricsStatus(tr.Status)
+	case 4:
 		return isInst
 	}
 	return true
@@ -1101,9 +1223,9 @@ func (a *app) trackMatchesFilter(tr *trackItem) bool {
 
 func (a *app) selectedLibraryTracks() []trackItem {
 	var batch []trackItem
-	for _, tr := range a.tracks {
-		if tr.Selected {
-			batch = append(batch, tr)
+	for i := range a.tracks {
+		if a.tracks[i].Selected && a.trackMatchesFilter(&a.tracks[i]) {
+			batch = append(batch, a.tracks[i])
 		}
 	}
 	return batch
@@ -1115,6 +1237,350 @@ func (a *app) setVisibleTracksSelected(sel bool) {
 			a.tracks[i].Selected = sel
 		}
 	}
+}
+
+var (
+	reNeteaseIDParam = regexp.MustCompile(`[?&#]id=(\d+)`)
+	reNeteaseIDSong  = regexp.MustCompile(`/song/(\d+)`)
+	reNeteaseIDNum   = regexp.MustCompile(`\b(\d{4,})\b`)
+)
+
+// parseNeteaseID extracts a numeric NetEase song ID from raw digits or a music.163.com URL.
+func parseNeteaseID(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	allDigits := len(s) >= 4
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return s
+	}
+	if m := reNeteaseIDParam.FindStringSubmatch(s); len(m) == 2 {
+		return m[1]
+	}
+	if m := reNeteaseIDSong.FindStringSubmatch(s); len(m) == 2 {
+		return m[1]
+	}
+	if m := reNeteaseIDNum.FindStringSubmatch(s); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func (a *app) batchIdTargetTracks() []trackItem {
+	var all, sel []trackItem
+	for i := range a.tracks {
+		if isNoLyricsStatus(a.tracks[i].Status) {
+			all = append(all, a.tracks[i])
+			if a.tracks[i].Selected {
+				sel = append(sel, a.tracks[i])
+			}
+		}
+	}
+	if len(sel) > 0 {
+		return sel
+	}
+	return all
+}
+
+func (a *app) toggleInlineDrawer(tr *trackItem, mode string) {
+	if strings.EqualFold(a.libExpandedPath, tr.FullPath) && a.libExpandedMode == mode {
+		a.libExpandedPath = ""
+		a.libExpandedMode = ""
+		return
+	}
+	a.libBatchIdOpen = false
+	a.libExpandedPath = tr.FullPath
+	a.libExpandedMode = mode
+	if mode == "netease" {
+		if a.libBatchIdInputs != nil {
+			a.libSingleIdInput = a.libBatchIdInputs[tr.FullPath]
+		} else {
+			a.libSingleIdInput = ""
+		}
+	} else if mode == "manual" {
+		a.libManualText = ""
+		a.libManualFilePath = ""
+		switch tr.Lang {
+		case "日文":
+			a.libManualLang = 1
+		case "英文":
+			a.libManualLang = 2
+		default:
+			a.libManualLang = 0
+		}
+	}
+}
+
+func (a *app) upsertQueueItem(q queueItem) {
+	for i := range a.queueItems {
+		if strings.EqualFold(a.queueItems[i].AudioPath, q.AudioPath) {
+			if a.queueItems[i].Status != "running" {
+				a.queueItems[i] = q
+			}
+			return
+		}
+	}
+	a.queueItems = append(a.queueItems, q)
+}
+
+func (a *app) enqueueLineOnlyTracks() {
+	var batch []trackItem
+	for _, tr := range a.tracks {
+		if tr.Status == "line_only" {
+			batch = append(batch, tr)
+		}
+	}
+	if len(batch) == 0 {
+		a.toast = "当前没有仅整行 LRC 歌曲"
+		return
+	}
+	a.enqueueTracks(batch)
+	a.navigate(pageQueue, 1)
+}
+
+func (a *app) enqueueNoLyricsAsr(batch []trackItem) {
+	if len(batch) == 0 {
+		a.toast = "请先勾选至少 1 首无歌词歌曲"
+		return
+	}
+	for _, tr := range batch {
+		a.upsertQueueItem(queueItem{
+			Title:       tr.Title,
+			Artist:      tr.Artist,
+			Sub:         fmt.Sprintf("%s · %s · 本地 ASR 听写", tr.Artist, tr.Lang),
+			AudioPath:   tr.FullPath,
+			LrcPath:     tr.LrcPath,
+			Lang:        langCode(tr.Lang),
+			AsrFallback: true,
+			Status:      "waiting",
+			Note:        "本地 ASR 人声识别 + 逐字对齐",
+			Hue:         tr.Hue,
+		})
+	}
+	a.startQueueRunner()
+	a.toast = fmt.Sprintf("已入队 %d 首（--asr-fallback 本地人声识别）", len(batch))
+	a.navigate(pageQueue, 1)
+}
+
+func (a *app) enqueueNoLyricsRetrySearch(batch []trackItem) {
+	if len(batch) == 0 {
+		a.toast = "请先勾选要重试全网搜索的歌曲"
+		return
+	}
+	for _, tr := range batch {
+		a.upsertQueueItem(queueItem{
+			Title:     tr.Title,
+			Artist:    tr.Artist,
+			Sub:       fmt.Sprintf("%s · %s · 重试全网搜索", tr.Artist, tr.Lang),
+			AudioPath: tr.FullPath,
+			LrcPath:   tr.LrcPath,
+			Lang:      langCode(tr.Lang),
+			Status:    "waiting",
+			Note:      "重试 网易云 → QQ → 酷狗 → LRCLIB",
+			Hue:       tr.Hue,
+		})
+	}
+	a.startQueueRunner()
+	a.toast = fmt.Sprintf("已入队 %d 首（重新尝试多源全网搜索）", len(batch))
+	a.navigate(pageQueue, 1)
+}
+
+func (a *app) enqueueSingleNetease(tr *trackItem, rawID string) {
+	pid := parseNeteaseID(rawID)
+	if pid == "" {
+		a.toast = "请输入有效的网易云歌曲 ID 或详情页链接"
+		return
+	}
+	if a.libBatchIdInputs == nil {
+		a.libBatchIdInputs = make(map[string]string)
+	}
+	a.libBatchIdInputs[tr.FullPath] = rawID
+	a.upsertQueueItem(queueItem{
+		Title:     tr.Title,
+		Artist:    tr.Artist,
+		Sub:       fmt.Sprintf("%s · %s · 网易云 ID %s", tr.Artist, tr.Lang, pid),
+		AudioPath: tr.FullPath,
+		LrcPath:   tr.LrcPath,
+		Lang:      langCode(tr.Lang),
+		NeteaseID: pid,
+		Status:    "waiting",
+		Note:      fmt.Sprintf("按网易云 ID %s 下载歌词并对齐", pid),
+		Hue:       tr.Hue,
+	})
+	a.libExpandedPath = ""
+	a.libExpandedMode = ""
+	a.startQueueRunner()
+	a.toast = fmt.Sprintf("已入队 1 首（--netease-id %s）：%s", pid, tr.Title)
+	a.navigate(pageQueue, 1)
+}
+
+func (a *app) enqueueBatchNetease() {
+	targets := a.batchIdTargetTracks()
+	count := 0
+	for _, tr := range targets {
+		raw := ""
+		if a.libBatchIdInputs != nil {
+			raw = a.libBatchIdInputs[tr.FullPath]
+		}
+		pid := parseNeteaseID(raw)
+		if pid == "" {
+			continue
+		}
+		a.upsertQueueItem(queueItem{
+			Title:     tr.Title,
+			Artist:    tr.Artist,
+			Sub:       fmt.Sprintf("%s · %s · 网易云 ID %s", tr.Artist, tr.Lang, pid),
+			AudioPath: tr.FullPath,
+			LrcPath:   tr.LrcPath,
+			Lang:      langCode(tr.Lang),
+			NeteaseID: pid,
+			Status:    "waiting",
+			Note:      fmt.Sprintf("按网易云 ID %s 下载歌词并对齐", pid),
+			Hue:       tr.Hue,
+		})
+		count++
+	}
+	if count == 0 {
+		a.toast = "尚未填写有效的网易云歌曲 ID，请至少填写 1 首"
+		return
+	}
+	a.libBatchIdOpen = false
+	a.startQueueRunner()
+	a.toast = fmt.Sprintf("已按网易云 ID 批量入队 %d 首（未填写的行已跳过）", count)
+	a.navigate(pageQueue, 1)
+}
+
+func manualRefPathForAudio(audioPath string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.ToLower(audioPath)))
+	dir := filepath.Join("work", "manual_refs")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, fmt.Sprintf("manual_%08x.ref.txt", h.Sum32()))
+}
+
+func countNonEmptyLines(s string) int {
+	n := 0
+	for _, ln := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+		if strings.TrimSpace(ln) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func (a *app) pasteClipboardToManual() {
+	txt := strings.TrimSpace(readClipboardText())
+	if txt == "" {
+		a.toast = "剪贴板为空，请先复制歌词文本"
+		return
+	}
+	a.libManualText = txt
+	a.toast = fmt.Sprintf("已从剪贴板粘贴 %d 行歌词", countNonEmptyLines(txt))
+}
+
+func (a *app) importManualLyricsFile() {
+	go func() {
+		p, err := chooseFile(a.win, "导入参考歌词 (.txt / .lrc)", "导入歌词", []mygo.FileFilter{
+			{Name: "歌词或文本文件", Extensions: []string{"txt", "lrc"}},
+		})
+		if err != nil || p == "" {
+			return
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			a.post(func() { a.toast = "读取文件失败：" + err.Error() })
+			return
+		}
+		txt := strings.TrimSpace(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))
+		a.post(func() {
+			a.libManualText = txt
+			a.libManualFilePath = p
+			a.toast = fmt.Sprintf("已导入 %s（%d 行）", filepath.Base(p), countNonEmptyLines(txt))
+		})
+	}()
+}
+
+func (a *app) openManualLyricsInNotepad(tr *trackItem) {
+	refPath := manualRefPathForAudio(tr.FullPath)
+	if strings.TrimSpace(a.libManualText) != "" {
+		_ = os.WriteFile(refPath, []byte(a.libManualText+"\n"), 0o644)
+	} else if _, err := os.Stat(refPath); err != nil {
+		_ = os.WriteFile(refPath, []byte(""), 0o644)
+	}
+	a.libManualFilePath = refPath
+	absPath, err := filepath.Abs(refPath)
+	if err != nil {
+		absPath = refPath
+	}
+	_ = exec.Command("notepad.exe", absPath).Start()
+	a.toast = "已用记事本打开参考歌词文件，保存后点击「读取记事本内容」或直接开始对齐"
+}
+
+func (a *app) reloadManualLyricsFromFile() {
+	if a.libManualFilePath == "" {
+		return
+	}
+	raw, err := os.ReadFile(a.libManualFilePath)
+	if err != nil {
+		return
+	}
+	txt := strings.TrimSpace(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))
+	if txt != "" {
+		a.libManualText = txt
+		a.toast = fmt.Sprintf("已读取 %d 行歌词", countNonEmptyLines(txt))
+	}
+}
+
+func (a *app) enqueueSingleManual(tr *trackItem) {
+	// If user edited in Notepad without clicking reload, pick up the saved file automatically
+	if strings.TrimSpace(a.libManualText) == "" && a.libManualFilePath != "" {
+		if raw, err := os.ReadFile(a.libManualFilePath); err == nil {
+			a.libManualText = strings.TrimSpace(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))
+		}
+	}
+	nLines := countNonEmptyLines(a.libManualText)
+	if nLines == 0 {
+		a.toast = "请先粘贴、导入或在记事本中填写至少 1 行歌词文本"
+		return
+	}
+	refPath := manualRefPathForAudio(tr.FullPath)
+	if err := os.WriteFile(refPath, []byte(strings.TrimSpace(a.libManualText)+"\n"), 0o644); err != nil {
+		a.toast = "保存参考词失败：" + err.Error()
+		return
+	}
+	lang := "zh"
+	langLbl := "中文"
+	if a.libManualLang == 1 {
+		lang = "ja"
+		langLbl = "日文"
+	} else if a.libManualLang == 2 {
+		lang = "en"
+		langLbl = "英文"
+	}
+	a.upsertQueueItem(queueItem{
+		Title:     tr.Title,
+		Artist:    tr.Artist,
+		Sub:       fmt.Sprintf("%s · %s · 手动参考词 (%d行)", tr.Artist, langLbl, nLines),
+		AudioPath: tr.FullPath,
+		LrcPath:   tr.LrcPath,
+		Lang:      lang,
+		RefPath:   refPath,
+		Status:    "waiting",
+		Note:      fmt.Sprintf("手动参考词 (%d 行) · ASR 句定位 + 逐字对齐", nLines),
+		Hue:       tr.Hue,
+	})
+	a.libExpandedPath = ""
+	a.libExpandedMode = ""
+	a.startQueueRunner()
+	a.toast = fmt.Sprintf("已保存 %d 行参考词并入队：%s", nLines, tr.Title)
+	a.navigate(pageQueue, 1)
 }
 
 func langCode(label string) string {
@@ -1192,11 +1658,11 @@ func (a *app) enqueueCurrentAlign() {
 	if a.alignLang == 1 {
 		lang = "ja"
 		langLbl = "日文"
-		engine = "WhisperX 强制对齐"
+		engine = "NextFire MMS 日语歌声"
 	} else if a.alignLang == 2 {
 		lang = "en"
 		langLbl = "英文"
-		engine = "WhisperX 强制对齐"
+		engine = "Echora-300M MMS 英文歌声"
 	}
 	sub := fmt.Sprintf("%s · %s · %s", a.alignArtist, langLbl, engine)
 	found := false
@@ -1341,11 +1807,19 @@ func (a *app) runQueueWorker() {
 		if a.setEnMode == 1 || a.alignEnMode == 1 {
 			args = append(args, "--en-granularity", "char")
 		}
-		if a.alignSource == 1 && a.alignRefLrc != "" {
+		if item.RefPath != "" {
+			args = append(args, "--ref", item.RefPath)
+		} else if a.alignSource == 1 && a.alignRefLrc != "" && strings.EqualFold(item.AudioPath, a.alignAudioPath) {
 			args = append(args, "--ref", a.alignRefLrc)
 		}
 		if id := strings.TrimSpace(item.NeteaseID); id != "" {
 			args = append(args, "--netease-id", id)
+		}
+		if item.AsrFallback {
+			args = append(args, "--asr-fallback")
+		}
+		if item.WaveformFirst || a.alignWaveformFirst {
+			args = append(args, "--waveform-first")
 		}
 		cmd := newHiddenCmd(py, args...)
 		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")
@@ -1415,10 +1889,14 @@ func (a *app) runQueueWorker() {
 					} else {
 						a.queueItems[i].Note = err.Error()
 					}
+					if strings.Contains(lastLine, "未搜到") || strings.Contains(lastLine, "没有参考文件") {
+						a.markTrackNotFound(songPath)
+					}
 				default:
 					a.queueItems[i].Status = "done"
 					a.queueItems[i].Stage = 6
 					a.queueItems[i].Note = "逐字 LRC 已生成"
+					a.clearTrackNotFound(songPath)
 				}
 				break
 			}
@@ -1746,6 +2224,7 @@ func (a *app) setVolume(v float64) {
 	if a.player != nil {
 		a.player.SetVolume(v)
 	}
+	a.savePrefs()
 }
 
 func (a *app) toggleMute() {
@@ -1857,12 +2336,270 @@ func (a *app) selectEditorLine(idx int) {
 	if idx < 0 || idx >= len(a.edLines) {
 		return
 	}
+	if a.edEditingLine != idx {
+		a.edEditingLine = -1
+	}
 	a.edSelectedLine = idx
 	a.edSelectedChar = 0
+	a.edSrcScrollToSelected = true
 	if len(a.edLines[idx].Chars) > 0 {
 		a.edGlyphs = a.edLines[idx].Chars
 		a.edPlayhead = a.edGlyphs[0].Start
 	}
+}
+
+func (a *app) pruneMissingRecents() {
+	kept := a.recents[:0]
+	changed := false
+	for _, r := range a.recents {
+		if r.Path == "" {
+			continue
+		}
+		if _, err := os.Stat(r.Path); err == nil {
+			kept = append(kept, r)
+		} else {
+			changed = true
+		}
+	}
+	a.recents = kept
+	if changed {
+		a.savePrefs()
+	}
+}
+
+func (a *app) clearEditorState() {
+	if a.player != nil {
+		a.player.Pause()
+	}
+	a.edPlaying = false
+	a.edFile = ""
+	a.edPath = ""
+	a.edSub = ""
+	a.edLines = nil
+	a.edGlyphs = nil
+	a.edMetas = nil
+	a.edIssues = nil
+	a.edModified = false
+	a.edEditingLine = -1
+	a.edSrcEditing = false
+	a.edSrcText = ""
+	a.edCover = nil
+	a.edCoverAudio = ""
+}
+
+func (a *app) refreshLibrary() {
+	a.pruneMissingRecents()
+	if a.edPath != "" {
+		if _, err := os.Stat(a.edPath); err != nil {
+			a.clearEditorState()
+		}
+	}
+	if len(a.libFolders) > 0 {
+		a.scanLibraryAsync()
+		a.toast = "正在刷新曲库状态…"
+	}
+}
+
+func (a *app) refreshEditor() {
+	if a.edPath == "" {
+		return
+	}
+	if _, err := os.Stat(a.edPath); err != nil {
+		a.clearEditorState()
+		a.pruneMissingRecents()
+		if len(a.libFolders) > 0 {
+			a.scanLibraryAsync()
+		}
+		a.toast = "本地 LRC 文件已删除，已刷新曲库状态"
+		return
+	}
+	prevLine := a.edSelectedLine
+	if err := a.loadLrcFile(a.edPath); err == nil {
+		if prevLine >= 0 && prevLine < len(a.edLines) {
+			a.selectEditorLine(prevLine)
+		}
+		a.toast = "已从磁盘重新加载 LRC"
+	}
+}
+
+func (a *app) beginEditLyricLine(idx int) {
+	if idx < 0 || idx >= len(a.edLines) {
+		return
+	}
+	a.selectEditorLine(idx)
+	a.edEditingLine = idx
+	a.edEditingText = a.edLines[idx].Text
+}
+
+func (a *app) cancelEditLyricLine() {
+	a.edEditingLine = -1
+	a.edEditingText = ""
+}
+
+func (a *app) buildCurrentLrcText() string {
+	var sb strings.Builder
+	for _, m := range a.edMetas {
+		sb.WriteString(m)
+		sb.WriteString("\n")
+	}
+	for _, ln := range a.edLines {
+		sb.WriteString(formatLrcLine(ln))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func (a *app) beginEditLrcSource() {
+	a.edEditingLine = -1
+	var sb strings.Builder
+	for _, m := range a.edMetas {
+		sb.WriteString(m)
+		sb.WriteString("\n")
+	}
+	caretRune := 0
+	for i, ln := range a.edLines {
+		if i == a.edSelectedLine {
+			caretRune = len([]rune(sb.String()))
+		}
+		sb.WriteString(formatLrcLine(ln))
+		sb.WriteString("\n")
+	}
+	a.edSrcText = sb.String()
+	a.edSrcInitCaret = caretRune
+	a.edSrcNeedCaret = true
+	a.edSrcEditing = true
+}
+
+func (a *app) cancelEditLrcSource() {
+	a.edSrcEditing = false
+	a.edSrcText = ""
+}
+
+func (a *app) saveEditLrcSource() {
+	if !a.edSrcEditing || a.edPath == "" {
+		return
+	}
+	norm := strings.ReplaceAll(a.edSrcText, "\r\n", "\n")
+	if !strings.HasSuffix(norm, "\n") {
+		norm += "\n"
+	}
+	if err := os.WriteFile(a.edPath, []byte(norm), 0o644); err != nil {
+		a.toast = "保存 LRC 源码失败：" + err.Error()
+		return
+	}
+	prevLine := a.edSelectedLine
+	a.edSrcEditing = false
+	a.edSrcText = ""
+	if err := a.loadLrcFile(a.edPath); err == nil {
+		if prevLine >= 0 && prevLine < len(a.edLines) {
+			a.selectEditorLine(prevLine)
+		}
+		a.toast = "已保存 LRC 源码"
+	}
+}
+
+func (a *app) commitEditLyricLine() {
+	idx := a.edEditingLine
+	if idx < 0 || idx >= len(a.edLines) {
+		a.edEditingLine = -1
+		return
+	}
+	newText := strings.TrimSpace(a.edEditingText)
+	a.edEditingLine = -1
+	if newText == "" {
+		return
+	}
+	ln := &a.edLines[idx]
+	if newText == ln.Text {
+		return
+	}
+	ln.Text = newText
+	newRunes := []rune(newText)
+	oldChars := ln.Chars
+
+	if len(oldChars) == len(newRunes) && len(newRunes) > 0 {
+		// 改字不改字数（如改同音错别字/繁转简）：100% 保留每个字的逐字时间戳
+		updated := make([]lyricChar, len(oldChars))
+		copy(updated, oldChars)
+		for i, r := range newRunes {
+			updated[i].Ch = string(r)
+		}
+		ln.Chars = updated
+	} else if len(newRunes) > 0 {
+		// 字数变化：保留公共前缀与后缀的时间戳，仅对中间变动区段按比例重算
+		oldRunes := make([]rune, 0, len(oldChars))
+		flatChars := make([]lyricChar, 0, len(oldChars))
+		for _, ch := range oldChars {
+			rs := []rune(ch.Ch)
+			if len(rs) <= 1 {
+				if len(rs) == 1 {
+					oldRunes = append(oldRunes, rs[0])
+					flatChars = append(flatChars, ch)
+				}
+				continue
+			}
+			step := (ch.End - ch.Start) / float64(len(rs))
+			for ri, r := range rs {
+				oldRunes = append(oldRunes, r)
+				flatChars = append(flatChars, lyricChar{
+					Ch:    string(r),
+					Start: ch.Start + float64(ri)*step,
+					End:   ch.Start + float64(ri+1)*step,
+				})
+			}
+		}
+		pref := 0
+		for pref < len(oldRunes) && pref < len(newRunes) && oldRunes[pref] == newRunes[pref] {
+			pref++
+		}
+		suff := 0
+		for suff < len(oldRunes)-pref && suff < len(newRunes)-pref &&
+			oldRunes[len(oldRunes)-1-suff] == newRunes[len(newRunes)-1-suff] {
+			suff++
+		}
+		tStart := ln.Start
+		tEnd := max(ln.End, ln.Start+0.2)
+		if pref > 0 {
+			tStart = flatChars[pref-1].End
+		}
+		if suff > 0 {
+			tEnd = flatChars[len(flatChars)-suff].Start
+		}
+		if tEnd < tStart+0.05 {
+			tEnd = tStart + 0.05
+		}
+		midNew := len(newRunes) - pref - suff
+		updated := make([]lyricChar, 0, len(newRunes))
+		updated = append(updated, flatChars[:pref]...)
+		if midNew > 0 {
+			step := (tEnd - tStart) / float64(midNew)
+			for mi := 0; mi < midNew; mi++ {
+				cs := tStart + float64(mi)*step
+				ce := cs + step
+				if mi == midNew-1 {
+					ce = tEnd
+				}
+				updated = append(updated, lyricChar{
+					Ch:    string(newRunes[pref+mi]),
+					Start: cs,
+					End:   ce,
+				})
+			}
+		}
+		if suff > 0 {
+			updated = append(updated, flatChars[len(flatChars)-suff:]...)
+		}
+		ln.Chars = updated
+	}
+
+	if a.edSelectedLine == idx && len(ln.Chars) > 0 {
+		a.edGlyphs = ln.Chars
+		if a.edSelectedChar >= len(a.edGlyphs) {
+			a.edSelectedChar = len(a.edGlyphs) - 1
+		}
+	}
+	a.edModified = true
+	a.toast = fmt.Sprintf("已修改第 %d 行歌词（点击「保存 LRC」落盘）", idx+1)
 }
 
 func (a *app) shiftAllLyrics(delta float64) {

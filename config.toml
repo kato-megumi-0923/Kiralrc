@@ -5,12 +5,12 @@
 sofa_ckpt = "models/sofa/v1.0.0_mandarin_singing.ckpt"
 # SOFA 源码（third_party 下，已去 .git）
 sofa_root = "third_party/SOFA"
-# 跑 SOFA 的独立虚拟环境解释器
-sofa_python = ".venv-sofa/Scripts/python.exe"
 # SOFA 的拼音词典
 sofa_dict = "third_party/SOFA/dictionary/opencpop-extension.txt"
 # faster-whisper CT2 模型
 whisper_model = "models/faster-whisper-large-v3"
+# FireRedASR-AED-L 中文专精 ASR 模型（无歌词听写兜底）
+firered_model = "models/FireRedASR-AED-L"
 # 中间产物
 work_dir = "work"
 

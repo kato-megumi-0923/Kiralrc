@@ -10,6 +10,12 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func TestMain(m *testing.M) {
+	// Ensure go test never reads or overwrites the user's real %APPDATA%\Kiralrc\prefs.json.
+	_ = os.Setenv("KIRALRC_NO_PREFS", "1")
+	os.Exit(m.Run())
+}
+
 // Checks that the sidebar navigates across all six views and that the settings'
 // color swatches update the app's accent and appearance.
 func TestNavigationAndAccentSwitching(t *testing.T) {
@@ -150,6 +156,81 @@ func TestLoadLrcFileIntoEditor(t *testing.T) {
 	}
 	if a.edLines[0].Chars[1].Ch != "风" || a.edLines[0].End != 2.0 {
 		t.Fatalf("unexpected char timing: %+v", a.edLines[0])
+	}
+}
+
+func TestNoLyricsWorkflowAndNeteaseIDParsing(t *testing.T) {
+	cases := map[string]string{
+		"30967650":                                    "30967650",
+		"https://music.163.com/#/song?id=30967650":    "30967650",
+		"https://music.163.com/song/30967650?foo=bar": "30967650",
+		"随便写的": "",
+		"":     "",
+	}
+	for raw, want := range cases {
+		if got := parseNeteaseID(raw); got != want {
+			t.Fatalf("parseNeteaseID(%q) = %q, want %q", raw, got, want)
+		}
+	}
+
+	a := newApp()
+	tmp := t.TempDir()
+	a1 := filepath.Join(tmp, "芹澤優 - ずっと見ていたい.flac")
+	a2 := filepath.Join(tmp, "伍佰 - 突然的自我.flac")
+	_ = os.WriteFile(a1, []byte("RIFF"), 0o644)
+	_ = os.WriteFile(a2, []byte("RIFF"), 0o644)
+	_ = os.WriteFile(filepath.Join(tmp, "伍佰 - 突然的自我.lrc"), []byte("[00:01.000]听见你说\n"), 0o644)
+
+	a.libFolders = []string{tmp}
+	a.markTrackNotFound(a1)
+	a.tracks, a.libStats = a.scanLibrarySync()
+	if a.libStats.Missing != 1 || a.libStats.NotFound != 1 || a.libStats.LineOnly != 1 {
+		t.Fatalf("unexpected stats: %+v", a.libStats)
+	}
+	a.setLibFilter(3) // 无歌词 Tab
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	if err := tt.Click("批量填网易云 ID"); err != nil {
+		t.Fatalf("click 批量填网易云 ID: %v", err)
+	}
+	tt.Frame()
+	if !a.libBatchIdOpen {
+		t.Fatalf("expected libBatchIdOpen=true")
+	}
+}
+
+func TestInlineLyricLineEditAndRefreshDeletedLrc(t *testing.T) {
+	a := newApp()
+	p := filepath.Join(t.TempDir(), "asr.lrc")
+	content := "[00:10.000]<00:10.000>給<00:10.300>我<00:10.600>苦<00:10.900>彼<00:11.200>時<00:11.600>\n"
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadLrcFile(p); err != nil {
+		t.Fatal(err)
+	}
+	// Same-length typo fix: timestamps must be preserved 100%
+	a.beginEditLyricLine(0)
+	a.edEditingText = "给我苦笔试"
+	a.commitEditLyricLine()
+	if a.edLines[0].Text != "给我苦笔试" || len(a.edLines[0].Chars) != 5 {
+		t.Fatalf("unexpected edited line: %+v", a.edLines[0])
+	}
+	if a.edLines[0].Chars[3].Ch != "笔" || a.edLines[0].Chars[3].Start != 10.9 {
+		t.Fatalf("expected preserved timestamp 10.9, got %+v", a.edLines[0].Chars[3])
+	}
+	// Length-changed edit: prefix/suffix preserved, middle remapped
+	a.beginEditLyricLine(0)
+	a.edEditingText = "给我一次苦笔试"
+	a.commitEditLyricLine()
+	if len(a.edLines[0].Chars) != 7 || a.edLines[0].Chars[0].Start != 10.0 || a.edLines[0].Chars[6].End != 11.6 {
+		t.Fatalf("unexpected remapped chars: %+v", a.edLines[0].Chars)
+	}
+	// Deleting local LRC and clicking refresh clears editor & prunes recents
+	_ = os.Remove(p)
+	a.refreshEditor()
+	if a.edFile != "" || len(a.recents) != 0 {
+		t.Fatalf("expected editor cleared and recents pruned after deleting LRC, got edFile=%q recents=%d", a.edFile, len(a.recents))
 	}
 }
 

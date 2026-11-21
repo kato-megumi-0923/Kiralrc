@@ -14,7 +14,7 @@ from . import config, format as fmt
 
 WORD_CHAR = re.compile(r"[\w\u3040-\u30ff\u4e00-\u9fff]")
 ASCII_ALNUM = re.compile(r"^[A-Za-z0-9]+$")
-SPEAKER_TAG_RE = re.compile(r"【[^】]*】")
+SPEAKER_TAG_RE = re.compile(r"【[^】]*】|^\s*[^\s：:，,。！？!?]{1,8}[：:]\s*(?=\S)")
 KANA_CHAR_RE = re.compile(r"^[\u3041-\u3096\u30a1-\u30faー]$")
 SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
 MMS_JA_MODEL_ID = "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"
@@ -197,27 +197,13 @@ def _align_ja_mms_karaoke(
         if not rom_chars:
             continue
 
-        # 切片范围：绝不往前侵入上一句已对齐的唱腔尾音；若参考起点恰好落在上句拖音中，自动延后到换气低谷
-        seg_start = max(0.0, t0 - 0.30)
-        if rows and rows[-1].end is not None and rows[-1].end < t0 + 0.35:
-            seg_start = max(seg_start, rows[-1].end - 0.05)
-        if rows and len(env_20ms) > 0 and (nxt - t0) >= 2.0:
-            # 检查 [seg_start, t0+0.60] 内是否存在「先高能量(上句尾音) -> 明显换气低谷 -> 再起音」
-            f0 = max(0, int(seg_start / 0.02))
-            f1 = min(len(env_20ms) - 1, int((t0 + 0.60) / 0.02))
-            if f1 > f0 + 6:
-                win = env_20ms[f0:f1 + 1]
-                # 窗口前段有明显上句尾音能量
-                head_peak = float(np.max(win[:min(8, len(win))]))
-                min_rel = int(np.argmin(win))
-                valley = float(win[min_rel])
-                if head_peak > 0.08 and min_rel >= 2 and min_rel < len(win) - 2 and valley < head_peak * 0.48:
-                    after_peak = float(np.max(win[min_rel + 1:]))
-                    if after_peak > valley * 1.6:
-                        seg_start = (f0 + min_rel) * 0.02
+        # 全域统一：按人声轨 RMS 波形双向定位前后换气静音谷，隔离上句尾音与下句开头
+        prev_e = rows[-1].end if (rows and rows[-1].end is not None) else None
+        seg_start = au.find_valley_start(env_20ms, 0.02, t0, nxt, prev_end=prev_e, lead=0.30)
         max_line_dur = max(5.0, len(rom_chars) * 0.45) + 2.0
         if i + 1 < len(lines) and nxt > t0:
-            seg_end_t = min(dur, max(nxt + 0.45, seg_start + 1.0), t0 + max_line_dur)
+            next_cap = au.find_valley_end(env_20ms, 0.02, t0, nxt, dur, min_line_dur=max(0.8, len(rom_chars) * 0.08))
+            seg_end_t = min(dur, max(next_cap, seg_start + 1.0), t0 + max_line_dur)
         else:
             seg_end_t = min(dur, t0 + max_line_dur)
         s_idx = int(seg_start * 16000)
@@ -511,6 +497,46 @@ def _compute_chunked_emissions(
     return em_full, frame_dur
 
 
+_HANGUL_INIT = (
+    "g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s",
+    "ss", "", "j", "jj", "ch", "k", "t", "p", "h",
+)
+_HANGUL_MED = (
+    "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae",
+    "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i",
+)
+_HANGUL_FIN = (
+    "", "k", "k", "k", "n", "n", "n", "t", "l", "k", "m", "l", "l",
+    "l", "l", "l", "m", "p", "p", "t", "t", "ng", "t", "t", "k", "t", "p", "t",
+)
+_LATIN_EXTRA = {"ß": "ss", "ø": "o", "æ": "ae", "œ": "oe", "ð": "d", "þ": "th", "ł": "l"}
+
+
+def _char_to_latin(ch: str) -> tuple[str, bool]:
+    """将单字符转为 Echora-300M 词表支持的拉丁序列，返回 (latin, is_syllable_char)。
+
+    - 韩语谚文（Hangul）按标准罗马音拆音节，is_syllable_char=True（逐字独立计时间）；
+    - 带重音拉丁字母（é/ü/ñ/ç 等）去重音为 ASCII a-z，is_syllable_char=False（按词聚合）。
+    """
+    import unicodedata
+
+    code = ord(ch)
+    if 0xAC00 <= code <= 0xD7A3:
+        s_idx = code - 0xAC00
+        ini = s_idx // 588
+        med = (s_idx % 588) // 28
+        fin = s_idx % 28
+        return _HANGUL_INIT[ini] + _HANGUL_MED[med] + _HANGUL_FIN[fin], True
+    lo = ch.lower()
+    if lo in _LATIN_EXTRA:
+        return _LATIN_EXTRA[lo], False
+    if "a" <= lo <= "z" or lo == "'":
+        return lo, False
+    decomposed = unicodedata.normalize("NFKD", lo)
+    stripped = "".join(c for c in decomposed if "a" <= c <= "z")
+    return stripped, False
+
+
 def _align_en_mms_lyrics(
     audio: np.ndarray,
     lines: list[tuple[float, str]],
@@ -518,7 +544,7 @@ def _align_en_mms_lyrics(
     device: str = "cuda",
     en_granularity: str | None = None,
 ) -> list[fmt.Line]:
-    """使用 hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner（多语歌声歌词专精模型）做英文逐字/逐词对齐。"""
+    """使用 hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner（多语歌声歌词专精模型）做英文及多语种逐字/逐词对齐。"""
     import math
     import torch
     import torchaudio
@@ -550,9 +576,10 @@ def _align_en_mms_lyrics(
         nxt = lines[i + 1][0] if i + 1 < len(lines) else dur
         tag_mask = _speaker_tag_mask(text)
 
-        # 提取英文字符 -> token 序列，并记录词边界以支持 word / char 两种粒度
+        # 提取拉丁/韩文音节 -> token 序列，并记录字符 span 与词边界以支持多语逐字 & 英文 word/char 粒度
         rom_chars: list[str] = []
-        char_to_rom: dict[int, int] = {}
+        char_rom_span: dict[int, tuple[int, int]] = {}
+        syllable_chars: set[int] = set()
         word_groups: list[list[int]] = []
         cur_word: list[int] = []
         for ci, ch in enumerate(text):
@@ -561,11 +588,20 @@ def _align_en_mms_lyrics(
                     word_groups.append(cur_word)
                     cur_word = []
                 continue
-            lo = ch.lower()
-            if ("a" <= lo <= "z" or lo == "'") and lo in vocab and lo != "|":
-                char_to_rom[ci] = len(rom_chars)
-                rom_chars.append(lo)
-                cur_word.append(ci)
+            lat, is_syl = _char_to_latin(ch)
+            valid = [c for c in lat if c in vocab and c != "|"]
+            if valid:
+                r0 = len(rom_chars)
+                rom_chars.extend(valid)
+                char_rom_span[ci] = (r0, len(rom_chars))
+                if is_syl:
+                    if cur_word:
+                        word_groups.append(cur_word)
+                        cur_word = []
+                    syllable_chars.add(ci)
+                    word_groups.append([ci])
+                else:
+                    cur_word.append(ci)
             else:
                 if cur_word:
                     word_groups.append(cur_word)
@@ -576,27 +612,14 @@ def _align_en_mms_lyrics(
         if not rom_chars:
             continue
 
-        seg_start = max(0.0, t0 - 0.30)
-        if rows and rows[-1].end is not None and rows[-1].end < t0 + 0.35:
-            seg_start = max(seg_start, rows[-1].end - 0.05)
-        if rows and len(env_20ms) > 0 and (nxt - t0) >= 2.0:
-            f0_e = max(0, int(seg_start / 0.02))
-            f1_e = min(len(env_20ms) - 1, int((t0 + 0.60) / 0.02))
-            if f1_e > f0_e + 6:
-                win = env_20ms[f0_e:f1_e + 1]
-                head_peak = float(np.max(win[:min(8, len(win))]))
-                min_rel = int(np.argmin(win))
-                valley = float(win[min_rel])
-                if head_peak > 0.08 and min_rel >= 2 and min_rel < len(win) - 2 and valley < head_peak * 0.48:
-                    after_peak = float(np.max(win[min_rel + 1:]))
-                    if after_peak > valley * 1.6:
-                        seg_start = (f0_e + min_rel) * 0.02
+        # 全域统一：按人声轨 RMS 波形双向定位前后换气静音谷
+        prev_e = rows[-1].end if (rows and rows[-1].end is not None) else None
+        seg_start = au.find_valley_start(env_20ms, 0.02, t0, nxt, prev_end=prev_e, lead=0.30)
 
         max_line_dur = max(5.0, len(rom_chars) * 0.35) + 2.0
         if i + 1 < len(lines) and nxt > t0:
-            # 紧凑快句（间隔 < 2.0s）右扩收紧到 +0.15s，避免末字漂移到下一句的词上
-            tail_pad = 0.15 if (nxt - t0) < 2.0 else 0.35
-            seg_end_t = min(dur, max(nxt + tail_pad, seg_start + 0.8), t0 + max_line_dur)
+            next_cap = au.find_valley_end(env_20ms, 0.02, t0, nxt, dur, min_line_dur=max(0.6, len(rom_chars) * 0.06))
+            seg_end_t = min(dur, max(next_cap, seg_start + 0.8), t0 + max_line_dur)
         else:
             seg_end_t = min(dur, t0 + max_line_dur)
 
@@ -621,15 +644,15 @@ def _align_en_mms_lyrics(
 
         char_time: dict[int, tuple[float, float]] = {}
         for wg in word_groups:
-            r_first = char_to_rom[wg[0]]
-            r_last = char_to_rom[wg[-1]]
+            r_first = char_rom_span[wg[0]][0]
+            r_last = char_rom_span[wg[-1]][1] - 1
             ws = round(win_t0 + spans[r_first].start * frame_dur, 3)
             we = round(max(ws + 0.04, win_t0 + spans[r_last].end * frame_dur), 3)
             for ci in wg:
-                if en_granularity == "char":
-                    ri = char_to_rom[ci]
-                    cs = round(win_t0 + spans[ri].start * frame_dur, 3)
-                    ce = round(max(cs + 0.02, win_t0 + spans[ri].end * frame_dur), 3)
+                if en_granularity == "char" or ci in syllable_chars:
+                    r0, r1 = char_rom_span[ci]
+                    cs = round(win_t0 + spans[r0].start * frame_dur, 3)
+                    ce = round(max(cs + 0.02, win_t0 + spans[r1 - 1].end * frame_dur), 3)
                     char_time[ci] = (cs, ce)
                 else:
                     char_time[ci] = (ws, we)
@@ -663,59 +686,20 @@ def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja"
     audio = au.decode(vocal_wav, 16000)
     dur = total or len(audio) / 16000
 
-    # 日语优先走 NextFire 日语卡拉OK歌声模型；英文优先走 Echora MMS 多语歌词专精模型
-    if lang in ("ja", "en"):
-        try:
-            if lang == "ja":
-                rows = _align_ja_mms_karaoke(audio, lines, dur, device=device)
-                by_tag = "[by:MMS 日语歌声逐字]"
-            else:
-                rows = _align_en_mms_lyrics(audio, lines, dur, device=device, en_granularity=en_granularity)
-                by_tag = "[by:MMS 英文歌声逐字]"
-            if rows:
-                rows = _clamp_rows(rows)
-                if restore_long_vowel is None:
-                    restore_long_vowel = bool(config.opt("restore_long_vowel", True))
-                if restore_long_vowel:
-                    env = au.rms_envelope(audio, sr=16000, hop=0.02)
-                    rows = restore_sustain(rows, env, hop=0.02, total=dur)
-                    rows = _clamp_rows(rows)
-                return fmt.Lrc([by_tag], rows)
-        except Exception as e:                      # 模型没下全 / 依赖缺失时退回 WhisperX
-            _warn(f"MMS {lang} 歌声模型不可用，回退 WhisperX：{type(e).__name__}: {e}")
+    # 日语走 NextFire 日语卡拉 OK 歌声模型；英文及其它多语种统一走 Echora-300M 多语歌词歌声模型
+    if lang == "ja":
+        rows = _align_ja_mms_karaoke(audio, lines, dur, device=device)
+        by_tag = "[by:MMS 日语歌声逐字]"
+    else:
+        rows = _align_en_mms_lyrics(audio, lines, dur, device=device, en_granularity=en_granularity)
+        by_tag = "[by:MMS 英文歌声逐字]" if lang == "en" else f"[by:MMS 多语歌声逐字 ({lang})]"
 
-    from whisperx import alignment as wx
-
-    model, meta = wx.load_align_model(language_code=lang, device=device)
-
-    segs = []
-    for i, (t0, text) in enumerate(lines):
-        nxt = lines[i + 1][0] if i + 1 < len(lines) else dur
-        clean_text = SPEAKER_TAG_RE.sub("", text).strip() or text
-        n = len(re.sub(r"\s", "", clean_text))
-        if i + 1 < len(lines) and nxt > t0 + 0.6:
-            end = min(dur, nxt + 0.45)
-        else:
-            end = min(dur, max(nxt, t0 + max(2.2, n * 0.45) + 0.8))
-        segs.append({"text": clean_text, "start": max(0.0, t0 - 0.25), "end": end})
-
-    res = wx.align(segs, model, meta, audio, device,
-                   interpolate_method="nearest", return_char_alignments=True)
-
-    rows: list[fmt.Line] = []
-    for seg, (_, text) in zip(res["segments"], lines):
-        ln = place_segment_chars(text, seg.get("words", []),
-                                 en_granularity=en_granularity)
-        if ln is not None:
-            rows.append(ln)
-
-    rows = _clamp_rows(rows)
-
-    if restore_long_vowel is None:
-        restore_long_vowel = bool(config.opt("restore_long_vowel", True))
-    if restore_long_vowel and rows:
-        env = au.rms_envelope(audio, sr=16000, hop=0.02)
-        rows = restore_sustain(rows, env, hop=0.02, total=dur)
+    if rows:
         rows = _clamp_rows(rows)
-
-    return fmt.Lrc([f"[by:WhisperX {lang} 逐字]"], rows)
+        if restore_long_vowel is None:
+            restore_long_vowel = bool(config.opt("restore_long_vowel", True))
+        if restore_long_vowel:
+            env = au.rms_envelope(audio, sr=16000, hop=0.02)
+            rows = restore_sustain(rows, env, hop=0.02, total=dur)
+            rows = _clamp_rows(rows)
+    return fmt.Lrc([by_tag], rows)

@@ -213,7 +213,28 @@ def _song_meta(song_id: int) -> tuple[str, str, int]:
             round((s.get("duration") or 0) / 1000))
 
 
-def qq_match(keyword: str, duration: float | None = None) -> dict | None:
+def _filter_candidates(cands: list[dict], keyword: str, duration: float | None = None,
+                       name: str = "", artist: str = "", min_score: float = 0.55) -> list[dict]:
+    """按歌名/歌手/时长相似度过滤并排序候选，拒绝不相关的误匹配（如长有声书/无关曲目）。"""
+    target_name = name or keyword
+    kept: list[dict] = []
+    for raw in cands:
+        cand = dict(raw)
+        cand_dur = float(cand.get("duration") or 0)
+        if duration and cand_dur > 0:
+            if abs(cand_dur - duration) > max(45.0, duration * 0.35):
+                continue
+        sc = round(score_song(cand, target_name, artist, duration), 3)
+        if sc < min_score:
+            continue
+        cand["score"] = sc
+        kept.append(cand)
+    kept.sort(key=lambda s: (-s["score"], abs((s.get("duration") or 0) - (duration or 0))))
+    return kept
+
+
+def qq_match(keyword: str, duration: float | None = None,
+             name: str = "", artist: str = "") -> dict | None:
     """QQ 音乐：搜索并拉取原词 + 中文译文。"""
     try:
         payload = json.dumps({
@@ -245,10 +266,9 @@ def qq_match(keyword: str, duration: float | None = None) -> dict | None:
                 "artist": singer,
                 "duration": int(s.get("interval") or 0),
             })
+        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist)
         if not cands:
             return None
-        if duration:
-            cands.sort(key=lambda s: abs(s["duration"] - duration))
         for cand in cands[:3]:
             lurl = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid={cand['id']}&format=json&nobase64=0"
             lreq = urllib.request.Request(lurl, headers={"User-Agent": UA, "Referer": "https://y.qq.com/"})
@@ -264,7 +284,8 @@ def qq_match(keyword: str, duration: float | None = None) -> dict | None:
     return None
 
 
-def kugou_match(keyword: str, duration: float | None = None) -> dict | None:
+def kugou_match(keyword: str, duration: float | None = None,
+                name: str = "", artist: str = "") -> dict | None:
     """酷狗音乐：搜歌取 hash 再拉取 LRC。"""
     try:
         kw = urllib.parse.quote(keyword)
@@ -276,22 +297,31 @@ def kugou_match(keyword: str, duration: float | None = None) -> dict | None:
             info = ((json.loads(r.read().decode("utf-8", errors="replace")).get("data") or {}).get("info")) or []
         if not info:
             return None
-        if duration:
-            info.sort(key=lambda s: abs(int(s.get("duration") or 0) - duration))
-        for s in info[:3]:
-            h = s.get("hash") or ""
-            dur_s = int(s.get("duration") or 0)
-            if not h:
-                continue
+        cands = [
+            {
+                "id": s.get("hash") or "",
+                "name": s.get("songname") or "",
+                "artist": s.get("singername") or "",
+                "duration": int(s.get("duration") or 0),
+            }
+            for s in info
+            if s.get("hash")
+        ]
+        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist)
+        if not cands:
+            return None
+        for s in cands[:3]:
+            h = s["id"]
+            dur_s = s["duration"]
             sreq = urllib.request.Request(
                 f"https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&hash={h}&duration={dur_s * 1000}",
                 headers={"User-Agent": UA},
             )
             with urllib.request.urlopen(sreq, timeout=12) as r:
-                cands = json.loads(r.read().decode("utf-8", errors="replace")).get("candidates") or []
-            if not cands:
+                cands_lrc = json.loads(r.read().decode("utf-8", errors="replace")).get("candidates") or []
+            if not cands_lrc:
                 continue
-            c0 = cands[0]
+            c0 = cands_lrc[0]
             dreq = urllib.request.Request(
                 f"https://lyrics.kugou.com/download?ver=1&client=pc&id={c0['id']}&accesskey={c0['accesskey']}&fmt=lrc&charset=utf8",
                 headers={"User-Agent": UA},
@@ -302,11 +332,8 @@ def kugou_match(keyword: str, duration: float | None = None) -> dict | None:
             n = len([x for x in lrc.splitlines() if x.strip()])
             if n >= 8:
                 return {
+                    **s,
                     "source": "酷狗音乐",
-                    "id": h,
-                    "name": s.get("songname") or "",
-                    "artist": s.get("singername") or "",
-                    "duration": dur_s,
                     "lrc": lrc,
                     "tlyric": "",
                     "lines": n,
@@ -316,28 +343,38 @@ def kugou_match(keyword: str, duration: float | None = None) -> dict | None:
     return None
 
 
-def lrclib_match(keyword: str, duration: float | None = None) -> dict | None:
+def lrclib_match(keyword: str, duration: float | None = None,
+                 name: str = "", artist: str = "") -> dict | None:
     """LRCLIB：免鉴权国际歌词库，适合欧美 / 日文 / 独立音乐兜底。"""
     try:
         kw = urllib.parse.quote(keyword)
         req = urllib.request.Request(f"https://lrclib.net/api/search?q={kw}", headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=12) as r:
             arr = json.loads(r.read().decode("utf-8", errors="replace"))
-        synced = [x for x in (arr or []) if isinstance(x, dict) and (x.get("syncedLyrics") or "").strip()]
+        synced = [
+            {
+                "id": x.get("id") or 0,
+                "name": x.get("trackName") or "",
+                "artist": x.get("artistName") or "",
+                "duration": round(float(x.get("duration") or 0)),
+                "syncedLyrics": x.get("syncedLyrics") or "",
+            }
+            for x in (arr or [])
+            if isinstance(x, dict) and (x.get("syncedLyrics") or "").strip()
+        ]
+        synced = _filter_candidates(synced, keyword, duration, name=name, artist=artist)
         if not synced:
             return None
-        if duration:
-            synced.sort(key=lambda s: abs(float(s.get("duration") or 0) - duration))
         s0 = synced[0]
         lrc = s0["syncedLyrics"]
         n = len([x for x in lrc.splitlines() if x.strip()])
         if n >= 8:
             return {
                 "source": "LRCLIB",
-                "id": s0.get("id") or 0,
-                "name": s0.get("trackName") or "",
-                "artist": s0.get("artistName") or "",
-                "duration": round(float(s0.get("duration") or 0)),
+                "id": s0["id"],
+                "name": s0["name"],
+                "artist": s0["artist"],
+                "duration": s0["duration"],
                 "lrc": lrc,
                 "tlyric": "",
                 "lines": n,
@@ -356,9 +393,9 @@ def best_match(keyword: str, duration: float | None = None, interval: float = 4.
             return hit
     for fn in (
         lambda: netease_match(keyword, duration, interval=interval, name=name, artist=artist),
-        lambda: qq_match(keyword, duration),
-        lambda: kugou_match(keyword, duration),
-        lambda: lrclib_match(keyword, duration),
+        lambda: qq_match(keyword, duration, name=name, artist=artist),
+        lambda: kugou_match(keyword, duration, name=name, artist=artist),
+        lambda: lrclib_match(keyword, duration, name=name, artist=artist),
     ):
         hit = fn()
         if hit:

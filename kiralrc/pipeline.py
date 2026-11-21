@@ -98,9 +98,18 @@ def resolve_reference(audio_path: Path, ref: Path | None,
         return Path(ref), lines, f"参考文件 {Path(ref).name}"
 
     # 同目录已有 lrc（多半是整行时间）→ 直接当参考，省一次搜索
+    # 若当前 .lrc 已经是逐字 LRC 且存在最初原版 .lrc.bak，则优先回读 .lrc.bak，
+    # 避免多次重跑时因切片缓冲导致行首时间戳滚雪球漂移。
     sibling = audio_path.with_suffix(".lrc")
+    sibling_bak = sibling.with_name(sibling.name + ".bak")
     if sibling.exists():
         body = sibling.read_text(encoding="utf-8-sig")
+        if sibling_bak.exists() and re.search(r"<\d{2}:\d{2}\.\d{2,3}>", body):
+            bak_body = sibling_bak.read_text(encoding="utf-8-sig")
+            bak_stamped = tx.lines_with_times(bak_body)
+            bak_lines = [t for _, t in bak_stamped] if len(bak_stamped) >= 6 else tx.ref_lines(sibling_bak)
+            if len(bak_lines) >= 4:
+                return sibling_bak, bak_lines, f"原始备份 {sibling_bak.name}"
         stamped = tx.lines_with_times(body)
         lines = [t for _, t in stamped] if len(stamped) >= 6 else tx.ref_lines(sibling)
         if len(lines) >= 4:          # 少于 4 行多半是「纯音乐，请欣赏」这类占位
@@ -345,9 +354,11 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
              query: str | None = None, ti: str = "", ar: str = "",
              al: str = "", force_vocal: bool = False,
              netease_id: int | None = None,
+             asr_fallback: bool = False,
              ignore_ref_times: bool = False,
              en_granularity: str | None = None,
              restore_long_vowel: bool | None = None,
+             waveform_first: bool = False,
              on_progress: Callable[[int, int, str, str], None] | None = None) -> tuple[fmt.Lrc, str]:
     def emit(step: int, stage: str, detail: str = "") -> None:
         if on_progress is not None:
@@ -360,37 +371,86 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     emit(1, "确定歌词文本", audio_path.name)
     ref_path, lines, note = resolve_reference(audio_path, Path(ref) if ref else None, query,
                                                netease_id=netease_id)
+    used_asr_fallback = False
+    used_ref_times = False
+    vocals: Path | None = None
+    trans_map: dict[str, list[str]] = {}
+
     if not lines:
-        raise RuntimeError(note)
-    trans_map = _extract_trans_map(ref_path)
-    detected = _detect_lyrics_lang(lines, lang)
-    if detected != lang:
-        note += f" | 歌词语言自动识别为 {detected}"
-        lang = detected
-    # 外语歌曲（日文/英文）如果本地参考 LRC 没有中文译文，自动去网易云拉取 tlyric 补全
-    if lang in ("ja", "en") and not _has_any_trans(trans_map):
-        fetched = _fetch_missing_translations(audio_path, total, query)
-        if _has_any_trans(fetched):
-            trans_map = fetched
-            note += " | 自动补全网易云中文译文"
+        if not asr_fallback:
+            raise RuntimeError(note)
+        # 显式开启 --asr-fallback：先分离干净人声并做主唱检测，再喂给 faster-whisper 听写
+        used_asr_fallback = True
+        emit(3, "demucs 人声分离", "htdemucs")
+        vocals = _vocals(audio_path, cache)
 
-    emit(2, "确定每句位置", f"{len(lines)} 行" + (" · 强制 ASR 重定位" if ignore_ref_times else ""))
-    rough, skipped = line_times_detail(ref_path, lines, audio_path, cache, lang,
-                                       ignore_ref_times=ignore_ref_times)
-    if not rough:
-        raise RuntimeError("无法确定每句的起始时间")
-    rough = [(t, l) for t, l in rough if not tx.CREDIT_RE.match(l)]
-    if skipped:
-        note += f" | 剔除剪辑缺失 {len(skipped)} 行"
+        emit(4, "主唱检测", vocals.name)
+        if not force_vocal:
+            act = au.vocal_activity(vocals)
+            if not act["has_vocal"]:
+                raise NoVocalError(f"无主唱 ({act['reason']})")
 
-    emit(3, "demucs 人声分离", "htdemucs")
-    vocals = _vocals(audio_path, cache)
+        from . import asr
 
-    emit(4, "主唱检测", vocals.name)
-    if not force_vocal:
-        act = au.vocal_activity(vocals)
-        if not act["has_vocal"]:
-            raise NoVocalError(f"无主唱 ({act['reason']})")
+        voc_16k = au.decode(vocals, 16000)
+        asr_engine_name = "ASR"
+        if lang == "zh" and asr.firered_available():
+            emit(2, "本地 ASR 人声听写", "FireRedASR-AED-L (中文专精)")
+            words, segs, dur = asr.transcribe_zh_firered(voc_16k)
+            asr_engine_name = "FireRedASR"
+        else:
+            emit(2, "本地 ASR 人声听写", f"faster-whisper ({lang})")
+            words, segs, dur = asr.transcribe(voc_16k, lang=lang)
+        (cache / "asr.json").write_text(
+            json.dumps({"words": words, "segments": segs, "duration": dur}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        rough = [
+            (round(float(s["start"]), 3), str(s.get("text") or "").strip())
+            for s in segs
+            if str(s.get("text") or "").strip() and not tx.CREDIT_RE.match(str(s.get("text") or "").strip())
+        ]
+        if not rough:
+            raise RuntimeError("本地 ASR 未在人声轨中识别到有效歌词")
+        lines = [t for _, t in rough]
+        note = f"本地 {asr_engine_name} 人声听写 ({len(rough)} 句)"
+        detected = _detect_lyrics_lang(lines, lang)
+        if detected != lang:
+            note += f" | 歌词语言自动识别为 {detected}"
+            lang = detected
+    else:
+        trans_map = _extract_trans_map(ref_path)
+        detected = _detect_lyrics_lang(lines, lang)
+        if detected != lang:
+            note += f" | 歌词语言自动识别为 {detected}"
+            lang = detected
+        # 外语歌曲（日文/英文）如果本地参考 LRC 没有中文译文，自动去网易云拉取 tlyric 补全
+        if lang in ("ja", "en") and not _has_any_trans(trans_map):
+            fetched = _fetch_missing_translations(audio_path, total, query)
+            if _has_any_trans(fetched):
+                trans_map = fetched
+                note += " | 自动补全网易云中文译文"
+
+        emit(2, "确定每句位置", f"{len(lines)} 行" + (" · 强制 ASR 重定位" if ignore_ref_times else ""))
+        if ref_path and not ignore_ref_times:
+            _stamped = tx.lines_with_times(Path(ref_path).read_text(encoding="utf-8-sig"))
+            used_ref_times = len(_stamped) >= max(6, len(lines) - 2) and not _is_coarse_timestamps(_stamped)
+        rough, skipped = line_times_detail(ref_path, lines, audio_path, cache, lang,
+                                           ignore_ref_times=ignore_ref_times)
+        if not rough:
+            raise RuntimeError("无法确定每句的起始时间")
+        rough = [(t, l) for t, l in rough if not tx.CREDIT_RE.match(l)]
+        if skipped:
+            note += f" | 剔除剪辑缺失 {len(skipped)} 行"
+
+        emit(3, "demucs 人声分离", "htdemucs")
+        vocals = _vocals(audio_path, cache)
+
+        emit(4, "主唱检测", vocals.name)
+        if not force_vocal:
+            act = au.vocal_activity(vocals)
+            if not act["has_vocal"]:
+                raise NoVocalError(f"无主唱 ({act['reason']})")
 
     if lang == "zh":
         from . import sofa
@@ -401,20 +461,60 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
         if missing:
             note += f" | 拼音异常 {len(missing)} 处"
         sofa.run(seg_dir)
-        lrc = sofa.build_lrc(meta, seg_dir / "htk" / "words")
-        by = "SOFA 歌声对齐"
+        if used_ref_times:
+            clipped, seg_cnt = sofa.clipped_start_ratio(seg_dir / "htk" / "words")
+            if seg_cnt >= 6 and (clipped / seg_cnt) >= 0.40:
+                emit(5, "参考时间戳偏慢，自动校准偏移", f"{clipped}/{seg_cnt} 句开头被裁切")
+                from . import asr
+                import numpy as np
+
+                voc_16k = au.decode(vocals, 16000)
+                words_r, segs_r, dur_r = asr.transcribe(voc_16k, lang=lang)
+                (cache / "asr.json").write_text(
+                    json.dumps({"words": words_r, "segments": segs_r, "duration": dur_r}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                orig_texts = [l for _, l in rough]
+                matched_r, skipped_r = asr.assign_lines_detail(orig_texts, segs_r)
+                skipped_idx = {s["index"] - 1 for s in skipped_r}
+                # 建立原始行号 -> ASR 匹配时间映射，计算全局中位偏移（保留全部歌词行，绝不删词）
+                asr_by_idx: dict[int, float] = {}
+                mi = 0
+                for idx in range(len(rough)):
+                    if idx not in skipped_idx and mi < len(matched_r):
+                        asr_by_idx[idx] = matched_r[mi][0]
+                        mi += 1
+                deltas = [asr_by_idx[i] - rough[i][0] for i in asr_by_idx]
+                if deltas:
+                    shift = float(np.median(deltas))
+                    if abs(shift) >= 0.25:
+                        rough_fixed: list[tuple[float, str]] = []
+                        for idx, (ref_t, txt) in enumerate(rough):
+                            # 保持参考 LRC 原有的句间相对节奏，统一按全局中位偏移平移，
+                            # 避免 Whisper 分段起点包含前一句尾音/换气静音导致首字抢占上一句尾音。
+                            t_new = max(0.0, ref_t + shift)
+                            if rough_fixed and t_new < rough_fixed[-1][0]:
+                                t_new = rough_fixed[-1][0] + 0.05
+                            rough_fixed.append((t_new, txt))
+                        rough = rough_fixed
+                        meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total)
+                        sofa.run(seg_dir)
+                        note += f" | 参考时间戳整体偏移 {shift:+.2f}s，已自动校准({len(rough)}行保留)"
+        lrc = sofa.build_lrc(meta, seg_dir / "htk" / "words", vocal_wav=vocals,
+                             waveform_first=waveform_first)
+        by = "SOFA 波形优先对齐" if waveform_first else "SOFA 歌声对齐"
     else:
         from . import jp
 
-        stage_lbl = "MMS 日语歌声" if lang == "ja" else ("MMS 英文歌声" if lang == "en" else f"WhisperX {lang}")
+        stage_lbl = "MMS 日语歌声" if lang == "ja" else ("MMS 英文歌声" if lang == "en" else f"MMS 多语歌声 ({lang})")
         emit(5, f"{stage_lbl} 逐句对齐", f"{len(rough)} 句")
         lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total,
                              en_granularity=en_granularity,
                              restore_long_vowel=restore_long_vowel)
-        if any("MMS" in m for m in lrc.metas):
-            by = "MMS 日语歌声逐字" if lang == "ja" else "MMS 英文歌声逐字"
-        else:
-            by = f"WhisperX {lang} 逐字"
+        by = "MMS 日语歌声逐字" if lang == "ja" else ("MMS 英文歌声逐字" if lang == "en" else f"MMS 多语歌声逐字 ({lang})")
+
+    if used_asr_fallback:
+        by = f"{asr_engine_name} 听写 + {by}"
 
     emit(6, "输出并校验", f"{len(lrc.lines)} 行")
     tr_cnt = _attach_translations(lrc, trans_map)

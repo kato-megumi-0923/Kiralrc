@@ -157,3 +157,72 @@ def vocal_activity(audio_or_path: np.ndarray | str | Path, sr: int = 16000,
         "mid_ratio": round(mid_ratio, 4),
         "reason": "；".join(reasons) if reasons else "主唱正常",
     }
+
+
+def find_valley_start(env: np.ndarray, hop: float, t0: float,
+                      nxt: float, prev_end: float | None = None,
+                      lead: float = 0.35) -> float:
+    """按人声轨 RMS 波形定位本句左边界：若 t0 附近存在「上句尾音 → 换气静音谷 → 本句起唱」，
+    直接从静音谷底开切，避免把上一句尾音切进本句导致首字抢拍/贴边坍塌。"""
+    seg_start = max(0.0, t0 - lead)
+    if prev_end is not None and prev_end < t0 + 0.35:
+        seg_start = max(seg_start, prev_end - 0.05)
+    if len(env) == 0 or (nxt - t0) < 1.5:
+        return seg_start
+
+    hi_t = min(nxt - 0.4, t0 + 0.85)
+    f0 = max(0, int(seg_start / hop))
+    f1 = min(len(env) - 1, int(hi_t / hop))
+    if f1 - f0 < 8:
+        return seg_start
+
+    win = env[f0: f1 + 1]
+    # 用 3 帧轻微平滑避免单帧毛刺干扰谷底定位
+    if len(win) >= 5:
+        smooth = np.convolve(win, np.ones(3, dtype=np.float32) / 3.0, mode="same")
+    else:
+        smooth = win
+
+    min_rel = int(np.argmin(smooth))
+    if min_rel < 2 or min_rel >= len(smooth) - 2:
+        return seg_start
+
+    head_peak = float(smooth[:min_rel].max())
+    valley = float(smooth[min_rel])
+    after_peak = float(smooth[min_rel + 1:].max())
+
+    # 前段有明显上句尾音、中间跌入换气低谷、后段重新起唱
+    if head_peak >= 0.05 and valley <= max(0.032, head_peak * 0.45) and after_peak >= max(0.04, valley * 1.6):
+        return (f0 + min_rel) * hop
+    return seg_start
+
+
+def find_valley_end(env: np.ndarray, hop: float, t0: float, nxt: float,
+                    eff_total: float, min_line_dur: float = 0.8) -> float:
+    """按人声轨 RMS 波形定位本句右边界：在交界处寻找换气静音谷，
+    避免把下一句开头人声切进当前切片导致末字被吸走。"""
+    cap = min(eff_total, nxt + 0.15)
+    lo_t = max(t0 + min_line_dur, nxt - 0.9)
+    if lo_t >= cap - 0.1 or len(env) == 0:
+        return cap
+    i0 = max(0, int(lo_t / hop))
+    i1 = min(len(env), int(cap / hop))
+    if i1 - i0 < 6:
+        return cap
+
+    s0 = max(0, int(t0 / hop))
+    s1 = min(len(env), max(s0 + 5, i0))
+    ref_e = float(np.percentile(env[s0:s1], 80)) if s1 > s0 else float(np.percentile(env[i0:i1], 80))
+    thresh = min(0.032, max(0.012, ref_e * 0.15))
+
+    win = 6
+    seg = env[i0:i1]
+    smooth = np.convolve(seg, np.ones(win, dtype=np.float32) / win, mode="valid")
+    if len(smooth) == 0:
+        return cap
+    min_val = float(smooth.min())
+    if min_val <= thresh:
+        quiet = np.where(smooth <= max(thresh, min_val * 1.5))[0]
+        idx = int(quiet[-1]) + win // 2
+        return min(cap, (i0 + idx) * hop)
+    return cap

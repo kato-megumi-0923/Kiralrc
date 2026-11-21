@@ -31,6 +31,8 @@ def cmd_align(a) -> int:
             ignore_ref_times=getattr(a, "ignore_ref_times", False),
             en_granularity=getattr(a, "en_granularity", None),
             netease_id=tx.parse_song_id(getattr(a, "netease_id", None)),
+            asr_fallback=getattr(a, "asr_fallback", False),
+            waveform_first=getattr(a, "waveform_first", False),
             on_progress=on_prog)
     except pipeline.NoVocalError as e:
         print(f"[skip] {src.name}: {e}")
@@ -223,9 +225,10 @@ def _check_models() -> list[dict]:
     # 2) faster-whisper large-v3
     wh_path, wh_ok = _safe_cfg_path("whisper_model")
 
-    # 3) SOFA Mandarin ckpt & venv
+    # 3) SOFA Mandarin ckpt & FireRedASR-AED-L（中文专精听写）
     sofa_ckpt_path, sofa_ckpt_ok = _safe_cfg_path("sofa_ckpt")
-    sofa_py_path, sofa_py_ok = _safe_cfg_path("sofa_python")
+    fr_path, _ = _safe_cfg_path("firered_model")
+    fr_ok = bool(fr_path and (Path(fr_path) / "model.pth.tar").exists())
 
     # 4) Japanese MMS Karaoke model (NextFire)
     ja_dir = hf_hub / "models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn"
@@ -245,8 +248,8 @@ def _check_models() -> list[dict]:
     return [
         {"lang": "通用", "name": "Demucs 人声分离（htdemucs）", "path": demucs_path, "exists": demucs_ok},
         {"lang": "通用", "name": "faster-whisper large-v3（ASR 句级定位）", "path": wh_path or "models/faster-whisper-large-v3", "exists": wh_ok},
-        {"lang": "中文", "name": "SOFA 中文歌声对齐模型", "path": sofa_ckpt_path or "models/sofa/v1.0.0_mandarin_singing.ckpt", "exists": sofa_ckpt_ok},
-        {"lang": "中文", "name": "SOFA 独立运行环境（Python 3.10）", "path": sofa_py_path or ".venv-sofa/Scripts/python.exe", "exists": sofa_py_ok},
+        {"lang": "中文", "name": "SOFA 中文歌声对齐模型（主环境直跑）", "path": sofa_ckpt_path or "models/sofa/v1.0.0_mandarin_singing.ckpt", "exists": sofa_ckpt_ok},
+        {"lang": "中文", "name": "FireRedASR-AED-L（中文专精听写）", "path": fr_path or "models/FireRedASR-AED-L", "exists": fr_ok},
         {"lang": "日文", "name": "MMS 日语卡拉 OK 歌声模型（NextFire）", "path": str(ja_dir), "exists": ja_ok},
         {"lang": "日文", "name": "fugashi + unidic-lite（日语词法读音）", "path": "Python 环境内置（MeCab / UniDic）", "exists": ja_g2p_ok},
         {"lang": "英文", "name": "MMS 英文/多语歌词模型（Echora-300M）", "path": str(en_dir), "exists": en_ok},
@@ -269,7 +272,7 @@ def cmd_info(a) -> int:
     st = pipeline.cache_stats()
     if getattr(a, "json", False):
         paths = {}
-        for key in ("sofa_ckpt", "sofa_root", "sofa_python", "sofa_dict",
+        for key in ("sofa_ckpt", "sofa_root", "sofa_dict",
                     "whisper_model", "work_dir"):
             try:
                 p = config.path(key)
@@ -287,7 +290,7 @@ def cmd_info(a) -> int:
         return 0
 
     print(f"项目根目录 : {config.ROOT}")
-    for key in ("sofa_ckpt", "sofa_root", "sofa_python", "sofa_dict",
+    for key in ("sofa_ckpt", "sofa_root", "sofa_dict",
                 "whisper_model", "work_dir"):
         try:
             p = config.path(key)
@@ -320,6 +323,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--netease-id",
                    help="网易云歌曲 ID 或链接（如 30967650 或 music.163.com/song?id=...），"
                         "给了就直接按 ID 取歌词，不靠搜索")
+    p.add_argument("--asr-fallback", action="store_true",
+                   help="全网未搜到歌词且无参考文件时，先用 Demucs 提纯人声再用本地 faster-whisper 听写兜底")
     p.add_argument("--ti", default="")
     p.add_argument("--ar", default="")
     p.add_argument("--al", default="")
@@ -330,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="忽略参考 LRC 自带时间戳，强制用 ASR 重新定位每句起止时间")
     p.add_argument("--en-granularity", choices=["word", "char"], default=None,
                    help="英文/数字逐字粒度：word（按词）或 char（按字母均分）")
+    p.add_argument("--waveform-first", action="store_true",
+                   help="鬼畜 / 波形起音优先模式：先按人声轨波形起音与能量谷切分，SOFA 仅作参考")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_align)
 

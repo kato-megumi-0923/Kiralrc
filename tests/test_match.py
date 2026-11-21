@@ -104,3 +104,32 @@ def test_artist_title_from_filename_and_score_without_artist():
     # 缺歌手时权重归一化，精准歌名+相近时长应拿到高分
     s = tx.score_song({"name": "晴天", "artist": "周杰伦", "duration": 269}, name="晴天", artist="", duration=270)
     assert s > 0.95
+
+
+def test_filter_candidates_rejects_unrelated_or_duration_mismatch():
+    pool = [
+        {"id": "1", "name": "我的阿勒泰 05 汉族孩子们", "artist": "喜马拉雅", "duration": 620},
+        {"id": "2", "name": "秦城的汉子2021", "artist": "新蛤社", "duration": 620},
+        {"id": "3", "name": "秦城的汉子2021", "artist": "新蛤社", "duration": 277},
+    ]
+    got = tx._filter_candidates(pool, "秦城的汉子2021 新蛤社", duration=277,
+                                name="秦城的汉子2021", artist="新蛤社")
+    assert [c["id"] for c in got] == ["3"]
+
+
+def test_cli_accepts_asr_fallback_flag():
+    import subprocess, sys
+    r = subprocess.run([sys.executable, "-m", "kiralrc", "align", "--help"], capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "--asr-fallback" in r.stdout
+    assert "--netease-id" in r.stdout
+
+
+def test_multilingual_char_to_latin():
+    from kiralrc import jp
+    assert jp._char_to_latin("사") == ("sa", True)
+    assert jp._char_to_latin("랑") == ("rang", True)
+    assert jp._char_to_latin("해") == ("hae", True)
+    assert jp._char_to_latin("é") == ("e", False)
+    assert jp._char_to_latin("ü") == ("u", False)
+    assert jp._char_to_latin("ß") == ("ss", False)

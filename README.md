@@ -52,9 +52,9 @@
 3. **人声分离**：使用 `demucs`（`htdemucs`）分离人声轨 `vocals.wav`（同一首歌会复用缓存）。
 4. **主唱检测**：分析人声轨 1~4kHz 能量占比与 P90 RMS（`min_vocal_ratio` / `min_vocal_rms`），拦截纯音乐或无人声轨道。
 5. **分语种逐字强制对齐**（在分离后的人声轨上按句切片运行）：
-   - **中文（`zh`）**：`pypinyin` + `polyphone.toml` 词表转拼音 → 在独立 `.venv-sofa` 环境中运行 **SOFA** 歌声模型对齐。
-   - **日文（`ja`）**：`fugashi`（MeCab + unidic）切分注音，结合人声能量包络避开上句拖音 → 运行 **MMS** 歌声模型对齐。
-   - **英文（`en`）及其他**：运行 **WhisperX** `wav2vec2` CTC 对齐，按 `en_granularity`（`word` / `char`）切分粒度，并按人声能量包络做长音时长保真。
+   - **中文（`zh`）**：`pypinyin` + `polyphone.toml` 词表转拼音 → 在主环境用纯 PyTorch（CUDA/CPU）直接运行 **SOFA** 歌声模型对齐。
+   - **日文（`ja`）**：`fugashi`（MeCab + unidic）切分注音，结合人声能量包络避开上句拖音 → 运行 **NextFire MMS** 日语卡拉 OK 歌声模型对齐。
+   - **英文（`en`）**：24s 长滑窗全上下文计算发射概率 → 运行 **Echora-300M MMS** 多语歌词专精模型对齐，按 `en_granularity`（`word` / `char`）切分粒度，并按人声能量包络做长音时长保真（其他语种回退 WhisperX）。
 6. **回填译文与输出**：挂载对应中文译文行，写入 `[ti:]` / `[ar:]` / `[al:]` / `[by:]` 元信息并按统一格式输出。
 
 ## 输出格式
@@ -73,21 +73,13 @@
 
 ## 安装
 
-需要两个 Python 环境：主环境跑 ASR/demucs，另一个跑 SOFA（它锁 `numpy~=1.24`，新版 Python 装不了）。
+只需**单个 Python 环境**即可运行全部功能（SOFA 推理已剥离 `lightning` / `librosa<0.10` / `matplotlib` / `pandas` / `textgrid` 等训练期旧依赖，直接复用主环境 PyTorch + torchaudio 并在 GPU 上推理）：
 
 ```bash
-# 1) 主环境
-pip install faster-whisper demucs stable-ts whisperx pypinyin av numpy torch
-pip install pypinyin
+# 1) Python 依赖（支持 Python 3.10~3.13 + NumPy 2.x）
+pip install torch torchaudio transformers faster-whisper demucs pypinyin fugashi unidic-lite pykakasi av numpy pyyaml numba mutagen
 
-# 2) SOFA 环境（Python 3.10）
-uv venv --python 3.10 .venv-sofa
-uv pip install --python .venv-sofa/Scripts/python.exe torch torchaudio \
-    "numpy~=1.24.1" click "einops==0.6.1" h5py "librosa<0.10.0" "lightning>=2.0.0" \
-    "PyYAML~=6.0.1" tqdm textgrid chardet numba "pandas~=2.0.3" pypinyin "setuptools<70"
-# 注：librosa 0.9 依赖 pkg_resources，所以 setuptools 必须 <70
-
-# 3) 模型
+# 2) 模型
 python scripts/fetch_models.py
 ```
 

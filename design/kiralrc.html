@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kiralrc · 曲库「无歌词」交互设计稿</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Cloudy / Kiralrc 设计令牌：浅色与深色双主题 */
+    :root {
+      --bg: #ffffff;
+      --sidebar: #f4f4f6;
+      --surface: rgba(0, 0, 0, 0.034);
+      --surface2: rgba(0, 0, 0, 0.056);
+      --raised: #ffffff;
+      --text: #1d1d1f;
+      --muted: rgba(60, 60, 67, 0.64);
+      --faint: rgba(60, 60, 67, 0.34);
+      --hairline: rgba(0, 0, 0, 0.072);
+      --hover: rgba(0, 0, 0, 0.042);
+      --accent: #df3b30;
+      --accent-soft: rgba(223, 59, 48, 0.13);
+      --accent-soft2: rgba(223, 59, 48, 0.22);
+      --on-accent: #ffffff;
+      --ok: #2e8b57;
+      --ok-bg: rgba(46, 139, 87, 0.12);
+      --warn: #c47a00;
+      --warn-bg: rgba(217, 140, 0, 0.13);
+      --dock-bg: rgba(255, 255, 255, 0.78);
+      --dock-border: rgba(255, 255, 255, 0.6);
+      --dock-shadow: 0 14px 36px -10px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+      --toast-bg: rgba(29, 29, 31, 0.92);
+      --toast-text: #ffffff;
+    }
+
+    html.dark {
+      --bg: #141416;
+      --sidebar: #1c1c1f;
+      --surface: rgba(255, 255, 255, 0.045);
+      --surface2: rgba(255, 255, 255, 0.075);
+      --raised: #222226;
+      --text: #f5f5f7;
+      --muted: rgba(235, 235, 245, 0.58);
+      --faint: rgba(235, 235, 245, 0.32);
+      --hairline: rgba(255, 255, 255, 0.075);
+      --hover: rgba(255, 255, 255, 0.06);
+      --accent: #ef5348;
+      --accent-soft: rgba(239, 83, 72, 0.18);
+      --accent-soft2: rgba(239, 83, 72, 0.28);
+      --on-accent: #ffffff;
+      --ok: #5cd68d;
+      --ok-bg: rgba(92, 214, 141, 0.15);
+      --warn: #f5b942;
+      --warn-bg: rgba(245, 185, 66, 0.15);
+      --dock-bg: rgba(28, 28, 32, 0.80);
+      --dock-border: rgba(255, 255, 255, 0.10);
+      --dock-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      --toast-bg: rgba(245, 245, 247, 0.95);
+      --toast-text: #141416;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, "Microsoft YaHei UI", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      transition: background-color 0.3s ease, color 0.3s ease;
+      user-select: none;
+    }
+
+    /* 细腻滚动条 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--faint);
+      border-radius: 999px;
+      opacity: 0.4;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+
+    /* Hero Banner 悬停唱片滑出动效 */
+    .hero-banner {
+      background: linear-gradient(125deg, #6b1f1e 0%, #c4362d 55%, #df6d52 100%);
+      box-shadow: 0 14px 32px -12px rgba(223, 59, 48, 0.38);
+    }
+    .hero-banner .vinyl-disc {
+      transition: transform 0.42s cubic-bezier(0.22, 0.8, 0.24, 1);
+    }
+    .hero-banner .sleeve-3 {
+      transition: transform 0.42s cubic-bezier(0.22, 0.8, 0.24, 1);
+    }
+    .hero-banner .sleeve-2 {
+      transition: transform 0.42s cubic-bezier(0.22, 0.8, 0.24, 1);
+    }
+    .hero-banner:hover .vinyl-disc {
+      transform: translateX(22px) rotate(18deg);
+    }
+    .hero-banner:hover .sleeve-3 {
+      transform: translateX(-6px);
+    }
+    .hero-banner:hover .sleeve-2 {
+      transform: translateX(-3px);
+    }
+
+    /* 统计卡片悬停浮起 */
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      transition: transform 0.2s cubic-bezier(0.22, 0.8, 0.24, 1), background-color 0.16s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .stat-card:hover {
+      background: var(--surface2);
+      transform: translateY(-2px);
+    }
+    .stat-card.active-card {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-soft2);
+    }
+
+    /* 悬浮磨砂玻璃 Dock */
+    .glass-dock {
+      background: var(--dock-bg);
+      backdrop-filter: blur(22px) saturate(160%);
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      border: 1px solid var(--dock-border);
+      box-shadow: var(--dock-shadow);
+    }
+
+    @keyframes spinSlow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .vinyl-spin {
+      animation: spinSlow 10s linear infinite;
+    }
+    .vinyl-paused {
+      animation-play-state: paused;
+    }
+
+    /* 抽屉展开平滑动画 */
+    @keyframes drawerIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .drawer-anim {
+      animation: drawerIn 0.2s cubic-bezier(0.22, 0.8, 0.24, 1);
+    }
+
+    /* Toast 动画 */
+    @keyframes toastIn {
+      from { opacity: 0; transform: translate(-50%, -14px) scale(0.96); }
+      to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    }
+    .toast-anim {
+      animation: toastIn 0.24s cubic-bezier(0.22, 0.8, 0.24, 1);
+    }
+
+    /* 按钮轻按回弹 */
+    .btn-spring {
+      transition: transform 0.14s cubic-bezier(0.22, 0.8, 0.24, 1), background-color 0.14s ease, opacity 0.14s ease;
+    }
+    .btn-spring:active {
+      transform: scale(0.96);
+    }
+
+    input, textarea {
+      user-select: text;
+    }
+  </style>
+</head>
+<body class="h-screen w-screen flex overflow-hidden">
+
+  <!-- Toast 提示容器（顶部居中） -->
+  <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none"></div>
+
+  <!-- 左侧边栏 (232px 固定) -->
+  <aside id="sidebar" class="w-[232px] shrink-0 h-full flex flex-col px-3 py-4 border-r transition-colors duration-300"
+         style="background: var(--sidebar); border-color: var(--hairline);">
+    <!-- Brand Header -->
+    <div class="flex items-center gap-2.5 px-2 pb-3">
+      <div class="w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 shadow-sm" style="background: var(--accent); color: var(--on-accent);">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="text-[15.5px] font-extrabold tracking-tight">Kiralrc</span>
+      <span class="ml-auto text-[11px] font-semibold" style="color: var(--faint);">逐字对齐</span>
+    </div>
+
+    <!-- Live Search Input -->
+    <div class="flex items-center gap-2 h-[34px] px-2.5 mb-3 rounded-[10px] border transition-colors"
+         style="background: var(--surface); border-color: var(--hairline);">
+      <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--faint);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+      </svg>
+      <input id="sidebar-search" type="text" placeholder="搜索曲库歌曲 / 歌手"
+             class="w-full bg-transparent text-[12.5px] outline-none placeholder:opacity-60"
+             style="color: var(--text);" />
+      <button id="clear-search-btn" class="hidden p-0.5 rounded-full hover:opacity-80" style="color: var(--faint);" title="清空搜索">
+        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- Primary Navigation -->
+    <nav class="flex flex-col gap-0.5">
+      <!-- 曲库 (Active) -->
+      <button class="relative flex items-center gap-2.5 h-9 px-3 rounded-[9px] text-[13.5px] font-bold text-left btn-spring"
+              style="background: var(--accent-soft); color: var(--text);">
+        <span class="absolute left-[3px] top-1/2 -translate-y-1/2 w-[3.5px] h-4 rounded-full" style="background: var(--accent);"></span>
+        <svg class="w-4 h-4 shrink-0" style="color: var(--accent);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>
+        </svg>
+        <span>曲库</span>
+      </button>
+
+      <button onclick="showToast('当前原型聚焦「曲库 · 无歌词兜底流程」，其他页面保持原有布局')"
+              class="flex items-center gap-2.5 h-9 px-3 rounded-[9px] text-[13.5px] font-semibold text-left hover:bg-[var(--hover)] btn-spring"
+              style="color: var(--muted);">
+        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>
+        </svg>
+        <span>新建对齐</span>
+      </button>
+
+      <button onclick="showToast('任务队列当前共有 ' + state.queueCount + ' 首待处理/处理中任务')"
+              class="flex items-center gap-2.5 h-9 px-3 rounded-[9px] text-[13.5px] font-semibold text-left hover:bg-[var(--hover)] btn-spring"
+              style="color: var(--muted);">
+        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+        </svg>
+        <span>任务队列</span>
+        <span id="nav-queue-badge" class="ml-auto h-[18px] min-w-[20px] px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center hidden"
+              style="background: var(--accent); color: var(--on-accent);">0</span>
+      </button>
+
+      <button onclick="showToast('点击曲库右侧校对图标或底部 Dock 可进入编辑器')"
+              class="flex items-center gap-2.5 h-9 px-3 rounded-[9px] text-[13.5px] font-semibold text-left hover:bg-[var(--hover)] btn-spring"
+              style="color: var(--muted);">
+        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/>
+        </svg>
+        <span>编辑与校对</span>
+      </button>
+
+      <button onclick="showToast('工具箱：支持校验、双语加 ❤️、小数位转换与人声分离')"
+              class="flex items-center gap-2.5 h-9 px-3 rounded-[9px] text-[13.5px] font-semibold text-left hover:bg-[var(--hover)] btn-spring"
+              style="color: var(--muted);">
+        <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/>
+        </svg>
+        <span>工具箱</span>
+      </button>
+    </nav>
+
+    <!-- 最近校对 -->
+    <div class="mt-5 px-2.5">
+      <div class="text-[11px] font-bold mb-1.5" style="color: var(--faint);">最近校对</div>
+      <button onclick="showToast('已在编辑器中打开：雷军 - Are You OK.lrc')"
+              class="w-full flex items-center gap-2.5 h-[34px] px-2 rounded-[8px] hover:bg-[var(--hover)] btn-spring text-left">
+        <div class="w-5 h-5 rounded-[5px] shrink-0" style="background: linear-gradient(135deg, #4f6ef7, #8b5cf6);"></div>
+        <span class="text-[12.5px] font-medium truncate" style="color: var(--muted);">雷军 - Are You OK</span>
+      </button>
+    </div>
+
+    <div class="flex-1"></div>
+
+    <!-- 底部设置 -->
+    <button onclick="showToast('可在设置页配置默认兜底策略：自动跳过 / 本地 ASR 兜底')"
+            class="flex items-center gap-2.5 h-9 px-3 rounded-[9px] text-[13.5px] font-semibold text-left hover:bg-[var(--hover)] btn-spring"
+            style="color: var(--muted);">
+      <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+      </svg>
+      <span>设置</span>
+    </button>
+  </aside>
+
+  <!-- 右侧主内容区 -->
+  <div class="flex-1 min-w-0 h-full relative flex flex-col">
+    <!-- 顶部标题栏 (模拟 Windows 无边框标题栏 + 深浅色切换) -->
+    <header class="h-[44px] shrink-0 flex items-center justify-end px-4 gap-2 select-none">
+      <button id="theme-toggle-btn" title="切换深浅色"
+              class="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--hover)] btn-spring"
+              style="color: var(--muted);">
+        <!-- Sun Icon (Light mode) -->
+        <svg id="icon-sun" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+        </svg>
+        <!-- Moon Icon (Dark mode) -->
+        <svg id="icon-moon" class="w-4 h-4 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+        </svg>
+      </button>
+      <!-- 模拟 Windows 窗口控制按钮 -->
+      <div class="flex items-center gap-1 ml-1 opacity-55">
+        <span class="w-8 h-7 rounded flex items-center justify-center text-xs">—</span>
+        <span class="w-8 h-7 rounded flex items-center justify-center text-xs">□</span>
+        <span class="w-8 h-7 rounded flex items-center justify-center text-xs">✕</span>
+      </div>
+    </header>
+
+    <!-- 可滚动主页面 -->
+    <main class="flex-1 overflow-y-auto px-6 lg:px-9 pt-1 pb-28">
+      <div class="max-w-[1200px] mx-auto flex flex-col gap-4">
+
+        <!-- 标题行 -->
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <div class="text-[11.5px] font-semibold truncate" style="color: var(--muted);">
+              C:\Users\yxljs\OneDrive\Music\cloudy music\不可描述 · 上次扫描 今天 04:00
+            </div>
+            <h1 class="text-[28px] font-extrabold leading-tight tracking-tight mt-0.5">曲库</h1>
+          </div>
+          <button onclick="showToast('移除文件夹后会回到空白引导状态')"
+                  class="h-[34px] px-4 rounded-full text-[13px] font-semibold btn-spring shrink-0"
+                  style="background: var(--surface2); color: var(--muted);">
+            移除文件夹
+          </button>
+        </div>
+
+        <!-- Cloudy 风格 Hero Banner -->
+        <section class="hero-banner relative rounded-[22px] min-h-[180px] px-7 py-5 flex items-center justify-between gap-6 overflow-hidden">
+          <div class="flex flex-col gap-1 z-10 min-w-0">
+            <div class="text-[12px] font-semibold text-white/80">
+              本地曲库总览 · 共 24 首音频（有效人声 21 首 · 已排除纯音乐 / OST / 伴奏 3 首）
+            </div>
+            <h2 class="text-[24px] lg:text-[26px] font-extrabold text-white tracking-tight">
+              还有 6 首人声歌曲待升级或待补词
+            </h2>
+            <div class="text-[12.5px] text-white/90">
+              15 首逐字已就绪 · 2 首仅整行时间 · 4 首无歌词（含 3 首全网未搜到）&nbsp;&nbsp;|&nbsp;&nbsp;已排除：纯音乐 1 · OST 原声 1 · 伴奏 1
+            </div>
+            <div class="flex flex-wrap items-center gap-2 mt-3">
+              <button onclick="enqueueAllLineOnly()"
+                      class="h-[34px] px-4 rounded-full bg-white text-[#1d1d1f] text-[13px] font-bold flex items-center gap-1.5 shadow-sm hover:bg-white/95 btn-spring">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.6v14.8c0 .8.9 1.3 1.6.9l12-7.4c.6-.4.6-1.3 0-1.7l-12-7.4C7.9 3.3 7 3.8 7 4.6z"/></svg>
+                批量升级整行歌词（2）
+              </button>
+              <button onclick="showToast('打开系统文件夹选择器以添加更多音乐目录')"
+                      class="h-[34px] px-4 rounded-full bg-white/18 hover:bg-white/25 text-white text-[13px] font-semibold flex items-center gap-1.5 backdrop-blur-sm btn-spring">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                添加文件夹
+              </button>
+              <button onclick="showToast('已重新扫描本地目录 · 24 首音频状态已刷新')"
+                      class="h-[34px] px-4 rounded-full bg-white/18 hover:bg-white/25 text-white text-[13px] font-semibold flex items-center gap-1.5 backdrop-blur-sm btn-spring">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+                重新扫描
+              </button>
+            </div>
+          </div>
+
+          <!-- 右侧叠放封套 + 悬停滑出黑胶 -->
+          <div class="hidden md:block relative w-[248px] h-[136px] shrink-0">
+            <!-- 黑胶唱片 -->
+            <div class="vinyl-disc absolute top-[10px] left-[102px] w-[114px] h-[114px] rounded-full bg-[#17171b] shadow-2xl flex items-center justify-center">
+              <div class="w-[90px] h-[90px] rounded-full border border-white/10 flex items-center justify-center">
+                <div class="w-[38px] h-[38px] rounded-full flex items-center justify-center" style="background: var(--accent);">
+                  <div class="w-2 h-2 rounded-full bg-white"></div>
+                </div>
+              </div>
+            </div>
+            <!-- 封套 3 -->
+            <div class="sleeve-3 absolute top-[18px] left-[4px] w-[102px] h-[102px] rounded-[14px]"
+                 style="background: linear-gradient(135deg, #d89b3c, #b57a20);"></div>
+            <!-- 封套 2 -->
+            <div class="sleeve-2 absolute top-[14px] left-[22px] w-[108px] h-[108px] rounded-[14px]"
+                 style="background: linear-gradient(135deg, #5d78e6, #3d56bf);"></div>
+            <!-- 封套 1 -->
+            <div class="absolute top-[10px] left-[42px] w-[114px] h-[114px] rounded-[14px] shadow-xl"
+                 style="background: linear-gradient(135deg, #f18c78, #df4862);"></div>
+          </div>
+        </section>
+
+        <!-- 4 统计卡片（3 卡片升级为 4 等分卡片，点击切换对应 Tab） -->
+        <section id="stat-cards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+          <!-- 卡片 1: 逐字就绪 -->
+          <button data-card-tab="enhanced" onclick="switchTab('enhanced')"
+                  class="stat-card rounded-[16px] px-4 py-3.5 flex items-center gap-3.5 text-left btn-spring">
+            <div class="w-10 h-10 rounded-[12px] flex items-center justify-center shrink-0" style="background: var(--ok-bg); color: var(--ok);">
+              <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+            <div class="min-w-0">
+              <div class="text-[23px] font-extrabold leading-tight">15</div>
+              <div class="text-[12px] truncate" style="color: var(--muted);">逐字就绪 · 占人声 71.4%</div>
+            </div>
+          </button>
+
+          <!-- 卡片 2: 仅整行 LRC -->
+          <button data-card-tab="line_only" onclick="switchTab('line_only')"
+                  class="stat-card rounded-[16px] px-4 py-3.5 flex items-center gap-3.5 text-left btn-spring">
+            <div class="w-10 h-10 rounded-[12px] flex items-center justify-center shrink-0" style="background: var(--accent-soft); color: var(--accent);">
+              <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+            <div class="min-w-0">
+              <div class="text-[23px] font-extrabold leading-tight">2</div>
+              <div class="text-[12px] truncate" style="color: var(--muted);">仅整行 LRC · 可直接升级逐字</div>
+            </div>
+          </button>
+
+          <!-- 卡片 3: 无歌词 (新增) -->
+          <button data-card-tab="nolyrics" onclick="switchTab('nolyrics')"
+                  class="stat-card rounded-[16px] px-4 py-3.5 flex items-center gap-3.5 text-left btn-spring">
+            <div class="w-10 h-10 rounded-[12px] flex items-center justify-center shrink-0" style="background: var(--warn-bg); color: var(--warn);">
+              <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[23px] font-extrabold leading-tight">4</span>
+                <span class="text-[10.5px] font-bold px-1.5 py-0.5 rounded-full" style="background: var(--warn-bg); color: var(--warn);">3 首全网无词</span>
+              </div>
+              <div class="text-[12px] truncate" style="color: var(--muted);">无歌词 · 支持 ID / 手填 / ASR</div>
+            </div>
+          </button>
+
+          <!-- 卡片 4: 已排除 -->
+          <button data-card-tab="inst" onclick="switchTab('inst')"
+                  class="stat-card rounded-[16px] px-4 py-3.5 flex items-center gap-3.5 text-left btn-spring">
+            <div class="w-10 h-10 rounded-[12px] flex items-center justify-center shrink-0" style="background: var(--surface2); color: var(--muted);">
+              <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+            <div class="min-w-0">
+              <div class="text-[23px] font-extrabold leading-tight">3</div>
+              <div class="text-[12px] truncate" style="color: var(--muted);">已排除：纯音乐 1 · OST 1 · 伴奏 1</div>
+            </div>
+          </button>
+        </section>
+
+        <!-- 5 Tab 筛选栏 -->
+        <section class="flex flex-wrap items-center gap-1.5 pt-1">
+          <div id="filter-tabs" class="flex flex-wrap items-center gap-1.5"></div>
+          <div id="inst-pills" class="ml-auto hidden items-center gap-1.5">
+            <span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold flex items-center" style="background: var(--surface2); color: var(--muted);">纯音乐 1</span>
+            <span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold flex items-center" style="background: var(--surface2); color: var(--muted);">OST 原声 1</span>
+            <span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold flex items-center" style="background: var(--surface2); color: var(--muted);">伴奏 1</span>
+          </div>
+        </section>
+
+        <!-- 动态批量操作栏 -->
+        <section id="batch-bar" class="rounded-[14px] px-4 py-2.5 flex flex-wrap items-center gap-2.5 border"
+                 style="background: var(--surface); border-color: var(--hairline);"></section>
+
+        <!-- 可展开的「批量填网易云 ID」抽屉（仅无歌词 Tab 展开时显示） -->
+        <section id="batch-id-drawer" class="hidden drawer-anim rounded-[16px] p-4 border flex-col gap-3"
+                 style="background: var(--surface); border-color: var(--accent); box-shadow: 0 8px 24px -10px rgba(223, 59, 48, 0.16);"></section>
+
+        <!-- 歌曲列表 -->
+        <section class="flex flex-col gap-1">
+          <!-- 表头 -->
+          <div class="hidden md:flex items-center gap-3 h-[34px] px-3 text-[11.5px] font-semibold" style="color: var(--faint);">
+            <div class="w-5 shrink-0"></div>
+            <div class="w-[260px] shrink-0">标题</div>
+            <div class="w-[110px] shrink-0">艺术家</div>
+            <div class="w-[96px] shrink-0">歌词状态</div>
+            <div class="w-[56px] shrink-0">语言</div>
+            <div class="flex-1 min-w-0">备注</div>
+            <div id="thead-actions" class="w-[238px] shrink-0 text-right">操作</div>
+          </div>
+
+          <!-- 列表项容器 -->
+          <div id="track-list" class="flex flex-col gap-1"></div>
+        </section>
+
+      </div>
+    </main>
+
+    <!-- 底部悬浮磨砂玻璃 Dock -->
+    <div class="glass-dock absolute left-6 right-6 bottom-4 h-[64px] rounded-full px-3.5 flex items-center gap-4 z-30">
+      <!-- 左侧：迷你旋转黑胶 + 曲目 -->
+      <button onclick="showToast('进入编辑器校对：雷军 - Are You OK.lrc')"
+              class="flex items-center gap-2.5 min-w-0 flex-1 max-w-[260px] text-left btn-spring">
+        <div id="dock-vinyl" class="w-[42px] h-[42px] rounded-full bg-[#1a1a1f] shrink-0 flex items-center justify-center relative vinyl-spin vinyl-paused">
+          <div class="w-[32px] h-[32px] rounded-full border border-white/10 flex items-center justify-center">
+            <div class="w-4 h-4 rounded-full flex items-center justify-center" style="background: var(--accent);">
+              <div class="w-1 h-1 rounded-full bg-white"></div>
+            </div>
+          </div>
+          <div class="w-1 h-1 rounded-full bg-white/80 absolute top-2.5 left-1/2 -translate-x-1/2"></div>
+        </div>
+        <div class="min-w-0">
+          <div class="text-[13px] font-bold truncate">雷军 - Are You OK.lrc</div>
+          <div class="text-[11px] truncate" style="color: var(--muted);">逐字 LRC · 88 行（88 行含逐字标签）</div>
+        </div>
+      </button>
+
+      <!-- 中央：播放控制 + 进度条 -->
+      <div class="hidden sm:flex flex-col items-center gap-1 w-[300px] lg:w-[340px] shrink-0 mx-auto">
+        <div class="flex items-center gap-4">
+          <button onclick="showToast('跳转上一句')" class="p-1 rounded-full hover:bg-[var(--hover)]" style="color: var(--muted);">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M19 5.6v12.8c0 .8-.9 1.3-1.6.8l-9.4-6.4c-.6-.4-.6-1.2 0-1.6l9.4-6.4c.7-.5 1.6 0 1.6.8z"/></svg>
+          </button>
+          <button id="dock-play-btn" onclick="toggleDockPlay()"
+                  class="w-[32px] h-[32px] rounded-full flex items-center justify-center btn-spring shadow-sm"
+                  style="background: var(--text); color: var(--bg);">
+            <svg id="dock-play-icon" class="w-3.5 h-3.5 ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.6v14.8c0 .8.9 1.3 1.6.9l12-7.4c.6-.4.6-1.3 0-1.7l-12-7.4C7.9 3.3 7 3.8 7 4.6z"/></svg>
+            <svg id="dock-pause-icon" class="w-3.5 h-3.5 hidden" viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="4" width="4.5" height="16" rx="1.4"/><rect x="14" y="4" width="4.5" height="16" rx="1.4"/></svg>
+          </button>
+          <button onclick="showToast('跳转下一句')" class="p-1 rounded-full hover:bg-[var(--hover)]" style="color: var(--muted);">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5.6v12.8c0 .8.9 1.3 1.6.8l9.4-6.4c.6-.4.6-1.2 0-1.6L6.6 4.8C5.9 4.3 5 4.8 5 5.6z"/></svg>
+          </button>
+        </div>
+        <div class="w-full flex items-center gap-2">
+          <span class="text-[10.5px] tabular-nums" style="color: var(--faint);">00:08</span>
+          <div class="flex-1 h-1 rounded-full overflow-hidden" style="background: var(--surface2);">
+            <div class="h-full w-[14%] rounded-full" style="background: var(--accent);"></div>
+          </div>
+          <span class="text-[10.5px] tabular-nums" style="color: var(--faint);">02:13</span>
+        </div>
+      </div>
+
+      <!-- 右侧：音量 + 状态胶囊 + 进入校对 -->
+      <div class="flex items-center gap-2.5 ml-auto shrink-0">
+        <div class="hidden lg:flex items-center gap-1.5">
+          <svg class="w-4 h-4" style="color: var(--muted);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          </svg>
+          <div class="w-14 h-1 rounded-full overflow-hidden" style="background: var(--surface2);">
+            <div class="h-full w-[60%] rounded-full" style="background: var(--accent);"></div>
+          </div>
+        </div>
+        <span class="hidden md:inline-flex h-[22px] px-2.5 rounded-full text-[11px] font-bold items-center"
+              style="background: var(--ok-bg); color: var(--ok);">人声轨就绪</span>
+        <button onclick="showToast('切换到「编辑与校对」视图')"
+                class="h-[32px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                style="background: var(--surface2); color: var(--text);">
+          进入校对
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 隐藏的本地文本文件选择器（用于手动填词的「导入 .txt/.lrc」） -->
+  <input id="hidden-lrc-import" type="file" accept=".txt,.lrc" class="hidden" />
+
+  <script>
+    // =========================================================
+    // 1. 曲库模拟数据与状态管理
+    // =========================================================
+    const state = {
+      activeTab: 'nolyrics', // 默认选中「无歌词」Tab，直接展示新流程
+      searchQuery: '',
+      queueCount: 0,
+      batchIdOpen: false,
+      batchIdInputs: {}, // { trackId: rawInputString }
+      expandedRowId: null, // 当前展开内联抽屉的行 ID
+      expandedMode: null,  // 'netease' | 'manual'
+      dockPlaying: false,
+      importTargetId: null,
+      tracks: [
+        // 4 首无歌词歌曲（3 首全网无词 + 1 首本地缺词）
+        {
+          id: 'nl-1',
+          title: 'ずっと見ていたい',
+          artist: '芹澤 優',
+          file: 'Yukimoto_Yuzu喜欢的音乐 · flac',
+          status: 'nolyrics_notfound', // 全网无词
+          lang: '日文',
+          note: '多源均未搜到 · 批量跑库已自动跳过',
+          hue: 'linear-gradient(135deg, #f472b6, #db2777)',
+          selected: true,
+          enqueued: false,
+          enqueuedMode: '',
+          neteaseInput: '',
+          manualText: '',
+          manualLang: '日文'
+        },
+        {
+          id: 'nl-2',
+          title: '紅楼の夜明け (Vocal ver.)',
+          artist: '東方同人',
+          file: '不可描述 · flac',
+          status: 'nolyrics_notfound',
+          lang: '日文',
+          note: '多源均未搜到 · 批量跑库已自动跳过',
+          hue: 'linear-gradient(135deg, #c084fc, #7e22ce)',
+          selected: true,
+          enqueued: false,
+          enqueuedMode: '',
+          neteaseInput: '',
+          manualText: '',
+          manualLang: '日文'
+        },
+        {
+          id: 'nl-3',
+          title: '银河铁道之夜 (特典版)',
+          artist: '独立音乐人',
+          file: '不可描述 · mp3',
+          status: 'nolyrics_notfound',
+          lang: '中文',
+          note: '多源均未搜到 · 批量跑库已自动跳过',
+          hue: 'linear-gradient(135deg, #38bdf8, #0284c7)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: '',
+          neteaseInput: '',
+          manualText: '',
+          manualLang: '中文'
+        },
+        {
+          id: 'nl-4',
+          title: '晚风告白',
+          artist: '新下载曲目',
+          file: '不可描述 · flac',
+          status: 'nolyrics_local', // 本地缺词（未搜过）
+          lang: '中文',
+          note: '尚未搜索过全网歌词',
+          hue: 'linear-gradient(135deg, #fb923c, #ea580c)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: '',
+          neteaseInput: '',
+          manualText: '',
+          manualLang: '中文'
+        },
+
+        // 2 首仅整行 LRC
+        {
+          id: 'lo-1',
+          title: '突然的自我',
+          artist: '伍佰',
+          file: '不可描述 · flac',
+          status: 'line_only',
+          lang: '中文',
+          note: '仅整行 38 行 · 可升级为 SOFA 逐字',
+          hue: 'linear-gradient(135deg, #f87171, #b91c1c)',
+          selected: true,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+        {
+          id: 'lo-2',
+          title: '晴る',
+          artist: 'ヨルシカ',
+          file: '不可描述 · flac',
+          status: 'line_only',
+          lang: '日文',
+          note: '仅整行 44 行 · 可升级为 MMS 日语逐字',
+          hue: 'linear-gradient(135deg, #60a5fa, #2563eb)',
+          selected: true,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+
+        // 4 首示例逐字就绪歌曲（代表 15 首已就绪）
+        {
+          id: 'en-1',
+          title: '如何让白鼠爱上学习(英文翻唱)',
+          artist: 'A路人',
+          file: '不可描述 · mp3',
+          status: 'enhanced',
+          lang: '英文',
+          note: '逐字已就绪 · 135 行',
+          hue: 'linear-gradient(135deg, #ca8a04, #854d0e)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+        {
+          id: 'en-2',
+          title: '出不去系列 可怜萌妹',
+          artist: 'V.A.',
+          file: '不可描述 · mp3',
+          status: 'enhanced',
+          lang: '日文',
+          note: '逐字已就绪 · 74 行',
+          hue: 'linear-gradient(135deg, #38bdf8, #0369a1)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+        {
+          id: 'en-3',
+          title: '緋色月下、狂咲ノ絶 (1st Anniver...',
+          artist: 'nayuta',
+          file: '不可描述 · flac',
+          status: 'enhanced',
+          lang: '日文',
+          note: '逐字已就绪 · 333 行',
+          hue: 'linear-gradient(135deg, #4ade80, #15803d)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+        {
+          id: 'en-4',
+          title: '雷军 - Are You OK',
+          artist: '雷军',
+          file: '不可描述 · mp3',
+          status: 'enhanced',
+          lang: '英文',
+          note: '逐字已就绪 · 88 行',
+          hue: 'linear-gradient(135deg, #818cf8, #4f46e5)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+
+        // 3 首已排除（纯音乐 / OST / 伴奏）
+        {
+          id: 'in-1',
+          title: 'POWDER SNOW (off Vocals)',
+          artist: 'White Album 2',
+          file: '不可描述 · wav',
+          status: 'inst_accomp',
+          lang: '—',
+          note: '伴奏 / Off Vocal · 已从待处理中排除',
+          hue: 'linear-gradient(135deg, #94a3b8, #475569)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+        {
+          id: 'in-2',
+          title: '白2纯音乐 - 届かない恋',
+          artist: 'AQUAPLUS',
+          file: '白2纯音乐 · flac',
+          status: 'inst_ost',
+          lang: '—',
+          note: 'OST 原声配乐 · 已从待处理中排除',
+          hue: 'linear-gradient(135deg, #9ca3af, #4b5563)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        },
+        {
+          id: 'in-3',
+          title: '烟雨濛濛(人声曲)',
+          artist: '群星',
+          file: 'CD2 · wav',
+          status: 'inst_pure',
+          lang: '—',
+          note: '无词哼唱 / 纯音乐 · 已从待处理中排除',
+          hue: 'linear-gradient(135deg, #a1a1aa, #52525b)',
+          selected: false,
+          enqueued: false,
+          enqueuedMode: ''
+        }
+      ]
+    };
+
+    const TABS = [
+      { id: 'vocal',     label: '有效人声 21' },
+      { id: 'line_only', label: '待升级逐字 2' },
+      { id: 'enhanced',  label: '逐字就绪 15' },
+      { id: 'nolyrics',  label: '无歌词 4' },
+      { id: 'inst',      label: '纯音乐 / OST / 伴奏 3' }
+    ];
+
+    // =========================================================
+    // 2. 工具函数：解析网易云歌曲 ID（与 kiralrc/text.py parse_song_id 一致）
+    // =========================================================
+    function parseNeteaseId(raw) {
+      if (!raw) return null;
+      const text = String(raw).trim();
+      if (/^\d{4,}$/.test(text)) return text;
+      const m1 = text.match(/[?&#]id=(\d+)/) || text.match(/\/song\/(\d+)/);
+      if (m1) return m1[1];
+      const m2 = text.match(/\b(\d{4,})\b/);
+      return m2 ? m2[1] : null;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function isNoLyrics(t) {
+      return t.status === 'nolyrics_notfound' || t.status === 'nolyrics_local';
+    }
+
+    function isInst(t) {
+      return t.status === 'inst_pure' || t.status === 'inst_ost' || t.status === 'inst_accomp';
+    }
+
+    function getVisibleTracks() {
+      const q = state.searchQuery.trim().toLowerCase();
+      return state.tracks.filter(t => {
+        if (q) {
+          const hit = t.title.toLowerCase().includes(q) ||
+                      t.artist.toLowerCase().includes(q) ||
+                      t.file.toLowerCase().includes(q);
+          if (!hit) return false;
+        }
+        switch (state.activeTab) {
+          case 'vocal':     return !isInst(t);
+          case 'line_only': return t.status === 'line_only';
+          case 'nolyrics':  return isNoLyrics(t);
+          case 'enhanced':  return t.status === 'enhanced';
+          case 'inst':      return isInst(t);
+          default:          return true;
+        }
+      });
+    }
+
+    // =========================================================
+    // 3. Toast 提示系统与队列计数更新
+    // =========================================================
+    function showToast(msg) {
+      const container = document.getElementById('toast-container');
+      const el = document.createElement('div');
+      el.className = 'toast-anim pointer-events-auto px-4 py-2.5 rounded-full text-[12.5px] font-semibold shadow-xl flex items-center gap-2 max-w-[90vw]';
+      el.style.background = 'var(--toast-bg)';
+      el.style.color = 'var(--toast-text)';
+      el.innerHTML = `
+        <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--accent);"></span>
+        <span class="truncate">${escapeHtml(msg)}</span>
+      `;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(-6px)';
+        setTimeout(() => el.remove(), 260);
+      }, 3200);
+    }
+
+    function incrementQueue(n) {
+      if (n <= 0) return;
+      state.queueCount += n;
+      const badge = document.getElementById('nav-queue-badge');
+      badge.textContent = String(state.queueCount);
+      badge.classList.remove('hidden');
+    }
+
+    // =========================================================
+    // 4. 交互动作
+    // =========================================================
+    function switchTab(tabId) {
+      state.activeTab = tabId;
+      if (tabId !== 'nolyrics') {
+        state.batchIdOpen = false;
+        state.expandedRowId = null;
+        state.expandedMode = null;
+      }
+      render();
+    }
+
+    function toggleTrackSelect(id) {
+      const tr = state.tracks.find(t => t.id === id);
+      if (!tr) return;
+      tr.selected = !tr.selected;
+      render();
+    }
+
+    function selectVisibleTracks(flag) {
+      const vis = getVisibleTracks();
+      vis.forEach(t => { t.selected = flag; });
+      render();
+    }
+
+    function toggleInlineDrawer(id, mode) {
+      if (state.expandedRowId === id && state.expandedMode === mode) {
+        state.expandedRowId = null;
+        state.expandedMode = null;
+      } else {
+        state.expandedRowId = id;
+        state.expandedMode = mode;
+      }
+      render();
+    }
+
+    function toggleBatchIdDrawer() {
+      state.batchIdOpen = !state.batchIdOpen;
+      if (state.batchIdOpen) {
+        state.expandedRowId = null;
+        state.expandedMode = null;
+      }
+      render();
+    }
+
+    function enqueueSingleAsr(id) {
+      const tr = state.tracks.find(t => t.id === id);
+      if (!tr) return;
+      tr.enqueued = true;
+      tr.enqueuedMode = 'ASR 本地识别';
+      incrementQueue(1);
+      showToast(`已入队 1 首（--asr-fallback 本地人声识别）：${tr.title}`);
+      render();
+    }
+
+    function enqueueBatchAsr() {
+      const sel = getVisibleTracks().filter(t => t.selected);
+      if (sel.length === 0) {
+        showToast('请先勾选至少 1 首无歌词歌曲');
+        return;
+      }
+      sel.forEach(t => {
+        t.enqueued = true;
+        t.enqueuedMode = 'ASR 本地识别';
+      });
+      incrementQueue(sel.length);
+      showToast(`已入队 ${sel.length} 首（--asr-fallback 本地人声识别）`);
+      render();
+    }
+
+    function enqueueRetrySearch() {
+      const sel = getVisibleTracks().filter(t => t.selected);
+      if (sel.length === 0) {
+        showToast('请先勾选要重试全网搜索的歌曲');
+        return;
+      }
+      sel.forEach(t => {
+        t.enqueued = true;
+        t.enqueuedMode = '重试全网搜索';
+      });
+      incrementQueue(sel.length);
+      showToast(`已入队 ${sel.length} 首（重新尝试 网易云 → QQ → 酷狗 → LRCLIB）`);
+      render();
+    }
+
+    function enqueueSingleNetease(id) {
+      const tr = state.tracks.find(t => t.id === id);
+      if (!tr) return;
+      const parsed = parseNeteaseId(tr.neteaseInput);
+      if (!parsed) {
+        showToast('请输入有效的网易云歌曲 ID 或详情页链接');
+        return;
+      }
+      tr.enqueued = true;
+      tr.enqueuedMode = `网易云 ID ${parsed}`;
+      state.expandedRowId = null;
+      state.expandedMode = null;
+      incrementQueue(1);
+      showToast(`已入队 1 首（--netease-id ${parsed}）：${tr.title}`);
+      render();
+    }
+
+    function enqueueBatchNetease() {
+      const targets = getBatchIdTargets();
+      const valid = [];
+      targets.forEach(t => {
+        const pid = parseNeteaseId(state.batchIdInputs[t.id] || t.neteaseInput);
+        if (pid) valid.push({ track: t, nid: pid });
+      });
+      if (valid.length === 0) {
+        showToast('尚未填写有效的网易云歌曲 ID，请至少填写 1 首');
+        return;
+      }
+      valid.forEach(({ track, nid }) => {
+        track.enqueued = true;
+        track.enqueuedMode = `网易云 ID ${nid}`;
+        track.neteaseInput = state.batchIdInputs[track.id] || track.neteaseInput;
+      });
+      state.batchIdOpen = false;
+      incrementQueue(valid.length);
+      showToast(`已按 --netease-id 批量入队 ${valid.length} 首（未填写的行已跳过）`);
+      render();
+    }
+
+    function enqueueBatchNetease() {
+      const targets = getBatchIdTargets();
+      const valid = [];
+      targets.forEach(t => {
+        const pid = parseNeteaseId(state.batchIdInputs[t.id] || t.neteaseInput);
+        if (pid) valid.push({ track: t, nid: pid });
+      });
+      if (valid.length === 0) {
+        showToast('尚未填写有效的网易云歌曲 ID，请至少填写 1 首');
+        return;
+      }
+      valid.forEach(({ track, nid }) => {
+        track.enqueued = true;
+        track.enqueuedMode = `网易云 ID ${nid}`;
+        track.neteaseInput = state.batchIdInputs[track.id] || track.neteaseInput;
+      });
+      state.batchIdOpen = false;
+      incrementQueue(valid.length);
+      showToast(`已按网易云 ID 批量入队 ${valid.length} 首（未填写的行已跳过）`);
+      render();
+    }
+
+    function enqueueSingleManual(id) {
+      const tr = state.tracks.find(t => t.id === id);
+      if (!tr) return;
+      const lines = tr.manualText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (lines.length === 0) {
+        showToast('请先粘贴或输入至少 1 行歌词文本');
+        return;
+      }
+      tr.enqueued = true;
+      tr.enqueuedMode = `手动参考词 (${lines.length}行)`;
+      state.expandedRowId = null;
+      state.expandedMode = null;
+      incrementQueue(1);
+      showToast(`已保存 ${lines.length} 行参考词并入队（--ref manual.ref.txt --lang ${tr.manualLang}）：${tr.title}`);
+      render();
+    }
+
+    function pasteSampleLyrics(id) {
+      const tr = state.tracks.find(t => t.id === id);
+      if (!tr) return;
+      const samples = {
+        'nl-1': "ずっと見ていたい 君の横顔を\n風の吹く午後に そっと寄り添って\n言葉にできない 想いが溢れて\nこのまま時間が 止まればいいのに",
+        'nl-2': "紅い月が照らす 夜明け前の空\n静かに揺れる 記憶の欠片\n手を伸ばせば 届きそうなのに",
+        'nl-3': "银河铁道的列车 穿过静谧的夜空\n窗外星光点点 像未说完的梦\n我们在站台告别 约定下一个黎明",
+        'nl-4': "晚风轻轻吹过 街角的路灯下\n你的笑容像夏夜 最温柔的星光"
+      };
+      // 优先尝试读取真实剪贴板；在沙盒受限时回退示例歌词，保证原型可直接演示
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(txt => {
+          if (txt && txt.trim()) {
+            tr.manualText = txt.trim();
+            showToast('已从剪贴板粘贴歌词文本');
+          } else {
+            tr.manualText = samples[id] || samples['nl-3'];
+            showToast('剪贴板为空，已填入示例歌词供预览');
+          }
+          render();
+        }).catch(() => {
+          tr.manualText = samples[id] || samples['nl-3'];
+          showToast('已从剪贴板填充示例歌词（浏览器沙盒模式）');
+          render();
+        });
+      } else {
+        tr.manualText = samples[id] || samples['nl-3'];
+        showToast('已填入示例歌词供预览');
+        render();
+      }
+    }
+
+    function triggerImportFile(id) {
+      state.importTargetId = id;
+      const inp = document.getElementById('hidden-lrc-import');
+      inp.value = '';
+      inp.click();
+    }
+
+    function enqueueAllLineOnly() {
+      const list = state.tracks.filter(t => t.status === 'line_only');
+      list.forEach(t => {
+        t.enqueued = true;
+        t.enqueuedMode = '升级逐字';
+      });
+      incrementQueue(list.length);
+      showToast(`已批量入队 ${list.length} 首仅整行 LRC 歌曲升级逐字`);
+      render();
+    }
+
+    function enqueueSelectedStandard() {
+      const sel = getVisibleTracks().filter(t => t.selected);
+      if (sel.length === 0) return;
+      sel.forEach(t => {
+        t.enqueued = true;
+        t.enqueuedMode = '队列对齐';
+      });
+      incrementQueue(sel.length);
+      showToast(`已将选中的 ${sel.length} 首歌曲加入任务队列`);
+      render();
+    }
+
+    function getBatchIdTargets() {
+      const nlTracks = state.tracks.filter(isNoLyrics);
+      const sel = nlTracks.filter(t => t.selected);
+      return sel.length > 0 ? sel : nlTracks;
+    }
+
+    function toggleDockPlay() {
+      state.dockPlaying = !state.dockPlaying;
+      const vinyl = document.getElementById('dock-vinyl');
+      const playIc = document.getElementById('dock-play-icon');
+      const pauseIc = document.getElementById('dock-pause-icon');
+      if (state.dockPlaying) {
+        vinyl.classList.remove('vinyl-paused');
+        playIc.classList.add('hidden');
+        pauseIc.classList.remove('hidden');
+      } else {
+        vinyl.classList.add('vinyl-paused');
+        playIc.classList.remove('hidden');
+        pauseIc.classList.add('hidden');
+      }
+    }
+
+    // =========================================================
+    // 5. 渲染逻辑
+    // =========================================================
+    function render() {
+      renderStatCards();
+      renderTabs();
+      renderBatchBar();
+      renderBatchIdDrawer();
+      renderTrackList();
+    }
+
+    function renderStatCards() {
+      document.querySelectorAll('#stat-cards [data-card-tab]').forEach(btn => {
+        const match = btn.getAttribute('data-card-tab') === state.activeTab;
+        btn.classList.toggle('active-card', match);
+      });
+    }
+
+    function renderTabs() {
+      const wrap = document.getElementById('filter-tabs');
+      wrap.innerHTML = TABS.map(tab => {
+        const active = tab.id === state.activeTab;
+        return `
+          <button onclick="switchTab('${tab.id}')"
+                  class="h-[32px] px-4 rounded-full text-[13px] font-bold btn-spring"
+                  style="background: ${active ? 'var(--accent)' : 'transparent'}; color: ${active ? 'var(--on-accent)' : 'var(--muted)'};">
+            ${tab.label}
+          </button>
+        `;
+      }).join('');
+
+      const instPills = document.getElementById('inst-pills');
+      if (state.activeTab === 'inst') {
+        instPills.classList.remove('hidden');
+        instPills.classList.add('flex');
+      } else {
+        instPills.classList.add('hidden');
+        instPills.classList.remove('flex');
+      }
+    }
+
+    function renderBatchBar() {
+      const bar = document.getElementById('batch-bar');
+      const vis = getVisibleTracks();
+      const selCount = vis.filter(t => t.selected).length;
+
+      if (state.activeTab === 'nolyrics') {
+        bar.innerHTML = `
+          <span class="text-[13px] font-bold">已选择 ${selCount} 首无歌词歌曲</span>
+          <button onclick="selectVisibleTracks(true)"
+                  class="h-[30px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                  style="background: var(--surface2); color: var(--text);">全选本页</button>
+          ${selCount > 0 ? `
+            <button onclick="selectVisibleTracks(false)"
+                    class="h-[30px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                    style="background: var(--surface2); color: var(--muted);">取消全选</button>
+          ` : ''}
+          <div class="flex-1"></div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button onclick="toggleBatchIdDrawer()"
+                    class="h-[32px] px-3.5 rounded-full text-[12.5px] font-semibold flex items-center gap-1.5 btn-spring border"
+                    style="background: ${state.batchIdOpen ? 'var(--accent-soft)' : 'var(--surface2)'}; color: ${state.batchIdOpen ? 'var(--accent)' : 'var(--text)'}; border-color: ${state.batchIdOpen ? 'var(--accent)' : 'transparent'};">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              批量填网易云 ID
+            </button>
+            <button onclick="enqueueRetrySearch()"
+                    class="h-[32px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                    style="background: var(--surface2); color: var(--text);">
+              重试全网搜索
+            </button>
+            <button onclick="enqueueBatchAsr()"
+                    class="h-[32px] px-4 rounded-full text-[12.5px] font-bold flex items-center gap-1.5 btn-spring ${selCount === 0 ? 'opacity-50' : ''}"
+                    style="background: var(--accent); color: var(--on-accent);">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
+              本地 ASR 识别并对齐${selCount > 0 ? `（${selCount} 首）` : ''}
+            </button>
+          </div>
+        `;
+      } else {
+        bar.innerHTML = `
+          <span class="text-[13px] font-bold">已选择 ${selCount} 首歌曲</span>
+          <button onclick="selectVisibleTracks(true)"
+                  class="h-[30px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                  style="background: var(--surface2); color: var(--text);">全选本页</button>
+          ${selCount > 0 ? `
+            <button onclick="selectVisibleTracks(false)"
+                    class="h-[30px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                    style="background: var(--surface2); color: var(--muted);">取消全选</button>
+          ` : ''}
+          <div class="flex-1"></div>
+          ${selCount > 0 ? `
+            <button onclick="enqueueSelectedStandard()"
+                    class="h-[32px] px-4 rounded-full text-[12.5px] font-bold flex items-center gap-1.5 btn-spring"
+                    style="background: var(--accent); color: var(--on-accent);">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.6v14.8c0 .8.9 1.3 1.6.9l12-7.4c.6-.4.6-1.3 0-1.7l-12-7.4C7.9 3.3 7 3.8 7 4.6z"/></svg>
+              开始对齐歌词（${selCount} 首）
+            </button>
+          ` : `
+            <span class="text-[12px]" style="color: var(--muted);">勾选下方歌曲后即可一键批量对齐歌词</span>
+          `}
+        `;
+      }
+    }
+
+    function renderBatchIdDrawer() {
+      const drawer = document.getElementById('batch-id-drawer');
+      if (state.activeTab !== 'nolyrics' || !state.batchIdOpen) {
+        drawer.classList.add('hidden');
+        drawer.classList.remove('flex');
+        return;
+      }
+      drawer.classList.remove('hidden');
+      drawer.classList.add('flex');
+
+      const targets = getBatchIdTargets();
+      let filledCount = 0;
+      const rowsHtml = targets.map(t => {
+        const val = state.batchIdInputs[t.id] ?? t.neteaseInput ?? '';
+        const pid = parseNeteaseId(val);
+        if (pid) filledCount++;
+        return `
+          <div class="flex flex-col sm:flex-row sm:items-center gap-2.5 p-2.5 rounded-[12px] border"
+               style="background: var(--bg); border-color: var(--hairline);">
+            <div class="w-full sm:w-[210px] shrink-0 min-w-0">
+              <div class="text-[13px] font-bold truncate">${escapeHtml(t.title)}</div>
+              <div class="text-[11px] truncate" style="color: var(--muted);">${escapeHtml(t.artist)} · ${escapeHtml(t.lang)}</div>
+            </div>
+            <div class="flex-1 flex items-center gap-2 min-w-0">
+              <input type="text"
+                     value="${escapeHtml(val)}"
+                     oninput="onBatchIdInput('${t.id}', this.value)"
+                     placeholder="粘贴网易云歌曲 ID 或详情页 URL（如 music.163.com/#/song?id=30967650）"
+                     class="flex-1 min-w-0 h-[34px] px-3 rounded-[9px] text-[12.5px] outline-none border transition-colors focus:border-[var(--accent)]"
+                     style="background: var(--surface); border-color: var(--hairline); color: var(--text);" />
+              <span id="batch-badge-${t.id}"
+                    class="h-[24px] px-2.5 rounded-full text-[11px] font-bold flex items-center shrink-0 ${pid ? '' : 'opacity-45'}"
+                    style="background: ${pid ? 'var(--ok-bg)' : 'var(--surface2)'}; color: ${pid ? 'var(--ok)' : 'var(--muted)'};">
+                ${pid ? `✓ ID: ${pid}` : '待填写'}
+              </span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      drawer.innerHTML = `
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <div class="text-[14px] font-bold">批量填写网易云歌曲 ID</div>
+            <div class="text-[11.5px]" style="color: var(--muted);">部分冷门/特典曲搜索不到但支持按 ID 直接下载歌词，直接粘贴浏览器地址栏 URL 即可自动提取 ID</div>
+          </div>
+          <button onclick="toggleBatchIdDrawer()" class="p-1.5 rounded-full hover:bg-[var(--hover)]" style="color: var(--muted);">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="flex flex-col gap-2">${rowsHtml}</div>
+        <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+          <span class="text-[12px]" style="color: var(--muted);">提示：未填写的行会自动跳过，不影响其它歌曲入队</span>
+          <div class="flex items-center gap-2">
+            <button onclick="toggleBatchIdDrawer()"
+                    class="h-[32px] px-4 rounded-full text-[12.5px] font-semibold btn-spring"
+                    style="background: var(--surface2); color: var(--muted);">取消</button>
+            <button id="batch-id-submit-btn" onclick="enqueueBatchNetease()"
+                    class="h-[32px] px-4 rounded-full text-[12.5px] font-bold btn-spring"
+                    style="background: var(--accent); color: var(--on-accent);">
+              一键下载并入队（已填 ${filledCount} 首）
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // 实时更新批量 ID 解析徽章，不重绘整棵 DOM 以免丢失输入焦点
+    function onBatchIdInput(trackId, value) {
+      state.batchIdInputs[trackId] = value;
+      const badge = document.getElementById(`batch-badge-${trackId}`);
+      const pid = parseNeteaseId(value);
+      if (badge) {
+        if (pid) {
+          badge.textContent = `✓ ID: ${pid}`;
+          badge.style.background = 'var(--ok-bg)';
+          badge.style.color = 'var(--ok)';
+          badge.classList.remove('opacity-45');
+        } else {
+          badge.textContent = '待填写';
+          badge.style.background = 'var(--surface2)';
+          badge.style.color = 'var(--muted)';
+          badge.classList.add('opacity-45');
+        }
+      }
+      const targets = getBatchIdTargets();
+      let filled = 0;
+      targets.forEach(t => {
+        if (parseNeteaseId(state.batchIdInputs[t.id] ?? t.neteaseInput ?? '')) filled++;
+      });
+      const submitBtn = document.getElementById('batch-id-submit-btn');
+      if (submitBtn) {
+        submitBtn.textContent = `一键下载并入队（已填 ${filled} 首）`;
+      }
+    }
+
+    function onSingleIdInput(trackId, value) {
+      const tr = state.tracks.find(t => t.id === trackId);
+      if (tr) tr.neteaseInput = value;
+      const badge = document.getElementById(`single-badge-${trackId}`);
+      const pid = parseNeteaseId(value);
+      if (badge) {
+        if (pid) {
+          badge.textContent = `✓ 已识别 ID: ${pid}`;
+          badge.style.background = 'var(--ok-bg)';
+          badge.style.color = 'var(--ok)';
+        } else {
+          badge.textContent = '支持纯数字或完整歌曲链接';
+          badge.style.background = 'var(--surface2)';
+          badge.style.color = 'var(--muted)';
+        }
+      }
+    }
+
+    function onManualTextInput(trackId, value) {
+      const tr = state.tracks.find(t => t.id === trackId);
+      if (tr) tr.manualText = value;
+      const cnt = value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).length;
+      const el = document.getElementById(`manual-count-${trackId}`);
+      if (el) el.textContent = `当前 ${cnt} 行`;
+    }
+
+    function setManualLang(trackId, lang) {
+      const tr = state.tracks.find(t => t.id === trackId);
+      if (tr) {
+        tr.manualLang = lang;
+        render();
+      }
+    }
+
+    function statusBadgeHtml(tr) {
+      if (tr.enqueued) {
+        return `<span class="h-[22px] px-2.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1"
+                      style="background: var(--ok-bg); color: var(--ok);">
+                  <span class="w-1.5 h-1.5 rounded-full" style="background: var(--ok);"></span>已入队
+                </span>`;
+      }
+      switch (tr.status) {
+        case 'enhanced':
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--ok-bg); color: var(--ok);">逐字</span>`;
+        case 'line_only':
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--accent-soft); color: var(--accent);">仅整行</span>`;
+        case 'nolyrics_notfound':
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--warn-bg); color: var(--warn);">全网无词</span>`;
+        case 'nolyrics_local':
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--surface2); color: var(--muted);">本地缺词</span>`;
+        case 'inst_accomp':
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--surface2); color: var(--muted);">伴奏</span>`;
+        case 'inst_ost':
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--surface2); color: var(--muted);">OST 原声</span>`;
+        default:
+          return `<span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center" style="background: var(--surface2); color: var(--muted);">纯音乐</span>`;
+      }
+    }
+
+    function renderTrackList() {
+      const list = document.getElementById('track-list');
+      const theadActions = document.getElementById('thead-actions');
+      theadActions.style.width = state.activeTab === 'nolyrics' ? '238px' : '76px';
+
+      const vis = getVisibleTracks();
+      if (vis.length === 0) {
+        list.innerHTML = `
+          <div class="rounded-[16px] py-12 text-center border" style="background: var(--surface); border-color: var(--hairline);">
+            <div class="text-[14px] font-bold">没有匹配的歌曲</div>
+            <div class="text-[12px] mt-1" style="color: var(--muted);">请调整搜索关键词或切换筛选标签</div>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = vis.map(tr => {
+        const isNlTab = state.activeTab === 'nolyrics';
+        const isExpanded = state.expandedRowId === tr.id;
+        const noteText = tr.enqueued ? `${tr.enqueuedMode} · 已加入任务队列` : tr.note;
+
+        // 右侧操作按钮区
+        let actionsHtml = '';
+        if (isNlTab) {
+          const idActive = isExpanded && state.expandedMode === 'netease';
+          const manActive = isExpanded && state.expandedMode === 'manual';
+          actionsHtml = `
+            <div class="flex items-center justify-end gap-1.5 shrink-0 w-full md:w-[238px]">
+              <button onclick="event.stopPropagation(); toggleInlineDrawer('${tr.id}', 'netease')"
+                      class="h-[28px] px-2.5 rounded-full text-[11.5px] font-semibold btn-spring border"
+                      style="background: ${idActive ? 'var(--accent)' : 'var(--surface2)'}; color: ${idActive ? 'var(--on-accent)' : 'var(--text)'}; border-color: transparent;">
+                网易云 ID
+              </button>
+              <button onclick="event.stopPropagation(); toggleInlineDrawer('${tr.id}', 'manual')"
+                      class="h-[28px] px-2.5 rounded-full text-[11.5px] font-semibold btn-spring border"
+                      style="background: ${manActive ? 'var(--accent)' : 'var(--surface2)'}; color: ${manActive ? 'var(--on-accent)' : 'var(--text)'}; border-color: transparent;">
+                手动填词
+              </button>
+              <button onclick="event.stopPropagation(); enqueueSingleAsr('${tr.id}')"
+                      class="h-[28px] px-2.5 rounded-full text-[11.5px] font-bold btn-spring"
+                      style="background: var(--accent-soft); color: var(--accent);">
+                本地 ASR
+              </button>
+            </div>
+          `;
+        } else {
+          actionsHtml = `
+            <div class="flex items-center justify-end gap-1 shrink-0 w-[76px]">
+              <button onclick="event.stopPropagation(); showToast('前往新建对齐：${escapeHtml(tr.title)}')"
+                      title="对齐 ${escapeHtml(tr.title)}"
+                      class="w-7 h-7 rounded-full flex items-center justify-center hover:bg-[var(--hover)] btn-spring"
+                      style="color: var(--muted);">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.6v14.8c0 .8.9 1.3 1.6.9l12-7.4c.6-.4.6-1.3 0-1.7l-12-7.4C7.9 3.3 7 3.8 7 4.6z"/></svg>
+              </button>
+              <button onclick="event.stopPropagation(); showToast('打开校对：${escapeHtml(tr.title)}')"
+                      title="校对 ${escapeHtml(tr.title)}"
+                      class="w-7 h-7 rounded-full flex items-center justify-center hover:bg-[var(--hover)] btn-spring"
+                      style="color: var(--muted);">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+          `;
+        }
+
+        // 内联展开抽屉（单曲网易云 ID / 单曲手动填词）
+        let drawerHtml = '';
+        if (isNlTab && isExpanded && state.expandedMode === 'netease') {
+          const pid = parseNeteaseId(tr.neteaseInput);
+          drawerHtml = `
+            <div class="drawer-anim mx-3 mb-2 mt-0.5 p-3.5 rounded-[14px] border flex flex-col gap-2.5"
+                 style="background: var(--surface); border-color: var(--hairline);">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-[12.5px] font-bold">通过网易云歌曲 ID 直接下载歌词并对齐</span>
+                <span id="single-badge-${tr.id}" class="h-[22px] px-2.5 rounded-full text-[11px] font-bold inline-flex items-center"
+                      style="background: ${pid ? 'var(--ok-bg)' : 'var(--surface2)'}; color: ${pid ? 'var(--ok)' : 'var(--muted)'};">
+                  ${pid ? `✓ 已识别 ID: ${pid}` : '支持纯数字或完整歌曲链接'}
+                </span>
+              </div>
+              <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input type="text"
+                       value="${escapeHtml(tr.neteaseInput)}"
+                       oninput="onSingleIdInput('${tr.id}', this.value)"
+                       placeholder="例如：30967650 或 https://music.163.com/#/song?id=30967650"
+                       class="flex-1 h-[36px] px-3 rounded-[10px] text-[12.5px] outline-none border focus:border-[var(--accent)]"
+                       style="background: var(--bg); border-color: var(--hairline); color: var(--text);" />
+                <button onclick="enqueueSingleNetease('${tr.id}')"
+                        class="h-[36px] px-4 rounded-full text-[12.5px] font-bold shrink-0 btn-spring"
+                        style="background: var(--accent); color: var(--on-accent);">
+                  下载歌词并对齐
+                </button>
+                <button onclick="toggleInlineDrawer('${tr.id}', 'netease')"
+                        class="h-[36px] px-3.5 rounded-full text-[12.5px] font-semibold shrink-0 btn-spring"
+                        style="background: var(--surface2); color: var(--muted);">
+                  收起
+                </button>
+              </div>
+            </div>
+          `;
+        } else if (isNlTab && isExpanded && state.expandedMode === 'manual') {
+          const lineCount = tr.manualText.split(/\r?\n/).map(s => s.trim()).filter(Boolean).length;
+          const langs = ['中文', '日文', '英文'];
+          drawerHtml = `
+            <div class="drawer-anim mx-3 mb-2 mt-0.5 p-3.5 rounded-[14px] border flex flex-col gap-2.5"
+                 style="background: var(--surface); border-color: var(--hairline);">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-[12.5px] font-bold mr-1">手动输入参考歌词</span>
+                <!-- 语言分段选择 -->
+                <div class="inline-flex p-0.5 rounded-[9px]" style="background: var(--surface2);">
+                  ${langs.map(lg => `
+                    <button onclick="setManualLang('${tr.id}', '${lg}')"
+                            class="px-2.5 py-1 rounded-[7px] text-[11.5px] font-bold transition-all"
+                            style="background: ${tr.manualLang === lg ? 'var(--raised)' : 'transparent'}; color: ${tr.manualLang === lg ? 'var(--text)' : 'var(--muted)'}; box-shadow: ${tr.manualLang === lg ? '0 1px 3px rgba(0,0,0,0.12)' : 'none'};">
+                      ${lg}
+                    </button>
+                  `).join('')}
+                </div>
+                <div class="flex-1"></div>
+                <button onclick="pasteSampleLyrics('${tr.id}')"
+                        class="h-[28px] px-3 rounded-full text-[11.5px] font-semibold btn-spring"
+                        style="background: var(--surface2); color: var(--text);">从剪贴板粘贴</button>
+                <button onclick="triggerImportFile('${tr.id}')"
+                        class="h-[28px] px-3 rounded-full text-[11.5px] font-semibold btn-spring"
+                        style="background: var(--surface2); color: var(--text);">导入 .txt/.lrc</button>
+                <button onclick="showToast('已生成 work/manual.ref.txt 并调用系统记事本打开')"
+                        class="h-[28px] px-3 rounded-full text-[11.5px] font-semibold btn-spring"
+                        style="background: var(--surface2); color: var(--text);">用记事本编辑</button>
+              </div>
+              <textarea rows="4"
+                        oninput="onManualTextInput('${tr.id}', this.value)"
+                        placeholder="每行输入一句歌词（纯文本即可，无需时间戳；也支持直接粘贴整行 LRC）…"
+                        class="w-full p-3 rounded-[10px] text-[12.5px] leading-relaxed outline-none border resize-y focus:border-[var(--accent)]"
+                        style="background: var(--bg); border-color: var(--hairline); color: var(--text);">${escapeHtml(tr.manualText)}</textarea>
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span id="manual-count-${tr.id}" class="text-[11.5px]" style="color: var(--muted);">当前 ${lineCount} 行 · 将自动走 ASR 句定位 + 歌声逐字强制对齐</span>
+                <div class="flex items-center gap-2">
+                  <button onclick="toggleInlineDrawer('${tr.id}', 'manual')"
+                          class="h-[32px] px-3.5 rounded-full text-[12.5px] font-semibold btn-spring"
+                          style="background: var(--surface2); color: var(--muted);">取消</button>
+                  <button onclick="enqueueSingleManual('${tr.id}')"
+                          class="h-[32px] px-4 rounded-full text-[12.5px] font-bold btn-spring"
+                          style="background: var(--accent); color: var(--on-accent);">保存参考词并开始对齐</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        return `
+          <div class="flex flex-col">
+            <div onclick="toggleTrackSelect('${tr.id}')"
+                 class="relative flex flex-wrap md:flex-nowrap items-center gap-3 min-h-[54px] px-3 py-2 rounded-[12px] cursor-pointer transition-colors"
+                 style="background: ${tr.selected ? 'var(--accent-soft)' : 'transparent'};"
+                 onmouseenter="if(!${tr.selected}) this.style.background='var(--hover)'"
+                 onmouseleave="if(!${tr.selected}) this.style.background='transparent'">
+              ${tr.selected ? `<span class="absolute left-[3px] top-1/2 -translate-y-1/2 w-[3.5px] h-5 rounded-full" style="background: var(--accent);"></span>` : ''}
+
+              <!-- 复选框 -->
+              <div class="w-[18px] h-[18px] rounded-[6px] flex items-center justify-center shrink-0 transition-colors"
+                   style="background: ${tr.selected ? 'var(--accent)' : 'transparent'}; border: ${tr.selected ? 'none' : '1.5px solid var(--faint)'};">
+                ${tr.selected ? `<svg class="w-3 h-3" style="color: var(--on-accent);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>` : ''}
+              </div>
+
+              <!-- 封面 + 标题 -->
+              <div class="flex items-center gap-3 w-[220px] md:w-[260px] shrink-0 min-w-0">
+                <div class="w-9 h-9 rounded-[8px] shrink-0 shadow-sm" style="background: ${tr.hue};"></div>
+                <div class="min-w-0">
+                  <div class="text-[13.5px] font-bold truncate">${escapeHtml(tr.title)}</div>
+                  <div class="text-[11.5px] truncate" style="color: var(--muted);">${escapeHtml(tr.file)}</div>
+                </div>
+              </div>
+
+              <!-- 艺术家 -->
+              <div class="w-[110px] shrink-0 text-[13px] truncate">${escapeHtml(tr.artist)}</div>
+
+              <!-- 状态胶囊 -->
+              <div class="w-[96px] shrink-0">${statusBadgeHtml(tr)}</div>
+
+              <!-- 语言胶囊 -->
+              <div class="w-[56px] shrink-0">
+                <span class="h-[22px] px-2.5 rounded-full text-[11.5px] font-bold inline-flex items-center"
+                      style="background: var(--surface2); color: var(--muted);">${escapeHtml(tr.lang)}</span>
+              </div>
+
+              <!-- 备注 -->
+              <div class="flex-1 min-w-[140px] text-[12px] truncate" style="color: var(--muted);">${escapeHtml(noteText)}</div>
+
+              <!-- 右侧操作 -->
+              ${actionsHtml}
+            </div>
+            ${drawerHtml}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // =========================================================
+    // 6. 事件绑定与初始化
+    // =========================================================
+    document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+      const isDark = document.documentElement.classList.toggle('dark');
+      document.getElementById('icon-sun').classList.toggle('hidden', isDark);
+      document.getElementById('icon-moon').classList.toggle('hidden', !isDark);
+    });
+
+    const searchInput = document.getElementById('sidebar-search');
+    const clearSearchBtn = document.getElementById('clear-search-btn');
+    searchInput.addEventListener('input', e => {
+      state.searchQuery = e.target.value;
+      clearSearchBtn.classList.toggle('hidden', !state.searchQuery);
+      renderTrackList();
+    });
+    clearSearchBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      state.searchQuery = '';
+      clearSearchBtn.classList.add('hidden');
+      renderTrackList();
+    });
+
+    document.getElementById('hidden-lrc-import').addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (!file || !state.importTargetId) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const tr = state.tracks.find(t => t.id === state.importTargetId);
+        if (tr) {
+          tr.manualText = String(reader.result || '').trim();
+          showToast(`已导入 ${file.name}`);
+          render();
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    });
+
+    // 初始渲染
+    render();
+  </script>
+</body>
+</html>
