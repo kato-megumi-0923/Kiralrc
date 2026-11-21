@@ -197,6 +197,19 @@ func TestNoLyricsWorkflowAndNeteaseIDParsing(t *testing.T) {
 	if !a.libBatchIdOpen {
 		t.Fatalf("expected libBatchIdOpen=true")
 	}
+
+	// Verify nolyrics_notfound sorts ahead of missing, and creating .lrc auto-clears notFoundPaths
+	a3 := filepath.Join(tmp, "新歌 - 本地缺词.flac")
+	_ = os.WriteFile(a3, []byte("RIFF"), 0o644)
+	a.tracks, a.libStats = a.scanLibrarySync()
+	if len(a.tracks) < 2 || a.tracks[0].Status != "nolyrics_notfound" || a.tracks[1].Status != "missing" {
+		t.Fatalf("expected nolyrics_notfound before missing, got %+v", a.tracks)
+	}
+	_ = os.WriteFile(filepath.Join(tmp, "芹澤優 - ずっと見ていたい.lrc"), []byte("[00:01.000]ずっと見ていたい\n"), 0o644)
+	a.tracks, a.libStats = a.scanLibrarySync()
+	if a.notFoundPaths[normPathKey(a1)] || a.libStats.NotFound != 0 {
+		t.Fatalf("expected notFoundPaths auto-cleared once .lrc exists, got %+v", a.notFoundPaths)
+	}
 }
 
 func TestInlineLyricLineEditAndRefreshDeletedLrc(t *testing.T) {

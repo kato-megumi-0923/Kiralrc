@@ -37,6 +37,9 @@ def cmd_align(a) -> int:
     except pipeline.NoVocalError as e:
         print(f"[skip] {src.name}: {e}")
         return 0
+    except pipeline.NoLyricsError as e:
+        print(f"[skip-nolyrics] {src.name}: {e}")
+        return 0
 
     out = Path(a.out) if a.out else src.with_suffix(".lrc")
     if a.dry:

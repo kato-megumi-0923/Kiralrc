@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes
 import difflib
 import os
+import re
 import sys
 
 import numpy as np
@@ -280,6 +281,115 @@ def transcribe_zh_firered(audio: np.ndarray, device: str | None = None, batch_si
                 words.append({"w": text, "s": s_sec, "e": e_sec, "p": 1.0})
 
     return words, segs, dur
+
+
+_HALLUCINATION_RE = re.compile(
+    r"(字幕|订阅|点赞|投币|收藏|关注|感谢观看|感谢收看|谢谢观看|请不吝点赞|"
+    r"ご視聴ありがとう|チャンネル登録|高評価|お疲れ様でした|"
+    r"amara\.org|subtitles?\s+by|captioned\s+by|thank(s|\s+you)\s+for\s+watching|"
+    r"please\s+subscribe|mbc\s*뉴스|sbs\s*뉴스)",
+    re.I,
+)
+
+
+def _is_hallucination_or_loop(text: str) -> bool:
+    s = text.strip()
+    if not s:
+        return True
+    if _HALLUCINATION_RE.search(s):
+        return True
+    # 过滤纯标点/符号
+    core = re.sub(r"[\s\W_]+", "", s, flags=re.UNICODE)
+    if not core:
+        return True
+    # 异常复读检测：单字连刷 >= 6 次，或短片段循环重复 >= 4 次
+    if re.search(r"(.)\1{5,}", core):
+        return True
+    if re.search(r"(.{2,8})\1{3,}", core):
+        return True
+    return False
+
+
+def _join_word_tokens(tokens: list[str]) -> str:
+    """把 Whisper 的 word token 拼回自然句：CJK/假名间不加多余空格，拉丁词间保留空格。"""
+    out: list[str] = []
+    for tok in tokens:
+        t = tok.strip()
+        if not t:
+            continue
+        if not out:
+            out.append(t)
+            continue
+        prev = out[-1]
+        if prev[-1].isascii() and prev[-1].isalnum() and t[0].isascii() and t[0].isalnum():
+            out.append(" " + t)
+        else:
+            out.append(t)
+    return "".join(out).strip()
+
+
+def segments_to_fallback_lines(
+    words: list[dict],
+    segments: list[dict],
+    max_gap: float = 0.45,
+    max_chars: int = 38,
+) -> list[tuple[float, str]]:
+    """清洗 Whisper --asr-fallback 听写结果：过滤幻觉词/异常复读，并按词间停顿与句长二次切句。"""
+    from . import text as tx
+
+    out: list[tuple[float, str]] = []
+    used_words = bool(words)
+
+    for seg in segments:
+        s0 = float(seg.get("start", 0.0))
+        s1 = float(seg.get("end", s0))
+        raw_txt = str(seg.get("text") or "").strip()
+        if not raw_txt or _is_hallucination_or_loop(raw_txt) or tx.CREDIT_RE.match(raw_txt):
+            continue
+
+        seg_words = [
+            w for w in words
+            if float(w.get("s", -1.0)) >= s0 - 0.08 and float(w.get("s", 1e9)) <= s1 + 0.08
+            and str(w.get("w") or "").strip()
+        ] if used_words else []
+
+        if not seg_words:
+            out.append((round(s0, 3), raw_txt))
+            continue
+
+        cur_tokens: list[str] = []
+        cur_start: float | None = None
+        prev_end: float | None = None
+        cur_len = 0
+
+        def _flush() -> None:
+            nonlocal cur_tokens, cur_start, cur_len
+            if cur_tokens and cur_start is not None:
+                joined = _join_word_tokens(cur_tokens)
+                if joined and not _is_hallucination_or_loop(joined) and not tx.CREDIT_RE.match(joined):
+                    out.append((round(cur_start, 3), joined))
+            cur_tokens = []
+            cur_start = None
+            cur_len = 0
+
+        for w in seg_words:
+            ws = float(w["s"])
+            we = float(w.get("e", ws))
+            wt = str(w["w"]).strip()
+            if not wt:
+                continue
+            gap_split = prev_end is not None and (ws - prev_end) > max_gap
+            len_split = cur_len > 0 and (cur_len + len(wt) > max_chars or len(cur_tokens) >= 14)
+            if cur_tokens and (gap_split or len_split):
+                _flush()
+            if cur_start is None:
+                cur_start = ws
+            cur_tokens.append(wt)
+            cur_len += len(wt)
+            prev_end = max(we, ws)
+        _flush()
+
+    return out
 
 
 def _coverage(line: str, seg_text: str) -> float:

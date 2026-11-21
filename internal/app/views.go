@@ -1606,6 +1606,8 @@ func (a *app) viewQueue(c *ui.Context) {
 								statusPill(c, "已完成", p.okBg, p.ok)
 							case "skipped":
 								statusPill(c, "无主唱 · 跳过", p.warnBg, p.warn)
+							case "skipped_nolyrics":
+								statusPill(c, "全网无词 · 已跳过", p.warnBg, p.warn)
 							case "failed":
 								statusPill(c, "失败", p.warnBg, p.warn)
 							default:

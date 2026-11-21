@@ -133,3 +133,23 @@ def test_multilingual_char_to_latin():
     assert jp._char_to_latin("é") == ("e", False)
     assert jp._char_to_latin("ü") == ("u", False)
     assert jp._char_to_latin("ß") == ("ss", False)
+
+
+def test_segments_to_fallback_lines_filters_hallucinations_and_splits_on_gap():
+    from kiralrc import asr
+
+    segs = [
+        {"start": 0.0, "end": 2.0, "text": "ご視聴ありがとうございました"},
+        {"start": 2.5, "end": 4.0, "text": "啊啊啊啊啊啊啊"},
+        {"start": 5.0, "end": 9.0, "text": "hello world how are you"},
+        {"start": 10.0, "end": 12.0, "text": "Subtitles by Amara.org"},
+    ]
+    words = [
+        {"w": "hello", "s": 5.0, "e": 5.4},
+        {"w": "world", "s": 5.45, "e": 5.9},
+        {"w": "how", "s": 6.6, "e": 6.9},   # gap = 0.70s > 0.45s -> split
+        {"w": "are", "s": 6.95, "e": 7.2},
+        {"w": "you", "s": 7.25, "e": 7.6},
+    ]
+    got = asr.segments_to_fallback_lines(words, segs)
+    assert got == [(5.0, "hello world"), (6.6, "how are you")]

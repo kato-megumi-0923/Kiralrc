@@ -58,6 +58,10 @@ class NoVocalError(RuntimeError):
     """人声轨未检出有效主唱（纯音乐 / 伴奏 / 无词低能量哼唱，KI-1）。"""
 
 
+class NoLyricsError(RuntimeError):
+    """多源搜索与本地均未找到歌词且未开启 --asr-fallback。"""
+
+
 def _cache_dir(audio_path: Path) -> Path:
     key = hashlib.md5(str(audio_path.resolve()).encode()).hexdigest()[:10]
     d = config.work_dir() / f"{audio_path.stem[:40]}_{key}"
@@ -378,8 +382,8 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
 
     if not lines:
         if not asr_fallback:
-            raise RuntimeError(note)
-        # 显式开启 --asr-fallback：先分离干净人声并做主唱检测，再喂给 faster-whisper 听写
+            raise NoLyricsError(note)
+        # 显式开启 --asr-fallback：先分离干净人声并做主唱检测，再听写
         used_asr_fallback = True
         emit(3, "demucs 人声分离", "htdemucs")
         vocals = _vocals(audio_path, cache)
@@ -398,18 +402,19 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
             emit(2, "本地 ASR 人声听写", "FireRedASR-AED-L (中文专精)")
             words, segs, dur = asr.transcribe_zh_firered(voc_16k)
             asr_engine_name = "FireRedASR"
+            rough = [
+                (round(float(s["start"]), 3), str(s.get("text") or "").strip())
+                for s in segs
+                if str(s.get("text") or "").strip() and not tx.CREDIT_RE.match(str(s.get("text") or "").strip())
+            ]
         else:
             emit(2, "本地 ASR 人声听写", f"faster-whisper ({lang})")
             words, segs, dur = asr.transcribe(voc_16k, lang=lang)
+            rough = asr.segments_to_fallback_lines(words, segs)
         (cache / "asr.json").write_text(
             json.dumps({"words": words, "segments": segs, "duration": dur}, ensure_ascii=False),
             encoding="utf-8",
         )
-        rough = [
-            (round(float(s["start"]), 3), str(s.get("text") or "").strip())
-            for s in segs
-            if str(s.get("text") or "").strip() and not tx.CREDIT_RE.match(str(s.get("text") or "").strip())
-        ]
         if not rough:
             raise RuntimeError("本地 ASR 未在人声轨中识别到有效歌词")
         lines = [t for _, t in rough]
@@ -606,6 +611,7 @@ def batch_align(folder: str | Path, lang: str = "zh", jobs: int = 1,
         "done": 0,
         "skipped_existing": 0,
         "skipped_novocal": 0,
+        "skipped_nolyrics": 0,
         "failed": 0,
         "results": [],
     }
@@ -641,6 +647,10 @@ def batch_align(folder: str | Path, lang: str = "zh", jobs: int = 1,
             if on_song:
                 on_song(idx, total, audio, "skipped_novocal", str(e))
             return {"audio": str(audio), "status": "skipped_novocal", "note": str(e)}
+        except NoLyricsError as e:
+            if on_song:
+                on_song(idx, total, audio, "skipped_nolyrics", str(e))
+            return {"audio": str(audio), "status": "skipped_nolyrics", "note": str(e)}
         except Exception as e:
             if on_song:
                 on_song(idx, total, audio, "failed", str(e))

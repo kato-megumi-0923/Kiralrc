@@ -92,9 +92,10 @@ type queueItem struct {
 	Lang        string
 	NeteaseID   string // 单曲手动指定的网易云歌曲 ID / 链接（避免批量任务串 ID）
 	RefPath     string // 单曲手动参考歌词文件（--ref）
-	AsrFallback   bool   // 是否显式开启 --asr-fallback 本地人声听写兜底
-	WaveformFirst bool   // 是否开启 --waveform-first 鬼畜 / 波形起音优先模式
-	Status      string // "waiting", "running", "done", "skipped", "failed"
+	AsrFallback    bool   // 是否显式开启 --asr-fallback 本地人声听写兜底
+	WaveformFirst  bool   // 是否开启 --waveform-first 鬼畜 / 波形起音优先模式
+	IgnoreRefTimes bool   // 是否开启 --ignore-ref-times 强制 ASR 重定位
+	Status         string // "waiting", "running", "done", "skipped", "skipped_nolyrics", "failed"
 	Stage       int    // 0..6 live stage for this song
 	Note        string
 	Hue         float32
@@ -803,6 +804,13 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		}
 
 		// Count lines and check whether any line has >2 word tags (<mm:ss.SSS>)
+		// 若该音频已有本地 .lrc，自动清理旧的「全网无词」残留记录
+		if a.notFoundPaths != nil {
+			if normKey := normPathKey(f.full); a.notFoundPaths[normKey] {
+				delete(a.notFoundPaths, normKey)
+				a.savePrefs()
+			}
+		}
 		norm := strings.ReplaceAll(lrcRaw, "\r\n", "\n")
 		lineCount := 0
 		enhCount := 0
@@ -861,6 +869,20 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 			})
 		}
 	}
+	// 无歌词曲目里让「全网无词 (nolyrics_notfound)」严格排在「本地缺词 (missing)」前面
+	noLyricsRank := func(s string) int {
+		switch s {
+		case "nolyrics_notfound":
+			return 0
+		case "missing":
+			return 1
+		default:
+			return 2
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return noLyricsRank(items[i].Status) < noLyricsRank(items[j].Status)
+	})
 	return items, st
 }
 
@@ -1674,6 +1696,8 @@ func (a *app) enqueueCurrentAlign() {
 				a.queueItems[i].Lang = lang
 				a.queueItems[i].Sub = sub
 				a.queueItems[i].NeteaseID = strings.TrimSpace(a.alignNeteaseID)
+				a.queueItems[i].WaveformFirst = a.alignWaveformFirst
+				a.queueItems[i].IgnoreRefTimes = a.alignIgnoreRefTimes
 				a.queueItems[i].Note = "等待重新对齐"
 			}
 			break
@@ -1681,16 +1705,18 @@ func (a *app) enqueueCurrentAlign() {
 	}
 	if !found {
 		a.queueItems = append(a.queueItems, queueItem{
-			Title:     title,
-			Artist:    a.alignArtist,
-			Sub:       sub,
-			AudioPath: a.alignAudioPath,
-			LrcPath:   a.alignOut,
-			Lang:      lang,
-			NeteaseID: strings.TrimSpace(a.alignNeteaseID),
-			Status:    "waiting",
-			Note:      "优先使用本地同目录 LRC",
-			Hue:       hueForString(title),
+			Title:          title,
+			Artist:         a.alignArtist,
+			Sub:            sub,
+			AudioPath:      a.alignAudioPath,
+			LrcPath:        a.alignOut,
+			Lang:           lang,
+			NeteaseID:      strings.TrimSpace(a.alignNeteaseID),
+			WaveformFirst:  a.alignWaveformFirst,
+			IgnoreRefTimes: a.alignIgnoreRefTimes,
+			Status:         "waiting",
+			Note:           "优先使用本地同目录 LRC",
+			Hue:            hueForString(title),
 		})
 	}
 	a.startQueueRunner()
@@ -1801,7 +1827,7 @@ func (a *app) runQueueWorker() {
 		if !a.setAutoSkipNoVocal {
 			args = append(args, "--force-vocal")
 		}
-		if a.alignIgnoreRefTimes {
+		if item.IgnoreRefTimes {
 			args = append(args, "--ignore-ref-times")
 		}
 		if a.setEnMode == 1 || a.alignEnMode == 1 {
@@ -1818,7 +1844,7 @@ func (a *app) runQueueWorker() {
 		if item.AsrFallback {
 			args = append(args, "--asr-fallback")
 		}
-		if item.WaveformFirst || a.alignWaveformFirst {
+		if item.WaveformFirst {
 			args = append(args, "--waveform-first")
 		}
 		cmd := newHiddenCmd(py, args...)
@@ -1827,6 +1853,7 @@ func (a *app) runQueueWorker() {
 		cmd.Stderr = cmd.Stdout
 		var lastLine string
 		var skippedNoVocal bool
+		var skippedNoLyrics bool
 		if err == nil {
 			err = cmd.Start()
 		}
@@ -1838,7 +1865,9 @@ func (a *app) runQueueWorker() {
 					continue
 				}
 				lastLine = line
-				if strings.HasPrefix(line, "[skip]") {
+				if strings.HasPrefix(line, "[skip-nolyrics]") {
+					skippedNoLyrics = true
+				} else if strings.HasPrefix(line, "[skip]") {
 					skippedNoVocal = true
 				}
 				step := 0
@@ -1882,6 +1911,10 @@ func (a *app) runQueueWorker() {
 				case skippedNoVocal:
 					a.queueItems[i].Status = "skipped"
 					a.queueItems[i].Note = lastLine
+				case skippedNoLyrics:
+					a.queueItems[i].Status = "skipped_nolyrics"
+					a.queueItems[i].Note = lastLine
+					a.markTrackNotFound(songPath)
 				case err != nil:
 					a.queueItems[i].Status = "failed"
 					if lastLine != "" {
