@@ -72,8 +72,7 @@ python scripts/fetch_models.py
 
 除命令行外，项目还提供基于 Go 编写的桌面端 GUI（`kiralrc-gui.exe`），包含**曲库**、**新建对齐**、**任务队列**、**编辑与校对**、**工具箱**五个面板，支持音频试听、批量任务队列、逐字时间轴校对以及 `polyphone.toml` 多音字词表编辑。
 
-- **直接运行**：从 [Releases](https://github.com/kato-megumi-0923/Kiralrc/releases) 下载 `kiralrc-gui-windows-amd64.zip` 解压后运行 `kiralrc-gui.exe`（仍需本地已配置好 Python 对齐环境与模型）。
-- **从源码编译**（需要 Go 1.27+）：
+**从源码编译运行**（需要 Go 1.27+，且本地已配置好 Python 对齐环境与模型）：
 
 ```bash
 go build -ldflags="-H windowsgui" -o kiralrc-gui.exe .
