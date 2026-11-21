@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import config, format as fmt
+from . import config, format as fmt, pipeline, text as tx
 
 
 def cmd_align(a) -> int:
@@ -30,6 +30,7 @@ def cmd_align(a) -> int:
             force_vocal=getattr(a, "force_vocal", False),
             ignore_ref_times=getattr(a, "ignore_ref_times", False),
             en_granularity=getattr(a, "en_granularity", None),
+            netease_id=tx.parse_song_id(getattr(a, "netease_id", None)),
             on_progress=on_prog)
     except pipeline.NoVocalError as e:
         print(f"[skip] {src.name}: {e}")
@@ -316,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ref", help="参考歌词（LRC 或纯文本）")
     p.add_argument("--lang", default="zh")
     p.add_argument("--query", help="网易云搜索关键词，默认用文件名")
+    p.add_argument("--netease-id",
+                   help="网易云歌曲 ID 或链接（如 30967650 或 music.163.com/song?id=...），"
+                        "给了就直接按 ID 取歌词，不靠搜索")
     p.add_argument("--ti", default="")
     p.add_argument("--ar", default="")
     p.add_argument("--al", default="")

@@ -53,23 +53,152 @@ def netease_lyric(song_id: int) -> tuple[str, str]:
             (data.get("tlyric") or {}).get("lyric") or "")
 
 
-def netease_match(keyword: str, duration: float | None = None, interval: float = 4.5) -> dict | None:
-    """网易云音乐：按曲名搜索并挑时长最接近的条目。"""
-    songs = netease_search(keyword)
-    if not songs:
+def parse_song_id(value: str | int | None) -> int | None:
+    """从 ID、`id=123` 或网易云歌曲链接里取出歌曲 ID。"""
+    if not value:
         return None
-    if duration:
-        songs.sort(key=lambda s: abs(s["duration"] - duration))
-    else:
-        songs.sort(key=lambda s: s["duration"])
-    time.sleep(min(interval, 1.5))
-    for cand in songs[:3]:
-        lrc, tlrc = netease_lyric(cand["id"])
-        time.sleep(min(interval, 1.5))
-        n = len([x for x in lrc.splitlines() if x.strip()])
-        if n >= 8:
-            return {**cand, "source": "网易云", "lrc": lrc, "tlyric": tlrc, "lines": n}
+    if isinstance(value, int):
+        return value if value > 0 else None
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text) if int(text) > 0 else None
+    m = re.search(r"[?&#]id=(\d+)", text) or re.search(r"/song/(\d+)", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\b(\d{4,})\b", text)
+    return int(m.group(1)) if m else None
+
+
+def netease_id_from_file(path: str | Path) -> int | None:
+    """音频标签里的 NETEASE_ID（Cloudy 下载时会写入，别处下载的可能没有）。"""
+    try:
+        from mutagen import File as MutagenFile
+    except Exception:
+        return None
+    try:
+        audio = MutagenFile(str(path))
+        tags = getattr(audio, "tags", None)
+        if not tags:
+            return None
+        for key in tags.keys():
+            if "NETEASE_ID" in str(key).upper():
+                value = tags[key]
+                if isinstance(value, list):
+                    value = value[0] if value else ""
+                return parse_song_id(str(value))
+    except Exception:
+        return None
     return None
+
+
+def _fold(text: str) -> str:
+    """歌名比大小写的形态：去括号副标题、去标点空白、统一大小写。"""
+    if not text:
+        return ""
+    text = BRACKET_RE.sub("", text)
+    text = re.sub(r"[\s\-_·.,，。!！?？'\"、:：~～/]", "", text)
+    return text.lower()
+
+
+def _titles_alike(a: str, b: str) -> float:
+    """两个歌名的相似度（0~1），差一个字也算像。"""
+    import difflib
+    fa, fb = _fold(a), _fold(b)
+    if not fa or not fb:
+        return 0.0
+    if fa == fb:
+        return 1.0
+    if len(fa) == len(fb) and sum(x != y for x, y in zip(fa, fb)) == 1:
+        return 0.9
+    return difflib.SequenceMatcher(None, fa, fb, autojunk=False).ratio()
+
+
+def _artists_alike(a: str, b: str) -> float:
+    """歌手相似度：字面重合的比例，简繁和译名差异也能给一点分。"""
+    fa = set(_fold(a))
+    fb = set(_fold(b))
+    if not fa or not fb:
+        return 0.0
+    return len(fa & fb) / max(len(fa), len(fb))
+
+
+def _queries(keyword: str, artist: str = "", name: str = "") -> list[str]:
+    """搜索用词，从最具体到最宽松，去重后按序返回。"""
+    out: list[str] = []
+    for q in (
+        f"{artist} {name}".strip() if artist and name else "",
+        f"{artist} {keyword}".strip() if artist else "",
+        keyword,
+        BRACKET_RE.sub("", keyword).strip(),
+        name,
+    ):
+        q = (q or "").strip()
+        if q and q not in out:
+            out.append(q)
+    return out
+
+
+def score_song(song: dict, name: str = "", artist: str = "",
+               duration: float | None = None) -> float:
+    """一条候选与要找的歌有多像：歌名 0.6、歌手 0.25、时长 0.15。"""
+    title = _titles_alike(song.get("name", ""), name) if name else 0.0
+    singer = _artists_alike(song.get("artist", ""), artist) if artist else 0.0
+    gap = abs((song.get("duration") or 0) - duration) if duration else 0.0
+    length = 1.0 if not duration else max(0.0, 1.0 - gap / 10.0)
+    return 0.6 * title + 0.25 * singer + 0.15 * length
+
+
+def netease_candidates(keyword: str, duration: float | None = None,
+                       name: str = "", artist: str = "", limit: int = 6,
+                       search=None) -> list[dict]:
+    """按多个用词搜索，合并去重后按相似度排序，返回前 limit 条。"""
+    search = search or netease_search
+    seen: dict[int, dict] = {}
+    for q in _queries(keyword, artist, name):
+        for song in search(q):
+            if song["id"] not in seen:
+                seen[song["id"]] = song
+        if len(seen) >= limit * 2:
+            break
+    scored = []
+    for song in seen.values():
+        song = dict(song)
+        song["score"] = round(score_song(song, name or keyword, artist, duration), 3)
+        scored.append(song)
+    scored.sort(key=lambda s: (-s["score"], abs((s.get("duration") or 0) - (duration or 0))))
+    return scored[:limit]
+
+
+def netease_match(keyword: str, duration: float | None = None, interval: float = 4.5,
+                  name: str = "", artist: str = "") -> dict | None:
+    """网易云音乐：多词搜索 + 相似度打分，够像才采用。"""
+    songs = netease_candidates(keyword, duration, name=name or keyword, artist=artist)
+    time.sleep(min(interval, 1.5))
+    if not songs or songs[0]["score"] < 0.55:
+        return None
+    return songs[0]
+
+
+def netease_by_id(song_id: int) -> dict | None:
+    """按 ID 直接取歌词，不经过搜索。"""
+    lrc, tlyric = netease_lyric(song_id)
+    if not lrc.strip():
+        return None
+    name, artist, dur = _song_meta(song_id)
+    return {"id": song_id, "name": name, "artist": artist,
+            "duration": dur, "lrc": lrc, "tlyric": tlyric, "source": "网易云"}
+
+
+def _song_meta(song_id: int) -> tuple[str, str, int]:
+    """一首歌的歌名、歌手、时长（秒），取不到就空着。"""
+    data = _get_json(f"https://music.163.com/api/song/detail?ids=[{song_id}]") or {}
+    songs = data.get("songs") or []
+    if not songs:
+        return "", "", 0
+    s = songs[0]
+    return (s.get("name") or "",
+            ",".join(a.get("name", "") for a in s.get("artists") or []),
+            round((s.get("duration") or 0) / 1000))
 
 
 def qq_match(keyword: str, duration: float | None = None) -> dict | None:
@@ -206,10 +335,15 @@ def lrclib_match(keyword: str, duration: float | None = None) -> dict | None:
     return None
 
 
-def best_match(keyword: str, duration: float | None = None, interval: float = 4.5) -> dict | None:
-    """多源顺序兜底搜歌词：网易云 → QQ音乐 → 酷狗音乐 → LRCLIB。"""
+def best_match(keyword: str, duration: float | None = None, interval: float = 4.5,
+               song_id: int | None = None, name: str = "", artist: str = "") -> dict | None:
+    """多源顺序兜底搜歌词：给了 ID 就先按 ID 取，否则网易云 → QQ音乐 → 酷狗音乐 → LRCLIB。"""
+    if song_id:
+        hit = netease_by_id(song_id)
+        if hit:
+            return hit
     for fn in (
-        lambda: netease_match(keyword, duration, interval=interval),
+        lambda: netease_match(keyword, duration, interval=interval, name=name, artist=artist),
         lambda: qq_match(keyword, duration),
         lambda: kugou_match(keyword, duration),
         lambda: lrclib_match(keyword, duration),

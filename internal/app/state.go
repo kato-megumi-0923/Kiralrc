@@ -173,6 +173,7 @@ type app struct {
 	alignAudioPath   string
 	alignLocalLrc    string
 	alignRefLrc      string
+	alignNeteaseID   string // 手动指定的网易云歌曲 ID 或链接
 	alignBatchDir       string
 	alignBatchTracks    []trackItem
 	alignIgnoreRefTimes bool
@@ -1339,6 +1340,9 @@ func (a *app) runQueueWorker() {
 		}
 		if a.alignSource == 1 && a.alignRefLrc != "" {
 			args = append(args, "--ref", a.alignRefLrc)
+		}
+		if id := strings.TrimSpace(a.alignNeteaseID); id != "" {
+			args = append(args, "--netease-id", id)
 		}
 		cmd := newHiddenCmd(py, args...)
 		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")

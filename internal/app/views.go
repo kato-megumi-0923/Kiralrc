@@ -1046,6 +1046,20 @@ func (a *app) viewAlign(c *ui.Context) {
 								ui.Text(c, fmt.Sprintf("将按关键词「%s」搜索网易云官方歌词（剪辑版缺段自动跳过）。", a.alignSearch)).FontSize(12).TextColor(p.text)
 							}
 						})
+						// 冷门歌、同人曲、翻唱常常搜不到，ID 比搜索可靠
+						ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
+							ui.Column(c).Gap(1).Width(150).Shrink(0).Children(func() {
+								ui.Text(c, "网易云歌曲 ID").FontSize(13).FontWeight(600)
+								ui.Text(c, "可选，填了就跳过搜索").FontSize(11.5).TextColor(p.muted)
+							})
+							box := ui.Row(c).Grow(1).MinWidth(0).Padding(10, 8, 10, 8).Gap(8).Radius(9).AlignItems(ui.Center).Background(p.bg)
+							box.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 9, 1) })
+							box.Children(func() {
+								ui.TextInputBase(c.Key("netease-id-in"), &a.alignNeteaseID).Grow(1).MinWidth(0).Height(26).
+									FontSize(12.5).TextColor(p.text).Background(ui.Transparent).
+									Placeholder("30967650 或 music.163.com/song?id=...").FocusRing(false)
+							})
+						})
 						ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 							ui.Column(c).Grow(1).Gap(1).Children(func() {
 								ui.Text(c, "忽略参考时间戳（强制 ASR 重定位）").FontSize(13).FontWeight(600)

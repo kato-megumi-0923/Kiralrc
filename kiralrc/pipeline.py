@@ -84,8 +84,13 @@ def _vocals(audio_path: Path, cache: Path) -> Path:
 
 
 def resolve_reference(audio_path: Path, ref: Path | None,
-                      query: str | None = None) -> tuple[Path | None, list[str], str]:
-    """返回 (参考文件, 歌词行, 说明)。"""
+                      query: str | None = None,
+                      netease_id: int | None = None) -> tuple[Path | None, list[str], str]:
+    """返回 (参考文件, 歌词行, 说明)。
+
+    歌词的来源按可靠程度排：显式参考文件 → 同目录 lrc → 指定的网易云 ID →
+    音频标签里的 ID → 多源搜索。ID 比搜索可靠，冷门歌往往只有 ID 找得到。
+    """
     if ref and Path(ref).exists():
         body = Path(ref).read_text(encoding="utf-8-sig")
         stamped = tx.lines_with_times(body)
@@ -103,9 +108,12 @@ def resolve_reference(audio_path: Path, ref: Path | None,
 
     kw = query or tx.query_from_filename(audio_path.stem)
     dur = round(au.duration(audio_path))
-    hit = tx.best_match(kw, dur)
+    used_id = netease_id or tx.netease_id_from_file(audio_path)
+    hit = tx.best_match(kw, dur, song_id=used_id,
+                        name=kw, artist="")
     if not hit:
-        return None, [], f"多源（网易云/QQ/酷狗/LRCLIB）均未搜到「{kw}」，且没有参考文件"
+        where = f"（ID {used_id} 也没取到）" if used_id else ""
+        return None, [], f"多源（网易云/QQ/酷狗/LRCLIB）均未搜到「{kw}」{where}，且没有参考文件"
 
     p = config.work_dir() / (audio_path.stem[:40] + ".ref.lrc")
     merged = tx.merge_tlyric(hit["lrc"], hit.get("tlyric") or "")
@@ -333,6 +341,7 @@ def ensure_cover(audio_path: str | Path, cache: Path | None = None,
 def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = "zh",
              query: str | None = None, ti: str = "", ar: str = "",
              al: str = "", force_vocal: bool = False,
+             netease_id: int | None = None,
              ignore_ref_times: bool = False,
              en_granularity: str | None = None,
              restore_long_vowel: bool | None = None,
@@ -346,7 +355,8 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     total = au.duration(audio_path)
 
     emit(1, "确定歌词文本", audio_path.name)
-    ref_path, lines, note = resolve_reference(audio_path, Path(ref) if ref else None, query)
+    ref_path, lines, note = resolve_reference(audio_path, Path(ref) if ref else None, query,
+                                               netease_id=netease_id)
     if not lines:
         raise RuntimeError(note)
     trans_map = _extract_trans_map(ref_path)
