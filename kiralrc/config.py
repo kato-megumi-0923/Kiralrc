@@ -23,7 +23,7 @@ def cfg() -> dict:
 
 def path(key: str) -> Path:
     """取 config.toml [paths] 里的路径（相对项目根），允许同名环境变量覆盖。"""
-    env = os.environ.get(f"KARALRC_{key.upper()}")
+    env = os.environ.get(f"KIRALRC_{key.upper()}")
     raw = env or cfg()["paths"].get(key)
     if not raw:
         raise KeyError(f"config.toml 缺少 paths.{key}")
@@ -32,7 +32,7 @@ def path(key: str) -> Path:
 
 
 def opt(key: str, default=None):
-    env = os.environ.get(f"KARALRC_{key.upper()}")
+    env = os.environ.get(f"KIRALRC_{key.upper()}")
     if env is not None:
         return type(default)(env) if default is not None else env
     return cfg()["defaults"].get(key, default)

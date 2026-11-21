@@ -1,5 +1,5 @@
 [paths]
-# 所有路径都相对项目根目录；也可用环境变量覆盖（见 karalrc/config.py）
+# 所有路径都相对项目根目录；也可用环境变量覆盖（见 kiralrc/config.py）
 
 # 中文歌声对齐模型（SOFA 官方 ckpt）
 sofa_ckpt = "models/sofa/v1.0.0_mandarin_singing.ckpt"
