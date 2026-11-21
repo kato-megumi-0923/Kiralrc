@@ -129,4 +129,7 @@ scripts/           模型下载、环境安装
 
 ## 许可
 
-本项目代码 MIT。`third_party/SOFA` 为其原作者的 MIT 代码，模型权重版权归原作者。
+本项目代码以 MIT 发布（见 `LICENSE`）。`third_party/SOFA` 为其原作者的 MIT 代码（见其 `LICENSE`），
+模型权重版权归各自作者。
+
+仓库里**不包含**任何歌曲音频或歌词文本；`examples/` 只有占位示例。
