@@ -140,12 +140,14 @@ def _queries(keyword: str, artist: str = "", name: str = "") -> list[str]:
 
 def score_song(song: dict, name: str = "", artist: str = "",
                duration: float | None = None) -> float:
-    """一条候选与要找的歌有多像：歌名 0.6、歌手 0.25、时长 0.15。"""
+    """一条候选与要找的歌有多像：歌名 0.6、歌手 0.25、时长 0.15（缺歌手时按 0.8/0.2 归一化）。"""
     title = _titles_alike(song.get("name", ""), name) if name else 0.0
-    singer = _artists_alike(song.get("artist", ""), artist) if artist else 0.0
     gap = abs((song.get("duration") or 0) - duration) if duration else 0.0
     length = 1.0 if not duration else max(0.0, 1.0 - gap / 10.0)
-    return 0.6 * title + 0.25 * singer + 0.15 * length
+    if artist:
+        singer = _artists_alike(song.get("artist", ""), artist)
+        return 0.6 * title + 0.25 * singer + 0.15 * length
+    return 0.8 * title + 0.2 * length
 
 
 def netease_candidates(keyword: str, duration: float | None = None,
@@ -170,13 +172,23 @@ def netease_candidates(keyword: str, duration: float | None = None,
 
 
 def netease_match(keyword: str, duration: float | None = None, interval: float = 4.5,
-                  name: str = "", artist: str = "") -> dict | None:
-    """网易云音乐：多词搜索 + 相似度打分，够像才采用。"""
-    songs = netease_candidates(keyword, duration, name=name or keyword, artist=artist)
-    time.sleep(min(interval, 1.5))
-    if not songs or songs[0]["score"] < 0.55:
-        return None
-    return songs[0]
+                  name: str = "", artist: str = "",
+                  search=None, fetch_lyric=None) -> dict | None:
+    """网易云音乐：多词搜索 + 相似度打分，够像且确实有完整歌词才采用。"""
+    songs = netease_candidates(keyword, duration, name=name or keyword, artist=artist, search=search)
+    if search is None:
+        time.sleep(min(interval, 1.5))
+    lyric_fn = fetch_lyric or netease_lyric
+    for cand in songs[:3]:
+        if cand["score"] < 0.55:
+            break
+        lrc, tlrc = lyric_fn(cand["id"])
+        if fetch_lyric is None:
+            time.sleep(min(interval, 1.5))
+        n = len([x for x in lrc.splitlines() if x.strip()])
+        if n >= 8:
+            return {**cand, "source": "网易云", "lrc": lrc, "tlyric": tlrc, "lines": n}
+    return None
 
 
 def netease_by_id(song_id: int) -> dict | None:
@@ -565,6 +577,17 @@ def merge_tlyric(orig_lrc: str, tlyric: str, tol: float = 0.25) -> str:
             used.add(best_i)
             out_lines.append(fmt.Line(ln.start, tr_lines[best_i].text.strip()))
     return fmt.Lrc(metas=orig.metas, lines=out_lines).render()
+
+
+def artist_title_from_filename(stem: str) -> tuple[str, str]:
+    """从「歌手 - 歌名」类文件名里拆出 (artist, title)；拆不出时 artist 为空。"""
+    s = TRACK_RE.sub("", stem).strip()
+    parts = [p.strip() for p in DASH_RE.split(s) if p.strip()]
+    if len(parts) >= 2:
+        artist = BRACKET_RE.sub("", parts[0]).strip()
+        title = " - ".join(parts[1:]).strip()
+        return artist, title
+    return "", query_from_filename(stem)
 
 
 def query_from_filename(stem: str) -> str:

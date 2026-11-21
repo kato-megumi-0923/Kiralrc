@@ -75,3 +75,32 @@ def test_netease_id_from_file_reads_nothing_from_a_stranger(tmp_path):
     p = tmp_path / "no-tags.mp3"
     p.write_bytes(b"\xff\xfb" + b"\x00" * 512)
     assert tx.netease_id_from_file(p) is None
+
+
+def test_netease_match_fetches_lyrics_and_skips_empty_candidate():
+    pool = [
+        {"id": 10, "name": "晴天", "artist": "周杰伦", "duration": 269},
+        {"id": 11, "name": "晴天", "artist": "周杰伦", "duration": 270},
+    ]
+    sample_lrc = "\n".join(f"[00:0{i}.000]第{i}句歌词" for i in range(1, 10))
+    got = tx.netease_match(
+        "周杰伦 晴天",
+        duration=269,
+        name="晴天",
+        artist="周杰伦",
+        search=lambda _: pool,
+        fetch_lyric=lambda sid: ("", "") if sid == 10 else (sample_lrc, ""),
+    )
+    assert got is not None
+    assert got["id"] == 11
+    assert got["source"] == "网易云"
+    assert got["lrc"] == sample_lrc
+    assert got["lines"] == 9
+
+
+def test_artist_title_from_filename_and_score_without_artist():
+    assert tx.artist_title_from_filename("A路人 - 如何让白鼠爱上学习(英文翻唱)") == ("A路人", "如何让白鼠爱上学习(英文翻唱)")
+    assert tx.artist_title_from_filename("02 - 好想好想") == ("", "好想好想")
+    # 缺歌手时权重归一化，精准歌名+相近时长应拿到高分
+    s = tx.score_song({"name": "晴天", "artist": "周杰伦", "duration": 269}, name="晴天", artist="", duration=270)
+    assert s > 0.95

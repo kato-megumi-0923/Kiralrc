@@ -108,9 +108,12 @@ def resolve_reference(audio_path: Path, ref: Path | None,
 
     kw = query or tx.query_from_filename(audio_path.stem)
     dur = round(au.duration(audio_path))
+    artist_hint, title_hint = tx.artist_title_from_filename(audio_path.stem)
+    if query:
+        title_hint, artist_hint = query, ""
     used_id = netease_id or tx.netease_id_from_file(audio_path)
     hit = tx.best_match(kw, dur, song_id=used_id,
-                        name=kw, artist="")
+                        name=title_hint or kw, artist=artist_hint)
     if not hit:
         where = f"（ID {used_id} 也没取到）" if used_id else ""
         return None, [], f"多源（网易云/QQ/酷狗/LRCLIB）均未搜到「{kw}」{where}，且没有参考文件"

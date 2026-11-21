@@ -88,6 +88,7 @@ type queueItem struct {
 	AudioPath string
 	LrcPath   string
 	Lang      string
+	NeteaseID string // 单曲手动指定的网易云歌曲 ID / 链接（避免批量任务串 ID）
 	Status    string // "waiting", "running", "done", "skipped", "failed"
 	Stage     int    // 0..6 live stage for this song
 	Note      string
@@ -1206,6 +1207,7 @@ func (a *app) enqueueCurrentAlign() {
 				a.queueItems[i].Status = "waiting"
 				a.queueItems[i].Lang = lang
 				a.queueItems[i].Sub = sub
+				a.queueItems[i].NeteaseID = strings.TrimSpace(a.alignNeteaseID)
 				a.queueItems[i].Note = "等待重新对齐"
 			}
 			break
@@ -1219,6 +1221,7 @@ func (a *app) enqueueCurrentAlign() {
 			AudioPath: a.alignAudioPath,
 			LrcPath:   a.alignOut,
 			Lang:      lang,
+			NeteaseID: strings.TrimSpace(a.alignNeteaseID),
 			Status:    "waiting",
 			Note:      "优先使用本地同目录 LRC",
 			Hue:       hueForString(title),
@@ -1341,7 +1344,7 @@ func (a *app) runQueueWorker() {
 		if a.alignSource == 1 && a.alignRefLrc != "" {
 			args = append(args, "--ref", a.alignRefLrc)
 		}
-		if id := strings.TrimSpace(a.alignNeteaseID); id != "" {
+		if id := strings.TrimSpace(item.NeteaseID); id != "" {
 			args = append(args, "--netease-id", id)
 		}
 		cmd := newHiddenCmd(py, args...)
