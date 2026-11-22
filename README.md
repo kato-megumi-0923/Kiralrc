@@ -2,7 +2,7 @@
 
 给歌曲补**逐字 LRC 歌词**的工具。
 
-> **硬件说明**：当前 GPU 加速**仅支持 NVIDIA 显卡（CUDA）**，暂不支持 AMD / Intel 显卡加速（无 NVIDIA 显卡时回退 CPU 运行，速度会明显变慢）。
+> **硬件与系统说明**：GUI 支持 Windows 10/11 x64；当前 GPU 加速**仅支持 NVIDIA 显卡（CUDA）**，暂不支持 AMD / Intel 显卡加速（无 NVIDIA 显卡时回退 CPU 运行，速度会明显变慢）。建议 **≥6GB 显存**，并预留约 **6~8GB** 磁盘空间存放模型权重。
 
 核心思路只有一条：**时间必须由专门的对齐器从音频里算出来，不能靠 ASR 的句子边界去猜。**
 
@@ -41,7 +41,9 @@
 
 1. **显式指定的参考文件（`--ref`）**：若指定路径存在，优先使用。
 2. **同目录同名 `.lrc` 文件**：若音频同目录下存在同名 `.lrc` 且有效歌词不少于 4 行（过滤「纯音乐，请欣赏」等短占位），直接复用。
-3. **多平台顺序自动搜索（`best_match`）**：根据 `--query` 或文件名提取关键词，结合音频时长按 **网易云 → QQ音乐 → 酷狗音乐 → LRCLIB** 的顺序逐级兜底匹配，找到即停并合并原文与中文译文。
+3. **多平台顺序自动搜索（`best_match`）**：支持直接指定网易云歌曲 ID（`--netease-id` 或读取音频文件内嵌 ID），否则根据 `--query` 或文件名提取关键词，结合时长与相似度打分按语种动态顺序兜底匹配并合并译文：
+   - **中文曲目**：`网易云 → AMLL → QQ音乐 → 酷狗音乐 → Apple Music（可选）→ LRCLIB`
+   - **日/外语曲目**：`网易云 → AMLL → Apple Music（可选）→ QQ音乐 → LRCLIB → 酷狗音乐`
 4. **外语译文自动补全**：若歌词识别为日文（`ja`）或英文（`en`）且本地参考文件不含中文译文，会自动向网易云拉取对应译文补全。
 
 ## 逐字歌词生成链路
@@ -87,10 +89,13 @@
 只需**单个 Python 环境**即可运行全部功能（SOFA 推理已剥离 `lightning` / `librosa<0.10` / `matplotlib` / `pandas` / `textgrid` 等训练期旧依赖，直接复用主环境 PyTorch + torchaudio 并在 GPU 上推理）：
 
 ```bash
-# 1) Python 依赖（支持 Python 3.10~3.13 + NumPy 2.x）
-pip install torch torchaudio transformers faster-whisper demucs pypinyin fugashi unidic-lite pykakasi av numpy pyyaml numba mutagen
+# 1) 安装 CUDA 版 PyTorch（NVIDIA 显卡必须带 cu124 源，否则默认会装成 CPU 版）
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# 2) 模型
+# 2) 安装其余 Python 依赖（支持 Python 3.10~3.13 + NumPy 2.x）
+pip install transformers faster-whisper demucs pypinyin fugashi unidic-lite pykakasi av numpy pyyaml numba mutagen scipy soundfile
+
+# 3) 下载基础模型
 python scripts/fetch_models.py
 ```
 
@@ -112,8 +117,8 @@ go build -ldflags="-H windowsgui" -o kiralrc-gui.exe .
 - **曲库管理**：扫描本地音乐目录并统计歌词覆盖状态（无歌词 / 整行 / 逐字），支持一键批量升级整行歌词、全网重试搜词、批量填写网易云歌曲 ID、直接 ASR 转录，以及单曲手工粘贴/导入/调用记事本编辑参考歌词。
 - **新建对齐**：支持单曲或整文件夹导入，灵活配置语种、参考 LRC、网易云 ID、强制 ASR 重定位及英文逐字粒度等选项。
 - **任务队列**：实时显示 6 步对齐流水线进度、状态与提示信息，对齐完成后可一键打开校对。
-- **编辑与校对**：内置音频播放与逐字同步高亮预览（支持专辑封面背景）、时间轴微调（`±50ms` 等）、格式校验、双语加 ❤️ 及保存/放弃修改。
-- **工具箱与设置**：提供模型与环境状态检测、`polyphone.toml` 多音字词表编辑、中间产物缓存清理及常用工具快捷执行。
+- **编辑与校对**：内置音频播放与逐字同步高亮预览（支持专辑封面背景）、时间轴微调（`±50ms` 等）、**AI 一键歌词翻译**（支持 DeepSeek / OpenAI / Gemini / 硅基流动 / 智谱 GLM / 通义千问 / OpenRouter / 本地 Ollama）、格式校验、双语加 ❤️ 及保存/放弃修改。
+- **工具箱与设置**：提供 **Python 运行环境分层检测与一键初始化**、基础模型一键下载与管理、Apple Music Token 与 AI 翻译 API Key（Windows DPAPI 加密存储）配置、`polyphone.toml` 多音字词表编辑、中间产物缓存清理及常用工具快捷执行。
 
 ## 用法
 
@@ -187,8 +192,8 @@ kiralrc/
   hearts.py        双语加 ❤️
   legacy/          早期的一次性脚本（保留作参照，不再维护）
 third_party/SOFA/  SOFA 词典与参考源码（MIT，已去 .git）
-models/            CT2 whisper + SOFA ckpt
-scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_dir.py）
+models/            统一模型缓存根目录（CT2 whisper / SOFA / Demucs / HuggingFace MMS）
+scripts/           模型下载、环境安装、便携打包（build_release.ps1）、批量抓歌词（fetch_lyrics_dir.py）
 ```
 
 ## 代码来源
@@ -197,7 +202,7 @@ scripts/           模型下载、环境安装、批量抓歌词（fetch_lyrics_
 |---|---|---|
 | `kiralrc/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
 | `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 保留词典与原版 LICENSE，推理已内嵌到 `kiralrc/sofa.py` |
-| `models/` | 本地下载（不提交到 Git） | CT2 whisper：`Systran/faster-whisper-large-v3`（经 ModelScope 镜像）<br>SOFA 权重：官方 Release `v1.0.0_mandarin_singing.ckpt` |
+| `models/` | 本地下载（不提交到 Git） | CT2 whisper：`Systran/faster-whisper-large-v3`（ModelScope 镜像）<br>SOFA：`v1.0.0_mandarin_singing.ckpt`<br>MMS 歌声/歌词：`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`、`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`<br>人声分离：`htdemucs` |
 | 依赖库 | PyPI | faster-whisper / demucs / transformers / PyAV / pypinyin / torch … |
 | `kiralrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
 
