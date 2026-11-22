@@ -179,10 +179,15 @@ def netease_candidates(keyword: str, duration: float | None = None,
 
 def netease_match(keyword: str, duration: float | None = None, interval: float = 4.5,
                   name: str = "", artist: str = "",
-                  search=None, fetch_lyric=None) -> dict | None:
+                  search=None, fetch_lyric=None,
+                  candidates: list[dict] | None = None) -> dict | None:
     """网易云音乐：多词搜索 + 相似度打分，够像且确实有完整歌词才采用。"""
-    songs = netease_candidates(keyword, duration, name=name or keyword, artist=artist, search=search)
-    if search is None:
+    songs = (
+        netease_candidates(keyword, duration, name=name or keyword, artist=artist, search=search)
+        if candidates is None
+        else candidates
+    )
+    if search is None and fetch_lyric is None and songs and songs[0]["score"] >= 0.55:
         time.sleep(min(interval, 1.5))
     lyric_fn = fetch_lyric or netease_lyric
     for cand in songs[:3]:
@@ -644,25 +649,23 @@ def best_match(keyword: str, duration: float | None = None, interval: float = 4.
         if hit:
             return hit
 
-    # 1) 先查网易云，若未命中则复用高分候选 ID 查 AMLL
-    hit = netease_match(keyword, duration, interval=interval, name=name, artist=artist)
+    # 1) 只搜一次网易云候选，先取网易云歌词，未命中则复用高分候选 ID 查 AMLL
+    cands = netease_candidates(keyword, duration, name=name or keyword, artist=artist)
+    hit = netease_match(keyword, duration, interval=interval, name=name, artist=artist, candidates=cands)
     if hit:
         return hit
 
-    amll_cand_id = None
-    amll_meta = {"name": name or keyword, "artist": artist, "duration": duration or 0}
-    cands = netease_candidates(keyword, duration, name=name or keyword, artist=artist)
     if cands and cands[0]["score"] >= 0.55:
         amll_cand_id = cands[0]["id"]
-        amll_meta = {
-            "name": cands[0].get("name") or name or keyword,
-            "artist": cands[0].get("artist") or artist,
-            "duration": cands[0].get("duration") or duration or 0,
-        }
-    if amll_cand_id and amll_cand_id != song_id:
-        hit = amll_match(amll_cand_id, **amll_meta)
-        if hit:
-            return hit
+        if amll_cand_id and amll_cand_id != song_id:
+            hit = amll_match(
+                amll_cand_id,
+                name=cands[0].get("name") or name or keyword,
+                artist=cands[0].get("artist") or artist,
+                duration=cands[0].get("duration") or duration or 0,
+            )
+            if hit:
+                return hit
 
     # 2) 按语种动态选择后续源回退顺序
     if _is_non_chinese_query(keyword, name=name, artist=artist):

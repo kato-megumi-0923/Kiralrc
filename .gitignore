@@ -16,4 +16,4 @@ __pycache__/
 *.exe
 *.exe~
 /dist/
-/context.md
+/context*.md

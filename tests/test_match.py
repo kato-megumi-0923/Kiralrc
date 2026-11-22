@@ -236,24 +236,41 @@ def test_multi_sources_reject_low_similarity_matches(monkeypatch):
 def test_best_match_dynamic_order_and_amll_reuses_netease_id(monkeypatch):
     # A) 中文歌曲顺序：网易云 → AMLL → QQ音乐 → 酷狗音乐 → Apple Music → LRCLIB
     zh_calls: list[str] = []
-    monkeypatch.setattr(tx, "netease_match", lambda *a, **kw: zh_calls.append("netease") or None)
-    monkeypatch.setattr(tx, "netease_candidates", lambda *a, **kw: [{"id": 123456, "name": "晴天", "artist": "周杰伦", "duration": 269, "score": 0.95}])
+    cand_calls = 0
+
+    def fake_zh_cands(*a, **kw):
+        nonlocal cand_calls
+        cand_calls += 1
+        return [{"id": 123456, "name": "晴天", "artist": "周杰伦", "duration": 269, "score": 0.95}]
+
+    monkeypatch.setattr(tx, "netease_candidates", fake_zh_cands)
+    monkeypatch.setattr(tx, "netease_lyric", lambda sid: zh_calls.append(f"netease:{sid}") or ("", ""))
+    monkeypatch.setattr(tx.time, "sleep", lambda *a, **kw: None)
     monkeypatch.setattr(tx, "amll_match", lambda sid, **kw: zh_calls.append(f"amll:{sid}") or None)
     monkeypatch.setattr(tx, "qq_match", lambda *a, **kw: zh_calls.append("qq") or None)
     monkeypatch.setattr(tx, "kugou_match", lambda *a, **kw: zh_calls.append("kugou") or None)
     monkeypatch.setattr(tx, "apple_music_match", lambda *a, **kw: zh_calls.append("apple") or None)
     monkeypatch.setattr(tx, "lrclib_match", lambda *a, **kw: zh_calls.append("lrclib") or None)
     tx.best_match("晴天", duration=269, name="晴天", artist="周杰伦")
-    assert zh_calls == ["netease", "amll:123456", "qq", "kugou", "apple", "lrclib"]
+    assert cand_calls == 1, "netease_candidates 只能搜索一次并复用于 netease_match 与 AMLL"
+    assert zh_calls == ["netease:123456", "amll:123456", "qq", "kugou", "apple", "lrclib"]
 
     # B) 日/英文歌曲顺序：网易云 → AMLL → Apple Music → QQ音乐 → LRCLIB → 酷狗音乐
     ja_calls: list[str] = []
-    monkeypatch.setattr(tx, "netease_match", lambda *a, **kw: ja_calls.append("netease") or None)
-    monkeypatch.setattr(tx, "netease_candidates", lambda *a, **kw: [{"id": 654321, "name": "晴る", "artist": "ヨルシカ", "duration": 270, "score": 0.92}])
+    cand_calls = 0
+
+    def fake_ja_cands(*a, **kw):
+        nonlocal cand_calls
+        cand_calls += 1
+        return [{"id": 654321, "name": "晴る", "artist": "ヨルシカ", "duration": 270, "score": 0.92}]
+
+    monkeypatch.setattr(tx, "netease_candidates", fake_ja_cands)
+    monkeypatch.setattr(tx, "netease_lyric", lambda sid: ja_calls.append(f"netease:{sid}") or ("", ""))
     monkeypatch.setattr(tx, "amll_match", lambda sid, **kw: ja_calls.append(f"amll:{sid}") or None)
     monkeypatch.setattr(tx, "apple_music_match", lambda *a, **kw: ja_calls.append("apple") or None)
     monkeypatch.setattr(tx, "qq_match", lambda *a, **kw: ja_calls.append("qq") or None)
     monkeypatch.setattr(tx, "lrclib_match", lambda *a, **kw: ja_calls.append("lrclib") or None)
     monkeypatch.setattr(tx, "kugou_match", lambda *a, **kw: ja_calls.append("kugou") or None)
     tx.best_match("ヨルシカ 晴る", duration=270, name="晴る", artist="ヨルシカ")
-    assert ja_calls == ["netease", "amll:654321", "apple", "qq", "lrclib", "kugou"]
+    assert cand_calls == 1, "netease_candidates 只能搜索一次并复用于 netease_match 与 AMLL"
+    assert ja_calls == ["netease:654321", "amll:654321", "apple", "qq", "lrclib", "kugou"]
