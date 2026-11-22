@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"crypto/md5"
 	"fmt"
 	"image"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/image/draw"
@@ -56,20 +58,38 @@ func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 	if path == "" && len(index.byStem[name]) == 1 {
 		path = index.byStem[name][0]
 	}
-	info, err := os.Stat(path)
-	audioInfo, audioErr := os.Stat(audioPath)
-	if err != nil || audioErr != nil || audioInfo.ModTime().After(info.ModTime()) {
+	// 1) 对齐时抽出来的封面缓存（比音频新才用）
+	if path != "" {
+		info, err := os.Stat(path)
+		audioInfo, audioErr := os.Stat(audioPath)
+		if err == nil && audioErr == nil && !audioInfo.ModTime().After(info.ModTime()) {
+			if file, err := os.Open(path); err == nil {
+				defer file.Close()
+				if imageData, _, err := image.Decode(file); err == nil {
+					return thumbnailOf(imageData)
+				}
+			}
+		}
+	}
+	// 2) 音频自带的内嵌封面：没跑过对齐的歌只有这一张
+	if cached := cachedCover(audioPath); cached != nil {
+		return cached
+	}
+	data := readEmbeddedCover(audioPath)
+	if data == nil {
 		return nil
 	}
-	file, err := os.Open(path)
+	imageData, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
-	imageData, _, err := image.Decode(file)
-	if err != nil {
-		return nil
-	}
+	bmp := thumbnailOf(imageData)
+	coverCache.Store(coverCacheKey(audioPath), bmp)
+	return bmp
+}
+
+// thumbnailOf 居中裁成正方形再缩到 128。
+func thumbnailOf(imageData image.Image) *ui.Bitmap {
 	bounds := imageData.Bounds()
 	size := min(bounds.Dx(), bounds.Dy())
 	if size <= 0 {
@@ -79,4 +99,21 @@ func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 	thumbnail := image.NewRGBA(image.Rect(0, 0, 128, 128))
 	draw.ApproxBiLinear.Scale(thumbnail, thumbnail.Bounds(), imageData, image.Rect(x, y, x+size, y+size), draw.Src, nil)
 	return ui.NewBitmap(thumbnail)
+}
+
+var coverCache sync.Map // 路径+修改时间 → *ui.Bitmap
+
+func coverCacheKey(audioPath string) string {
+	mt := int64(0)
+	if info, err := os.Stat(audioPath); err == nil {
+		mt = info.ModTime().UnixNano()
+	}
+	return fmt.Sprintf("%s|%d", audioPath, mt)
+}
+
+func cachedCover(audioPath string) *ui.Bitmap {
+	if v, ok := coverCache.Load(coverCacheKey(audioPath)); ok {
+		return v.(*ui.Bitmap)
+	}
+	return nil
 }
