@@ -175,9 +175,21 @@ def netease_id_from_file(path: str | Path) -> int | None:
     return parse_song_id(plain) if plain else None
 
 
+def netease_id_from_lrc(path: str | Path) -> int | None:
+    """同目录 .lrc 头里的 [kiralrc:id=…]，是我们下载时记下的。"""
+    lrc = Path(path).with_suffix(".lrc")
+    try:
+        body = lrc.read_text(encoding="utf-8-sig", errors="ignore")[:400]
+    except Exception:
+        return None
+    m = re.search(r"^\[kiralrc:id=(\d+)\]", body, re.M)
+    return int(m.group(1)) if m else None
+
+
 def netease_id_of(path: str | Path) -> int | None:
-    """一首歌的网易云 ID，不用联网：163 key → NETEASE_ID → 下载记录。"""
-    return (netease_id_from_file(path) or netease_id_from_downloads(path))
+    """一首歌的网易云 ID，不用联网：163 key → NETEASE_ID → 下载记录 → LRC 头。"""
+    return (netease_id_from_file(path) or netease_id_from_downloads(path)
+            or netease_id_from_lrc(path))
 def _fold(text: str) -> str:
     """歌名比大小写的形态：去括号副标题、去标点空白、统一大小写。"""
     if not text:

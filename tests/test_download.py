@@ -230,3 +230,39 @@ def test_name_and_artist_come_from_tags_then_filename(tmp_path):
     p3 = tmp_path / "只有歌名.mp3"
     p3.write_bytes(b"")
     assert download.song_name_artist(p3) == ("只有歌名", "")
+
+
+def test_the_id_is_written_into_the_lrc_and_read_back(tmp_path, monkeypatch):
+    """下载时把网易云 ID 记在 LRC 头里，以后没有标签也能认出来。"""
+    audio = tmp_path / "h.mp3"
+    audio.write_bytes(b"")
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 167732)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="网易云", tag="NeteaseCloud",
+        lines=[sources.WordLine(1.0, "第一句", [("第", 1.0), ("一", 1.2)], 1.6)],
+        timed=True, song_id=167732))
+    download.download_one(audio)
+    body = (tmp_path / "h.lrc").read_text(encoding="utf-8")
+    assert "[kiralrc:id=167732]" in body
+    # 再把标签与下载记录都断掉，仍然能从 LRC 头认出来
+    monkeypatch.setattr(download.tx, "netease_id_from_file", lambda p: None)
+    monkeypatch.setattr(download.tx, "netease_id_from_downloads", lambda p: None)
+    assert download.tx.netease_id_from_lrc(audio) == 167732
+
+
+def test_the_id_is_written_into_the_lrc_and_read_back(tmp_path, monkeypatch):
+    """下载时把网易云 ID 记在 LRC 头里，以后没有标签也能认出来。"""
+    audio = tmp_path / "h.mp3"
+    audio.write_bytes(b"")
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 167732)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="网易云", tag="NeteaseCloud",
+        lines=[sources.WordLine(1.0, "第一句", [("第", 1.0), ("一", 1.2)], 1.6)],
+        timed=True, song_id=167732))
+    download.download_one(audio)
+    body = (tmp_path / "h.lrc").read_text(encoding="utf-8")
+    assert "[kiralrc:id=167732]" in body
+    # 再把标签与下载记录都断掉，仍然能从 LRC 头认出来
+    monkeypatch.setattr(download.tx, "netease_id_from_file", lambda p: None)
+    monkeypatch.setattr(download.tx, "netease_id_from_downloads", lambda p: None)
+    assert download.tx.netease_id_from_lrc(audio) == 167732

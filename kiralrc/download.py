@@ -193,11 +193,11 @@ def download_one(audio: Path, force: bool = False) -> Result:
         # 只有逐行：缺的时候才写，别拿逐行盖掉已有的逐行或逐字
         if kind != "missing":
             return Result(audio, "kept", f"只拿到逐行（{lyric.source}）", lyric.source)
-        lrc = sources.to_lrc(lyric, ti=title, ar=artist)
+        lrc = sources.to_lrc(lyric, ti=title, ar=artist, song_id=song_id or 0)
         _write(audio, lrc)
         return Result(audio, "line", f"逐行（{lyric.source}）", lyric.source)
 
-    lrc = sources.to_lrc(lyric, ti=title, ar=artist)
+    lrc = sources.to_lrc(lyric, ti=title, ar=artist, song_id=song_id or 0)
     if kind == "aligned":
         _write(audio, lrc)
         return Result(audio, "replaced", f"官方逐字替换对齐结果（{lyric.source}）", lyric.source)

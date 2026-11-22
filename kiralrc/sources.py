@@ -46,6 +46,8 @@ class WordLyric:
     tag: str               # [by:] 的值
     lines: list[WordLine] = field(default_factory=list)
     timed: bool = False    # 有字级时间
+    song_id: int = 0       # 对应的网易云 ID（有就写进 LRC 头）
+    song_id: int = 0       # 对应的网易云 ID（有就写进 LRC 头）
 
     def __len__(self) -> int:
         return len(self.lines)
@@ -173,7 +175,8 @@ def from_netease(song_id: int, timeout: int = 20, name: str = "",
         return None
     if raw["tlyric"]:
         attach_translation(lines, raw["tlyric"])
-    return WordLyric(source="网易云", tag=TAGS["netease"], lines=lines, timed=timed)
+    return WordLyric(source="网易云", tag=TAGS["netease"], lines=lines, timed=timed,
+                     song_id=int(song_id or 0))
 
 
 def fetch(song_id: int | None, name: str = "", artist: str = "",
@@ -254,7 +257,7 @@ def trim_preamble(lines: list[WordLine], name: str = "", artist: str = "") -> li
 PLACEHOLDER = re.compile(r"纯音乐|請欣賞|请欣赏|暂无歌词|没有歌词|此歌曲为没有填词的纯音乐", re.I)
 
 
-def to_lrc(lyric: WordLyric, ti: str = "", ar: str = "", al: str = ""):
+def to_lrc(lyric: WordLyric, ti: str = "", ar: str = "", al: str = "", song_id: int = 0):
     """下载到的歌词 → Kiralrc 的 Lrc 结构，译文按同时间戳单独成行。"""
     from . import format as fmt
 
@@ -263,6 +266,7 @@ def to_lrc(lyric: WordLyric, ti: str = "", ar: str = "", al: str = ""):
         f"[ar:{ar}]" if ar else "",
         f"[al:{al}]" if al else "",
         f"[by:{lyric.tag}]",
+        f"[kiralrc:id={song_id or lyric.song_id}]" if (song_id or lyric.song_id) else "",
     ) if x]
     out = fmt.Lrc(metas=metas)
     for ln in lyric.lines:
@@ -495,7 +499,8 @@ def from_amll(song_id: int) -> WordLyric | None:
             continue
         lines = parse_ttml(raw.decode("utf-8", "replace"))
         if lines:
-            return WordLyric(source="AMLL", tag=TAGS["amll"], lines=lines, timed=True)
+            return WordLyric(source="AMLL", tag=TAGS["amll"], lines=lines, timed=True,
+                             song_id=int(song_id or 0))
     return None
 
 
