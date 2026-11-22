@@ -128,6 +128,41 @@ def cmd_fetch_lyrics(a) -> int:
     return 0 if counts.failed == 0 else 1
 
 
+def cmd_decrypt(a) -> int:
+    from . import decrypt
+
+    targets = []
+    for raw in a.paths:
+        p = Path(raw)
+        if p.is_dir():
+            targets += [q for q in sorted(p.rglob("*")) if q.is_file()]
+        elif p.exists():
+            targets.append(p)
+        else:
+            print(f"[skip] 找不到 {raw}")
+    todo = [p for p in targets if decrypt.looks_encrypted(p)]
+    if not todo:
+        print("这些路径里没有 NCM / QQ 加密文件")
+        return 0
+
+    ok = bad = 0
+    for p in todo:
+        try:
+            info = decrypt.decrypt(p, out_dir=a.out, write_tags=not a.no_tags)
+            ok += 1
+            if not a.quiet:
+                print(f"[ok] {p.name} → {info.path.name}  {info.title} / {info.artist}"
+                      f"{'  id=' + str(info.song_id) if info.song_id else ''}")
+        except decrypt.NotEncrypted as e:
+            bad += 1
+            print(f"[skip] {e}")
+        except Exception as e:
+            bad += 1
+            print(f"[fail] {p.name}: {e}")
+    print(f"解密 {ok} 个" + (f"，{bad} 个没成" if bad else ""))
+    return 0 if bad == 0 else 1
+
+
 def cmd_clean(a) -> int:
     from . import pipeline
 
@@ -412,6 +447,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--jobs", type=int, default=2, help="并发数，默认 2（平台会限速）")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_fetch_lyrics)
+
+    p = sub.add_parser("decrypt", help="解开网易云 NCM（保留歌名/歌手/封面/网易云 ID）")
+    p.add_argument("paths", nargs="+", help="文件或目录，目录会递归")
+    p.add_argument("--out", help="输出目录，默认放在原文件旁边")
+    p.add_argument("--no-tags", action="store_true", help="只出音频，不写标签")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_decrypt)
 
     p = sub.add_parser("clean", help="清理 work/ 中间产物缓存（默认仅清 30 天前，全清需加 --all）")
     p.add_argument("--days", type=float, default=30.0, help="仅清理超过 N 天的缓存（默认 30 天）")

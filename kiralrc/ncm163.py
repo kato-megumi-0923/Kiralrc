@@ -125,6 +125,36 @@ def decrypt_ecb(data: bytes, key: bytes = _KEY) -> bytes:
     return _unpad(bytes(out))
 
 
+def _encrypt_block(block: list[int], round_keys: list[list[int]]) -> list[int]:
+    state = [b ^ k for b, k in zip(block, round_keys[0])]
+    for rnd in range(1, 11):
+        state = [_SBOX[b] for b in state]
+        # ShiftRows：行 r 循环左移 r 位
+        state = [state[(i + 4 * (i % 4)) % 16] for i in range(16)]
+        if rnd != 10:
+            out = [0] * 16
+            for c in range(4):
+                a0, a1, a2, a3 = state[4 * c:4 * c + 4]
+                out[4 * c + 0] = _xtime(a0) ^ (_xtime(a1) ^ a1) ^ a2 ^ a3
+                out[4 * c + 1] = a0 ^ _xtime(a1) ^ (_xtime(a2) ^ a2) ^ a3
+                out[4 * c + 2] = a0 ^ a1 ^ _xtime(a2) ^ (_xtime(a3) ^ a3)
+                out[4 * c + 3] = (_xtime(a0) ^ a0) ^ a1 ^ a2 ^ _xtime(a3)
+            state = out
+        state = [b ^ k for b, k in zip(state, round_keys[rnd])]
+    return state
+
+
+def encrypt_ecb(data: bytes, key: bytes = _KEY) -> bytes:
+    """AES-128-ECB 加密并补 PKCS#7——只用来构造测试样本。"""
+    pad = 16 - len(data) % 16
+    data = data + bytes([pad]) * pad
+    round_keys = _expand_key(key)
+    out = bytearray()
+    for i in range(0, len(data), 16):
+        out += bytes(_encrypt_block(list(data[i:i + 16]), round_keys))
+    return bytes(out)
+
+
 def music_info(value: str | None) -> dict | None:
     """`163 key(Don't modify):…`（或裸 Base64）→ 歌曲信息；解不出就 None。"""
     if not value:

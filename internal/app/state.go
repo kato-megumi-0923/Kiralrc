@@ -1303,6 +1303,14 @@ func (a *app) runToolInteractive(toolCmd string) {
 			}
 			a.runKiralrcCLI(toolCmd, p)
 		}()
+	case "decrypt":
+		go func() {
+			dir, err := chooseFolder(a.win, "选择放着加密音频的文件夹", a.alignBatchDir)
+			if err != nil || dir == "" {
+				return
+			}
+			a.runKiralrcCLI("decrypt", dir)
+		}()
 	case "separate":
 		go func() {
 			p, err := chooseFile(a.win, "选择要分离人声的音频文件", "选择音频", []mygo.FileFilter{
