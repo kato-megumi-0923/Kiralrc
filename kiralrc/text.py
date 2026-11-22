@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -13,6 +14,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from . import ncm163
+
+_DOWNLOADS: dict[str, int] | None = None
 
 from . import config
 
@@ -77,8 +80,51 @@ def parse_song_id(value: str | int | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _downloads_index() -> dict[str, int]:
+    """Cloudy 的下载记录（可选）：同目录同名的「目录/文件名」→ 歌曲 ID。
+
+    这份文件在别的机器上通常没有，读不到就当没有，不影响后面的步骤。
+    """
+    global _DOWNLOADS
+    if _DOWNLOADS is not None:
+        return _DOWNLOADS
+    _DOWNLOADS = {}
+    path = Path(os.environ.get("APPDATA", "")) / "Cloudy" / "downloads.json"
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return _DOWNLOADS
+    if not isinstance(entries, list):
+        return _DOWNLOADS
+    for entry in entries:
+        try:
+            audio = str(entry.get("path") or "")
+            song_id = int((entry.get("track") or {}).get("id") or 0)
+        except Exception:
+            continue
+        if not audio or song_id <= 0:
+            continue
+        key = _path_tail(audio)
+        if key:
+            _DOWNLOADS.setdefault(key, song_id)
+    return _DOWNLOADS
+
+
+def _path_tail(path: str) -> str:
+    """「上一级目录/文件名」，用来跨盘符比对同一首歌。"""
+    parts = [p for p in re.split(r"[\\/]+", str(path)) if p]
+    return "/".join(parts[-2:]).lower()
+
+
+def netease_id_from_downloads(path: str | Path) -> int | None:
+    return _downloads_index().get(_path_tail(str(path)))
+
+
 def netease_id_from_file(path: str | Path) -> int | None:
-    """音频标签里的网易云 ID：Cloudy 写的明文 NETEASE_ID，或网易云的加密 163 key。"""
+    """音频标签里的网易云 ID，先解 163 key，再看 Cloudy 写的明文标签。
+
+    网易云客户端写的是加密的 163 key，用的人多，所以先试它。
+    """
     try:
         from mutagen import File as MutagenFile
         from mutagen.id3 import ID3
@@ -99,26 +145,28 @@ def netease_id_from_file(path: str | Path) -> int | None:
     if not tags:
         return None
     encrypted: list[str] = []
+    plain = None
     try:
         for key in tags.keys():
             raw = tags[key]
             for text in (raw if isinstance(raw, list) else [raw]):
                 text = str(text)
-                if "NETEASE_ID" in str(key).upper():
-                    sid = parse_song_id(text)
-                    if sid:
-                        return sid
                 if "163 key" in text:
                     encrypted.append(text)
+                elif "NETEASE_ID" in str(key).upper():
+                    plain = plain or text
     except Exception:
         return None
     for text in encrypted:
         sid = ncm163.music_id(text)
         if sid:
             return sid
-    return None
+    return parse_song_id(plain) if plain else None
 
 
+def netease_id_of(path: str | Path) -> int | None:
+    """一首歌的网易云 ID，不用联网：163 key → NETEASE_ID → 下载记录。"""
+    return (netease_id_from_file(path) or netease_id_from_downloads(path))
 def _fold(text: str) -> str:
     """歌名比大小写的形态：去括号副标题、去标点空白、统一大小写。"""
     if not text:
