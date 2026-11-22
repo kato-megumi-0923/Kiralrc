@@ -2848,8 +2848,8 @@ func (a *app) viewTools(c *ui.Context) {
 				ui.Row(c.Key(fmt.Sprintf("trow-%d", rStart))).FillWidth().Gap(14).AlignItems(ui.Stretch).Children(func() {
 					for i := rStart; i < rStart+3; i++ {
 						if i >= len(tools) {
-							// 空位与卡片同样的伸缩配置，宽度才分得一样
-							ui.Column(c).Grow(1).Basis(0).MinWidth(0)
+							// 空位要跟卡片一样带内边距：框架按 basis 分宽度，padding 算进 basis
+							ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(18, 20, 18, 20)
 							continue
 						}
 						tl := tools[i]
