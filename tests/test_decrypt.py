@@ -180,3 +180,37 @@ def test_rename_replaces_characters_windows_refuses(tmp_path):
     assert info.path.parent == tmp_path
     assert "/" not in info.path.name and ":" not in info.path.name
     assert info.path.name.startswith("A_B_C__")
+
+
+def test_decrypting_twice_overwrites_the_same_song(tmp_path):
+    """同一个 ID 重跑就该覆盖，而不是攒出 (2)、(3)。"""
+    src = tmp_path / "千百度.ncm"
+    src.write_bytes(build_ncm(META))
+    first = decrypt.decrypt_ncm(src)
+    second = decrypt.decrypt_ncm(src)
+    assert second.path == first.path
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == ["千百度.mp3", "千百度.ncm"], names
+
+
+def test_a_different_song_with_the_same_name_gets_a_suffix(tmp_path):
+    src = tmp_path / "a.ncm"
+    src.write_bytes(build_ncm(META))
+    decrypt.decrypt_ncm(src, rename=True)
+
+    # 换成另一首歌，但歌名歌手一样；按改名规则会撞名，这时才加序号
+    other = dict(META, musicId=999999)
+    src2 = tmp_path / "b.ncm"
+    src2.write_bytes(build_ncm(other))
+    second = decrypt.decrypt_ncm(src2, rename=True)
+    assert second.path.name == "千百度 - 许嵩 (2).mp3"
+
+
+def test_an_existing_file_without_id_is_not_clobbered(tmp_path):
+    src = tmp_path / "c.ncm"
+    src.write_bytes(build_ncm(META))
+    manual = tmp_path / "千百度.flac"
+    manual.write_bytes(b"fLaC" + b"\x00" * 64)      # 别人放的文件，没有 ID
+    info = decrypt.decrypt_ncm(src)
+    assert info.path.name != manual.name
+    assert manual.read_bytes()[:4] == b"fLaC"

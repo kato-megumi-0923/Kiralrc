@@ -176,10 +176,14 @@ def decrypt_ncm(path: str | Path, out_dir: str | Path | None = None,
     # 默认沿用原文件名：同名的 .lrc 才对得上
     name = _output_name(src, meta) if rename else src.stem
     target = out_dir / f"{name}.{fmt}"
-    n = 1
-    while target.exists() and target.resolve() != src.resolve():
-        n += 1
-        target = out_dir / f"{name} ({n}).{fmt}"
+    song_id = int(meta.get("musicId") or 0)
+    if target.exists() and target.resolve() != src.resolve():
+        # 同一个网易云 ID = 同一首歌，重跑直接覆盖；不同的才另起一个名字
+        if not (song_id and _read_netease_id(target) == song_id):
+            n = 1
+            while target.exists():
+                n += 1
+                target = out_dir / f"{name} ({n}).{fmt}"
     target.write_bytes(audio)
 
     info = Decrypted(path=target, format=fmt,
@@ -288,8 +292,13 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
     duration = _duration_ms((meta or {}).get("duration"))
     try:
         if info.format == "mp3":
-            from mutagen.id3 import APIC, ID3, TALB, TIT2, TLEN, TPE1, TXXX
-            tag = ID3()
+            from mutagen.id3 import APIC, ID3, ID3NoHeaderError, TALB, TIT2, TLEN, TPE1, TXXX
+            # 载荷里本来就带 ID3（音轨号、编码器等），读出来在原标签上改，
+            # 别从空白 ID3 重建——否则 TRCK/TPOS/TSSE 会被抹掉。
+            try:
+                tag = ID3(info.path)
+            except ID3NoHeaderError:
+                tag = ID3()
             if info.title:
                 tag.add(TIT2(encoding=3, text=info.title))
             if info.artist:
@@ -302,6 +311,7 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
                 tag.delall("TXXX:" + key)
                 tag.add(TXXX(encoding=3, desc=key, text=value))
             if info.cover:
+                tag.delall("APIC")   # 载荷自带封面时别叠两张
                 tag.add(APIC(encoding=3, mime=_cover_mime(info.cover), type=3,
                              desc="Cover", data=info.cover))
             tag.save(info.path)
@@ -330,6 +340,34 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
     except Exception:
         # 标签写不进去不该让音频白解一遍
         pass
+
+
+def _read_netease_id(path: Path) -> int:
+    """读已存在文件里的网易云 ID，用来判断是不是同一首。"""
+    try:
+        from mutagen import File as MutagenFile
+        tags = None
+        try:
+            audio = MutagenFile(str(path))
+            tags = getattr(audio, "tags", None) if audio is not None else None
+        except Exception:
+            tags = None
+        if not tags:
+            # 容器认不出来时，标签仍可能读得出来
+            from mutagen.id3 import ID3
+            try:
+                tags = ID3(str(path))
+            except Exception:
+                return 0
+        for key in ("NETEASE_ID", "netease_id", "TXXX:NETEASE_ID"):
+            value = tags.get(key) if hasattr(tags, "get") else None
+            if value:
+                text = str(value[0] if isinstance(value, list) else value).strip()
+                if text.isdigit():
+                    return int(text)
+    except Exception:
+        pass
+    return 0
 
 
 def _duration_ms(value) -> int:
