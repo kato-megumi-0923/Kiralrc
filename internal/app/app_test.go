@@ -247,6 +247,33 @@ func TestInlineLyricLineEditAndRefreshDeletedLrc(t *testing.T) {
 	}
 }
 
+func TestPythonSubprocessEnvPassesAppleMusicToken(t *testing.T) {
+	a := newApp()
+	// Empty token: must not inject KIRALRC_APPLE_MEDIA_USER_TOKEN
+	envEmpty := a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
+	for _, kv := range envEmpty {
+		if kv == "KIRALRC_APPLE_MEDIA_USER_TOKEN=" || len(kv) > 31 && kv[:31] == "KIRALRC_APPLE_MEDIA_USER_TOKEN=" {
+			t.Fatalf("unexpected apple token env when empty: %q", kv)
+		}
+	}
+	// Configured token + US storefront
+	a.setAppleToken = "  test-token-xyz  "
+	a.setAppleStorefront = 2
+	envSet := a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
+	var gotTok, gotSf string
+	for _, kv := range envSet {
+		switch {
+		case len(kv) > 31 && kv[:31] == "KIRALRC_APPLE_MEDIA_USER_TOKEN=":
+			gotTok = kv[31:]
+		case len(kv) > 25 && kv[:25] == "KIRALRC_APPLE_STOREFRONT=":
+			gotSf = kv[25:]
+		}
+	}
+	if gotTok != "test-token-xyz" || gotSf != "us" {
+		t.Fatalf("expected token=test-token-xyz sf=us, got token=%q sf=%q", gotTok, gotSf)
+	}
+}
+
 // With KIRALRC_FRAMES set to a directory, saves PNG frames of all six views.
 func TestRenderFrames(t *testing.T) {
 	dir := os.Getenv("KIRALRC_FRAMES")

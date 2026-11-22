@@ -288,7 +288,10 @@ type app struct {
 	setGpuName         string
 	setModels          []modelStatusItem
 	setCleanDays       int // 0:7天前 1:30天前 2:全部
-	setScroll          ui.ScrollState
+	setAppleToken         string
+	setAppleStorefront    int // 0:jp 1:cn 2:us
+	setConfirmDeleteModel string
+	setScroll             ui.ScrollState
 
 	toast string
 }
@@ -302,6 +305,8 @@ type userPrefs struct {
 	RecentPaths      []string `json:"recent_paths,omitempty"`
 	NotFoundPaths    []string `json:"not_found_paths,omitempty"`
 	Volume           *float64 `json:"volume,omitempty"`
+	AppleToken       string   `json:"apple_media_user_token,omitempty"`
+	AppleStorefront  int      `json:"apple_storefront"`
 }
 
 func prefsPath() string {
@@ -372,6 +377,10 @@ func (a *app) loadPrefs() {
 		if a.volume > 0 {
 			a.preMuteVol = a.volume
 		}
+	}
+	a.setAppleToken = strings.TrimSpace(up.AppleToken)
+	if up.AppleStorefront >= 0 && up.AppleStorefront <= 2 {
+		a.setAppleStorefront = up.AppleStorefront
 	}
 }
 
@@ -445,6 +454,8 @@ func (a *app) savePrefs() {
 		RecentPaths:      rpaths,
 		NotFoundPaths:    nfPaths,
 		Volume:           &vol,
+		AppleToken:       strings.TrimSpace(a.setAppleToken),
+		AppleStorefront:  a.setAppleStorefront,
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)
@@ -486,12 +497,13 @@ func newApp() *app {
 		setCacheSummary:    "0.0 MB · 0 项",
 		setGpuName:         "正在检测显卡…",
 		setModels: []modelStatusItem{
-			{Lang: "通用", Name: "Demucs 人声分离（htdemucs）", Path: "~/.cache/torch/hub/checkpoints/955717e8-8726e21a.th", Exists: false},
+			{Lang: "通用", Name: "Demucs 人声分离（htdemucs）", Path: "models/hf/hub/models--adefossez--HTDemucs", Exists: false},
 			{Lang: "通用", Name: "faster-whisper large-v3（ASR 句级定位）", Path: "models/faster-whisper-large-v3", Exists: false},
 			{Lang: "中文", Name: "SOFA 中文歌声对齐模型（主环境直跑）", Path: "models/sofa/v1.0.0_mandarin_singing.ckpt", Exists: false},
-			{Lang: "日文", Name: "MMS 日语卡拉 OK 歌声模型（NextFire）", Path: "~/.cache/huggingface/hub/models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn", Exists: false},
+			{Lang: "中文", Name: "FireRedASR-AED-L（中文专精听写）", Path: "models/FireRedASR-AED-L", Exists: false},
+			{Lang: "日文", Name: "MMS 日语卡拉 OK 歌声模型（NextFire）", Path: "models/hf/hub/models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn", Exists: false},
 			{Lang: "日文", Name: "fugashi + unidic-lite（日语词法读音）", Path: "Python 环境内置（MeCab / UniDic）", Exists: false},
-			{Lang: "英文", Name: "MMS 英文/多语歌词模型（Echora-300M）", Path: "~/.cache/huggingface/hub/models--hcX02--echora-mms-300m-multilingual-lyrics-forced-aligner", Exists: false},
+			{Lang: "英文", Name: "MMS 英文/多语歌词模型（Echora-300M）", Path: "models/hf/hub/models--hcX02--echora-mms-300m-multilingual-lyrics-forced-aligner", Exists: false},
 		},
 	}
 	a.loadPrefs()
@@ -905,8 +917,32 @@ func (a *app) scanLibraryAsync() {
 	}()
 }
 
+func (a *app) appleStorefrontCode() string {
+	switch a.setAppleStorefront {
+	case 1:
+		return "cn"
+	case 2:
+		return "us"
+	default:
+		return "jp"
+	}
+}
+
+func (a *app) pythonSubprocessEnv(extra ...string) []string {
+	env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+	env = append(env, extra...)
+	if tok := strings.TrimSpace(a.setAppleToken); tok != "" {
+		env = append(env,
+			"KIRALRC_APPLE_MEDIA_USER_TOKEN="+tok,
+			"KIRALRC_APPLE_STOREFRONT="+a.appleStorefrontCode(),
+		)
+	}
+	return env
+}
+
 // runKiralrcCLI invokes `python -m kiralrc <args>` asynchronously and updates the UI.
 func (a *app) runKiralrcCLI(args ...string) {
+	env := a.pythonSubprocessEnv()
 	go func() {
 		py := "python"
 		wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
@@ -915,7 +951,7 @@ func (a *app) runKiralrcCLI(args ...string) {
 		}
 		cmdArgs := append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)
 		cmd := newHiddenCmd(py, cmdArgs...)
-		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		msg := strings.TrimSpace(string(out))
 		if err != nil && msg == "" {
@@ -926,6 +962,42 @@ func (a *app) runKiralrcCLI(args ...string) {
 			if len(args) > 0 && args[0] == "clean" {
 				a.refreshBackendInfo()
 			}
+		})
+	}()
+}
+
+func canDeleteModelPath(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" || strings.HasPrefix(p, "Python ") {
+		return false
+	}
+	clean := filepath.Clean(p)
+	low := strings.ToLower(clean)
+	// 仅允许删除明确的本地模型文件/缓存目录，防止误删任意系统路径
+	if strings.Contains(low, "models--") ||
+		strings.Contains(low, string(filepath.Separator)+"models"+string(filepath.Separator)) ||
+		strings.Contains(low, "checkpoints"+string(filepath.Separator)) {
+		return true
+	}
+	return false
+}
+
+func (a *app) deleteModel(m modelStatusItem) {
+	if !m.Exists || !canDeleteModelPath(m.Path) {
+		return
+	}
+	target := filepath.Clean(m.Path)
+	a.setConfirmDeleteModel = ""
+	a.toast = "正在删除模型：" + m.Name
+	go func() {
+		err := os.RemoveAll(target)
+		a.post(func() {
+			if err != nil {
+				a.toast = "删除模型失败：" + err.Error()
+			} else {
+				a.toast = "已删除模型：" + m.Name
+			}
+			a.refreshBackendInfo()
 		})
 	}()
 }
@@ -1848,7 +1920,7 @@ func (a *app) runQueueWorker() {
 			args = append(args, "--waveform-first")
 		}
 		cmd := newHiddenCmd(py, args...)
-		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8", "PYTHONUNBUFFERED=1")
+		cmd.Env = a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
 		stdout, err := cmd.StdoutPipe()
 		cmd.Stderr = cmd.Stdout
 		var lastLine string

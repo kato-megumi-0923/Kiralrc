@@ -2797,6 +2797,28 @@ func (a *app) viewSettings(c *ui.Context) {
 							ui.Text(c, it.Name).FontSize(13.5).FontWeight(600).SingleLine()
 							ui.Text(c, it.Path).FontSize(11.5).TextColor(p.muted).SingleLine()
 						})
+						if it.Exists && canDeleteModelPath(it.Path) {
+							mBtn := func(key, label string, bg, fg ui.Color) ui.Element {
+								b := ui.ButtonBase(c.Key(key)).Height(28).PaddingX(11).Radius(999).Center().
+									Background(bg).Label(label).FocusRing(false)
+								b.Children(func() {
+									ui.Text(c, label).FontSize(11.5).FontWeight(700).TextColor(fg).SingleLine()
+								})
+								return b
+							}
+							if a.setConfirmDeleteModel == it.Name {
+								if mBtn(fmt.Sprintf("m-del-no-%d", mi), "取消", p.surface2, p.muted).Clicked() {
+									a.setConfirmDeleteModel = ""
+								}
+								if mBtn(fmt.Sprintf("m-del-yes-%d", mi), "确认删除", p.accent, p.onAccent).Clicked() {
+									a.deleteModel(it)
+								}
+							} else {
+								if mBtn(fmt.Sprintf("m-del-%d", mi), "删除", p.surface2, p.muted).Clicked() {
+									a.setConfirmDeleteModel = it.Name
+								}
+							}
+						}
 					})
 				}
 			})
@@ -2829,6 +2851,55 @@ func (a *app) viewSettings(c *ui.Context) {
 						ui.Text(c, "Echora-300M 默认按词输出；可切换为按字母切分").FontSize(12).TextColor(p.muted)
 					})
 					segmented(c, &a.setEnMode, "按词", "按字母均分")
+				})
+				ui.Column(c.Key("set-apple-row")).FillWidth().Padding(10, 0, 10, 0).Gap(8).Children(func() {
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Column(c).Grow(1).Gap(1).Children(func() {
+							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "Apple Music 官方歌词源（可选）").FontSize(13.5).FontWeight(600)
+								if strings.TrimSpace(a.setAppleToken) != "" {
+									statusPill(c, "已启用", p.okBg, p.ok)
+								} else {
+									statusPill(c, "未配置", p.surface2, p.muted)
+								}
+							})
+							ui.Text(c, "填写浏览器 music.apple.com 的 media-user-token 后生效，留空则自动跳过").FontSize(12).TextColor(p.muted)
+						})
+						prevSf := a.setAppleStorefront
+						segmented(c.Key("set-apple-sf"), &a.setAppleStorefront, "日区 jp", "国区 cn", "美区 us")
+						if a.setAppleStorefront != prevSf {
+							a.savePrefs()
+						}
+					})
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						prevTok := a.setAppleToken
+						inBox := ui.Row(c).Grow(1).MinWidth(0).Padding(7, 10, 7, 10).Radius(10).AlignItems(ui.Center).Background(p.bg)
+						inBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 10, 1) })
+						inBox.Children(func() {
+							ui.TextInputBase(c.Key("set-apple-tok"), &a.setAppleToken).Grow(1).MinWidth(0).Height(22).
+								FontSize(12).TextColor(p.text).Background(ui.Transparent).
+								Placeholder("粘贴 media-user-token（自动写入偏好并透传给 Python 后端）").FocusRing(false)
+						})
+						if a.setAppleToken != prevTok {
+							a.savePrefs()
+						}
+						if pillButton(c.Key("set-apple-paste"), nil, "从剪贴板粘贴", p.surface2, p.text).Clicked() {
+							if txt := strings.TrimSpace(readClipboardText()); txt != "" {
+								a.setAppleToken = txt
+								a.savePrefs()
+								a.toast = "已粘贴 Apple Music Token"
+							} else {
+								a.toast = "剪贴板为空"
+							}
+						}
+						if strings.TrimSpace(a.setAppleToken) != "" {
+							if pillButton(c.Key("set-apple-clear"), nil, "清空", p.surface2, p.muted).Clicked() {
+								a.setAppleToken = ""
+								a.savePrefs()
+								a.toast = "已清空 Apple Music Token"
+							}
+						}
+					})
 				})
 				ui.Row(c).Height(56).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(1).Children(func() {

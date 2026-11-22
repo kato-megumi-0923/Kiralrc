@@ -202,9 +202,8 @@ def _detect_gpu_label() -> str:
 def _check_models() -> list[dict]:
     import importlib.util
 
-    home = Path.home()
-    torch_ckpt = home / ".cache" / "torch" / "hub" / "checkpoints"
-    hf_hub = home / ".cache" / "huggingface" / "hub"
+    torch_ckpt = config.torch_home_dir() / "hub" / "checkpoints"
+    hf_hub = config.hf_hub_dir()
 
     def _safe_cfg_path(key: str) -> tuple[str, bool]:
         try:

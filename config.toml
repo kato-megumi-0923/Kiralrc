@@ -34,3 +34,6 @@ restore_long_vowel = true
 polyphone_file = "polyphone.toml"
 # KI-7: 英文/数字逐字粒度："word"（按词）或 "char"（按字母均分）
 en_granularity = "word"
+# 可选：Apple Music 官方歌词源（留空则静默跳过，也可用 KIRALRC_APPLE_MEDIA_USER_TOKEN 覆盖）
+apple_media_user_token = ""
+apple_storefront = "jp"

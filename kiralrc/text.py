@@ -4,13 +4,19 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from . import config
 
 HAN = re.compile(r"[\u4e00-\u9fff]")
 KANA = re.compile(r"[\u3040-\u30ff]")
+HANGUL = re.compile(r"[\uac00-\ud7a3]")
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
 HEADERS = {"User-Agent": UA, "Referer": "https://music.163.com/"}
@@ -266,7 +272,7 @@ def qq_match(keyword: str, duration: float | None = None,
                 "artist": singer,
                 "duration": int(s.get("interval") or 0),
             })
-        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist)
+        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist, min_score=0.50)
         if not cands:
             return None
         for cand in cands[:3]:
@@ -307,7 +313,7 @@ def kugou_match(keyword: str, duration: float | None = None,
             for s in info
             if s.get("hash")
         ]
-        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist)
+        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist, min_score=0.50)
         if not cands:
             return None
         for s in cands[:3]:
@@ -362,7 +368,7 @@ def lrclib_match(keyword: str, duration: float | None = None,
             for x in (arr or [])
             if isinstance(x, dict) and (x.get("syncedLyrics") or "").strip()
         ]
-        synced = _filter_candidates(synced, keyword, duration, name=name, artist=artist)
+        synced = _filter_candidates(synced, keyword, duration, name=name, artist=artist, min_score=0.50)
         if not synced:
             return None
         s0 = synced[0]
@@ -384,19 +390,296 @@ def lrclib_match(keyword: str, duration: float | None = None,
     return None
 
 
+def _parse_ttml_time(raw: str) -> float | None:
+    """解析 TTML 时间戳（支持 HH:MM:SS.mmm / MM:SS.mmm / SS.mmm / 123s / 1234ms）。"""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if s.endswith("ms"):
+        try:
+            return float(s[:-2]) / 1000.0
+        except ValueError:
+            return None
+    if s.endswith("s"):
+        try:
+            return float(s[:-1])
+        except ValueError:
+            return None
+    parts = s.split(":")
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        return float(parts[0])
+    except ValueError:
+        return None
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _xml_attr_role(el: ET.Element) -> str:
+    for k, v in el.attrib.items():
+        if _xml_local_name(k) == "role":
+            return (v or "").strip().lower()
+    return ""
+
+
+def ttml_to_lrc(xml_text: str) -> tuple[str, str]:
+    """零依赖解析 TTML 歌词，返回整行 (lrc, tlyric)。
+
+    忽略逐字 <span> 时间戳，仅提取每句 <p begin=...> 的纯文本与行首时间
+    （逐字时间仍交由本地 SOFA / MMS 在人声轨上重新计算，避免不同母带静音偏移）；
+    若节点内含 ttm:role="x-translation" 译文，则同步提取为 tlyric。
+    """
+    from . import format as fmt
+
+    if not xml_text or not xml_text.strip():
+        return "", ""
+    try:
+        root = ET.fromstring(xml_text.strip().lstrip("\ufeff"))
+    except ET.ParseError:
+        return "", ""
+
+    lrc_lines: list[str] = []
+    tr_lines: list[str] = []
+
+    def _collect_text(node: ET.Element, main_buf: list[str], tr_buf: list[str], in_tr: bool = False) -> None:
+        role = _xml_attr_role(node)
+        if role in ("x-roman", "x-bg-roman"):
+            return
+        cur_tr = in_tr or role in ("x-translation", "translation")
+        target = tr_buf if cur_tr else main_buf
+        if node.text and not ("\n" in node.text and not node.text.strip()):
+            target.append(node.text)
+        for child in node:
+            _collect_text(child, main_buf, tr_buf, cur_tr)
+            if child.tail and not ("\n" in child.tail and not child.tail.strip()):
+                target.append(child.tail)
+
+    for el in root.iter():
+        if _xml_local_name(el.tag) != "p":
+            continue
+        begin = _parse_ttml_time(el.attrib.get("begin", ""))
+        if begin is None:
+            continue
+        main_buf: list[str] = []
+        tr_buf: list[str] = []
+        _collect_text(el, main_buf, tr_buf, False)
+        main_txt = re.sub(r"\s+", " ", "".join(main_buf)).strip()
+        tr_txt = re.sub(r"\s+", " ", "".join(tr_buf)).strip()
+        if not main_txt:
+            continue
+        stamp = fmt.fmt_ts(begin)
+        lrc_lines.append(f"{stamp}{main_txt}")
+        if tr_txt:
+            tr_lines.append(f"{stamp}{tr_txt}")
+
+    return "\n".join(lrc_lines), "\n".join(tr_lines)
+
+
+def amll_match(song_id: int | None, name: str = "", artist: str = "",
+               duration: float = 0, timeout: float = 8.0) -> dict | None:
+    """从开源 amll-ttml-db 按网易云 song_id 拉取 TTML 歌词（GitHub raw → jsDelivr 回退）。"""
+    if not song_id:
+        return None
+    urls = (
+        f"https://raw.githubusercontent.com/Steve-xmh/amll-ttml-db/main/ncm-lyrics/{song_id}.ttml",
+        f"https://cdn.jsdelivr.net/gh/Steve-xmh/amll-ttml-db@main/ncm-lyrics/{song_id}.ttml",
+    )
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                xml_text = r.read().decode("utf-8", errors="replace")
+            lrc, tlyric = ttml_to_lrc(xml_text)
+            n = len([x for x in lrc.splitlines() if x.strip()])
+            if n >= 4:
+                return {
+                    "source": "AMLL",
+                    "id": song_id,
+                    "name": name,
+                    "artist": artist,
+                    "duration": round(duration) if duration else 0,
+                    "lrc": lrc,
+                    "tlyric": tlyric,
+                    "lines": n,
+                }
+        except Exception:
+            continue
+    return None
+
+
+_APPLE_BEARER_CACHE: str | None = None
+_APPLE_WARNED: bool = False
+
+
+def _apple_warn_once(msg: str) -> None:
+    global _APPLE_WARNED
+    if not _APPLE_WARNED:
+        _APPLE_WARNED = True
+        print(f"[warn] Apple Music: {msg}", file=sys.stderr)
+
+
+def _get_apple_bearer(timeout: float = 10.0) -> str | None:
+    """从 music.apple.com 抓取并缓存公开 Web Bearer Token。"""
+    global _APPLE_BEARER_CACHE
+    if _APPLE_BEARER_CACHE:
+        return _APPLE_BEARER_CACHE
+    try:
+        req = urllib.request.Request("https://music.apple.com/", headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            html = r.read().decode("utf-8", errors="replace")
+        m_js = re.search(r'src="(/assets/index[^"]*\.js)"', html)
+        if not m_js:
+            return None
+        js_url = "https://music.apple.com" + m_js.group(1)
+        jreq = urllib.request.Request(js_url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(jreq, timeout=timeout) as r:
+            js = r.read().decode("utf-8", errors="replace")
+        m_tok = re.search(r"eyJhbGciOiJFUzI1NiI[A-Za-z0-9._-]+", js)
+        if m_tok:
+            _APPLE_BEARER_CACHE = m_tok.group(0)
+            return _APPLE_BEARER_CACHE
+    except Exception as e:
+        _apple_warn_once(f"获取公开 Bearer Token 失败 ({type(e).__name__})，已跳过")
+    return None
+
+
+def apple_music_match(keyword: str, duration: float | None = None,
+                      name: str = "", artist: str = "") -> dict | None:
+    """Apple Music 官方歌词源（可选配置：未填 apple_media_user_token 时直接静默跳过）。"""
+    user_token = str(config.opt("apple_media_user_token", "") or "").strip()
+    if not user_token:
+        return None
+    storefront = str(config.opt("apple_storefront", "jp") or "jp").strip().lower() or "jp"
+    bearer = _get_apple_bearer()
+    if not bearer:
+        return None
+    headers = {
+        "Authorization": f"Bearer {bearer}",
+        "Media-User-Token": user_token,
+        "Origin": "https://music.apple.com",
+        "Referer": "https://music.apple.com/",
+        "User-Agent": UA,
+    }
+    try:
+        term = urllib.parse.quote(keyword)
+        surl = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/search?term={term}&types=songs&limit=5"
+        sreq = urllib.request.Request(surl, headers=headers)
+        with urllib.request.urlopen(sreq, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+        raw_songs = (((data.get("results") or {}).get("songs") or {}).get("data")) or []
+        cands = []
+        for s in raw_songs:
+            attr = s.get("attributes") or {}
+            sid = s.get("id") or ""
+            if not sid:
+                continue
+            cands.append({
+                "id": sid,
+                "name": attr.get("name") or "",
+                "artist": attr.get("artistName") or "",
+                "duration": round(float(attr.get("durationInMillis") or 0) / 1000.0),
+            })
+        cands = _filter_candidates(cands, keyword, duration, name=name, artist=artist, min_score=0.50)
+        if not cands:
+            return None
+        for cand in cands[:3]:
+            for ep in ("lyrics", "syllable-lyrics"):
+                lurl = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/songs/{cand['id']}/{ep}"
+                try:
+                    lreq = urllib.request.Request(lurl, headers=headers)
+                    with urllib.request.urlopen(lreq, timeout=10) as r:
+                        ld = json.loads(r.read().decode("utf-8", errors="replace"))
+                except urllib.error.HTTPError as he:
+                    if he.code in (401, 403):
+                        _apple_warn_once(f"认证失败 (HTTP {he.code})，请更新 apple_media_user_token")
+                        return None
+                    continue
+                items = ld.get("data") or []
+                ttml = ((items[0].get("attributes") or {}).get("ttml") or "") if items else ""
+                if not ttml:
+                    continue
+                lrc, tlyric = ttml_to_lrc(ttml)
+                n = len([x for x in lrc.splitlines() if x.strip()])
+                if n >= 4:
+                    return {**cand, "source": "Apple Music", "lrc": lrc, "tlyric": tlyric, "lines": n}
+    except urllib.error.HTTPError as he:
+        if he.code in (401, 403):
+            _apple_warn_once(f"认证失败 (HTTP {he.code})，请更新 apple_media_user_token")
+        else:
+            _apple_warn_once(f"请求失败 (HTTP {he.code})")
+        return None
+    except Exception as e:
+        _apple_warn_once(f"请求异常 ({type(e).__name__})，已跳过")
+        return None
+    return None
+
+
+def _is_non_chinese_query(keyword: str, name: str = "", artist: str = "") -> bool:
+    """判断检索目标是否偏非中文（含假名/韩文，或以拉丁字母为主）。"""
+    sample = f"{name or keyword} {artist}".strip()
+    if KANA.search(sample) or HANGUL.search(sample):
+        return True
+    han_cnt = len(HAN.findall(sample))
+    latin_cnt = len(re.findall(r"[A-Za-z]", sample))
+    return latin_cnt > 0 and (han_cnt == 0 or latin_cnt > han_cnt * 2)
+
+
 def best_match(keyword: str, duration: float | None = None, interval: float = 4.5,
                song_id: int | None = None, name: str = "", artist: str = "") -> dict | None:
-    """多源顺序兜底搜歌词：给了 ID 就先按 ID 取，否则网易云 → QQ音乐 → 酷狗音乐 → LRCLIB。"""
+    """多源动态回退搜歌词：
+    - 已知 song_id：先按 ID 查 网易云 → AMLL；
+    - 非中文歌曲：网易云 → AMLL → Apple Music → QQ音乐 → LRCLIB → 酷狗音乐；
+    - 中文歌曲：网易云 → AMLL → QQ音乐 → 酷狗音乐 → Apple Music → LRCLIB。
+    """
     if song_id:
         hit = netease_by_id(song_id)
         if hit:
             return hit
-    for fn in (
-        lambda: netease_match(keyword, duration, interval=interval, name=name, artist=artist),
-        lambda: qq_match(keyword, duration, name=name, artist=artist),
-        lambda: kugou_match(keyword, duration, name=name, artist=artist),
-        lambda: lrclib_match(keyword, duration, name=name, artist=artist),
-    ):
+        hit = amll_match(song_id, name=name or keyword, artist=artist, duration=duration or 0)
+        if hit:
+            return hit
+
+    # 1) 先查网易云，若未命中则复用高分候选 ID 查 AMLL
+    hit = netease_match(keyword, duration, interval=interval, name=name, artist=artist)
+    if hit:
+        return hit
+
+    amll_cand_id = None
+    amll_meta = {"name": name or keyword, "artist": artist, "duration": duration or 0}
+    cands = netease_candidates(keyword, duration, name=name or keyword, artist=artist)
+    if cands and cands[0]["score"] >= 0.55:
+        amll_cand_id = cands[0]["id"]
+        amll_meta = {
+            "name": cands[0].get("name") or name or keyword,
+            "artist": cands[0].get("artist") or artist,
+            "duration": cands[0].get("duration") or duration or 0,
+        }
+    if amll_cand_id and amll_cand_id != song_id:
+        hit = amll_match(amll_cand_id, **amll_meta)
+        if hit:
+            return hit
+
+    # 2) 按语种动态选择后续源回退顺序
+    if _is_non_chinese_query(keyword, name=name, artist=artist):
+        chain = (
+            lambda: apple_music_match(keyword, duration, name=name, artist=artist),
+            lambda: qq_match(keyword, duration, name=name, artist=artist),
+            lambda: lrclib_match(keyword, duration, name=name, artist=artist),
+            lambda: kugou_match(keyword, duration, name=name, artist=artist),
+        )
+    else:
+        chain = (
+            lambda: qq_match(keyword, duration, name=name, artist=artist),
+            lambda: kugou_match(keyword, duration, name=name, artist=artist),
+            lambda: apple_music_match(keyword, duration, name=name, artist=artist),
+            lambda: lrclib_match(keyword, duration, name=name, artist=artist),
+        )
+    for fn in chain:
         hit = fn()
         if hit:
             return hit

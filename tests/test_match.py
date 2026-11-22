@@ -153,3 +153,107 @@ def test_segments_to_fallback_lines_filters_hallucinations_and_splits_on_gap():
     ]
     got = asr.segments_to_fallback_lines(words, segs)
     assert got == [(5.0, "hello world"), (6.6, "how are you")]
+
+
+def test_ttml_to_lrc_parses_word_spans_and_translations():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">
+      <body>
+        <div>
+          <p begin="00:07.734" end="00:08.525">
+            <span begin="00:07.734" end="00:07.900">Hi </span>
+            <span begin="00:07.900" end="00:08.100">you </span>
+            <span begin="00:08.100" end="00:08.425">guys!</span>
+            <span ttm:role="x-translation">大家好</span>
+          </p>
+          <p begin="1:02.50" end="1:05.00">
+            <span begin="1:02.50" end="1:03.20">君は</span>
+            <span begin="1:03.20" end="1:05.00">笑う</span>
+            <span ttm:role="x-roman">kimi wa warau</span>
+            <span ttm:role="x-translation">你在微笑</span>
+          </p>
+        </div>
+      </body>
+    </tt>"""
+    lrc, tlyric = tx.ttml_to_lrc(xml)
+    assert lrc == "[00:07.734]Hi you guys!\n[01:02.500]君は笑う"
+    assert tlyric == "[00:07.734]大家好\n[01:02.500]你在微笑"
+
+
+def test_apple_music_match_skips_when_token_empty(monkeypatch):
+    monkeypatch.setenv("KIRALRC_APPLE_MEDIA_USER_TOKEN", "")
+    called = []
+
+    def boom(*args, **kwargs):
+        called.append(True)
+        raise AssertionError("should not perform network request when token is empty")
+
+    monkeypatch.setattr(tx.urllib.request, "urlopen", boom)
+    assert tx.apple_music_match("晴天", duration=269, name="晴天", artist="周杰伦") is None
+    assert not called
+
+
+def test_multi_sources_reject_low_similarity_matches(monkeypatch):
+    class _Resp:
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def read(self):
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    sample_lrc = "\n".join(f"[00:0{i}.000]line {i}" for i in range(1, 10))
+
+    # 1) QQ 音乐返回时长碰巧接近但歌名完全无关的曲目 -> 必须拒绝
+    qq_payload = json.dumps({
+        "req_1": {"data": {"body": {"song": {"list": [
+            {"mid": "bad1", "name": "完全无关的歌", "singer": [{"name": "路人甲"}], "interval": 240}
+        ]}}}}
+    }).encode("utf-8")
+    monkeypatch.setattr(tx.urllib.request, "urlopen", lambda req, timeout=12: _Resp(qq_payload))
+    assert tx.qq_match("晴天", duration=240, name="晴天", artist="周杰伦") is None
+
+    # 2) 酷狗返回时长接近但歌名无关 -> 必须拒绝
+    kg_payload = json.dumps({
+        "data": {"info": [{"hash": "abc", "songname": "毫不相干", "singername": "某人", "duration": 240}]}
+    }).encode("utf-8")
+    monkeypatch.setattr(tx.urllib.request, "urlopen", lambda req, timeout=12: _Resp(kg_payload))
+    assert tx.kugou_match("晴天", duration=240, name="晴天", artist="周杰伦") is None
+
+    # 3) LRCLIB 返回时长接近但歌名无关 -> 必须拒绝
+    lr_payload = json.dumps([
+        {"id": 99, "trackName": "Totally Different Song", "artistName": "Nobody", "duration": 240, "syncedLyrics": sample_lrc}
+    ]).encode("utf-8")
+    monkeypatch.setattr(tx.urllib.request, "urlopen", lambda req, timeout=12: _Resp(lr_payload))
+    assert tx.lrclib_match("晴天", duration=240, name="晴天", artist="周杰伦") is None
+
+
+def test_best_match_dynamic_order_and_amll_reuses_netease_id(monkeypatch):
+    # A) 中文歌曲顺序：网易云 → AMLL → QQ音乐 → 酷狗音乐 → Apple Music → LRCLIB
+    zh_calls: list[str] = []
+    monkeypatch.setattr(tx, "netease_match", lambda *a, **kw: zh_calls.append("netease") or None)
+    monkeypatch.setattr(tx, "netease_candidates", lambda *a, **kw: [{"id": 123456, "name": "晴天", "artist": "周杰伦", "duration": 269, "score": 0.95}])
+    monkeypatch.setattr(tx, "amll_match", lambda sid, **kw: zh_calls.append(f"amll:{sid}") or None)
+    monkeypatch.setattr(tx, "qq_match", lambda *a, **kw: zh_calls.append("qq") or None)
+    monkeypatch.setattr(tx, "kugou_match", lambda *a, **kw: zh_calls.append("kugou") or None)
+    monkeypatch.setattr(tx, "apple_music_match", lambda *a, **kw: zh_calls.append("apple") or None)
+    monkeypatch.setattr(tx, "lrclib_match", lambda *a, **kw: zh_calls.append("lrclib") or None)
+    tx.best_match("晴天", duration=269, name="晴天", artist="周杰伦")
+    assert zh_calls == ["netease", "amll:123456", "qq", "kugou", "apple", "lrclib"]
+
+    # B) 日/英文歌曲顺序：网易云 → AMLL → Apple Music → QQ音乐 → LRCLIB → 酷狗音乐
+    ja_calls: list[str] = []
+    monkeypatch.setattr(tx, "netease_match", lambda *a, **kw: ja_calls.append("netease") or None)
+    monkeypatch.setattr(tx, "netease_candidates", lambda *a, **kw: [{"id": 654321, "name": "晴る", "artist": "ヨルシカ", "duration": 270, "score": 0.92}])
+    monkeypatch.setattr(tx, "amll_match", lambda sid, **kw: ja_calls.append(f"amll:{sid}") or None)
+    monkeypatch.setattr(tx, "apple_music_match", lambda *a, **kw: ja_calls.append("apple") or None)
+    monkeypatch.setattr(tx, "qq_match", lambda *a, **kw: ja_calls.append("qq") or None)
+    monkeypatch.setattr(tx, "lrclib_match", lambda *a, **kw: ja_calls.append("lrclib") or None)
+    monkeypatch.setattr(tx, "kugou_match", lambda *a, **kw: ja_calls.append("kugou") or None)
+    tx.best_match("ヨルシカ 晴る", duration=270, name="晴る", artist="ヨルシカ")
+    assert ja_calls == ["netease", "amll:654321", "apple", "qq", "lrclib", "kugou"]

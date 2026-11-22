@@ -129,7 +129,7 @@ def resolve_reference(audio_path: Path, ref: Path | None,
                         name=title_hint or kw, artist=artist_hint)
     if not hit:
         where = f"（ID {used_id} 也没取到）" if used_id else ""
-        return None, [], f"多源（网易云/QQ/酷狗/LRCLIB）均未搜到「{kw}」{where}，且没有参考文件"
+        return None, [], f"多源均未搜到「{kw}」{where}，且没有参考文件"
 
     p = config.work_dir() / (audio_path.stem[:40] + ".ref.lrc")
     merged = tx.merge_tlyric(hit["lrc"], hit.get("tlyric") or "")

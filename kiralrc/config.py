@@ -42,3 +42,38 @@ def work_dir() -> Path:
     d = path("work_dir")
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def models_dir() -> Path:
+    """所有本地模型与缓存的统一根目录（<ROOT>/models）。"""
+    env = os.environ.get("KIRALRC_MODELS_DIR")
+    return Path(env) if env else (ROOT / "models")
+
+
+def hf_home_dir() -> Path:
+    env = os.environ.get("HF_HOME")
+    return Path(env) if env else (models_dir() / "hf")
+
+
+def hf_hub_dir() -> Path:
+    env = os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+    return Path(env) if env else (hf_home_dir() / "hub")
+
+
+def torch_home_dir() -> Path:
+    env = os.environ.get("TORCH_HOME")
+    return Path(env) if env else (models_dir() / "torch")
+
+
+def ensure_model_cache_env() -> None:
+    """将 HuggingFace / Torch 默认模型缓存统一收拢到项目 models/ 目录（外部已显式设置环境变量时不覆盖）。"""
+    hf_home = hf_home_dir()
+    hf_hub = hf_hub_dir()
+    torch_home = torch_home_dir()
+    os.environ.setdefault("HF_HOME", str(hf_home))
+    os.environ.setdefault("HF_HUB_CACHE", str(hf_hub))
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hf_hub))
+    os.environ.setdefault("TORCH_HOME", str(torch_home))
+
+
+ensure_model_cache_env()
