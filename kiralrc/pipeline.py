@@ -192,6 +192,183 @@ def meta_from_ref(ref_path: Path | None) -> dict[str, str]:
     return out
 
 
+def _is_enhanced_ref(ref_path: Path | None) -> bool:
+    """判断显式传入的参考文件本身是否为逐字 LRC（>=50% 歌词行含 <mm:ss.xxx>）。"""
+    if not ref_path or not Path(ref_path).exists():
+        return False
+    body = Path(ref_path).read_text(encoding="utf-8-sig")
+    lrc = fmt.parse(body)
+    valid = [ln for ln in lrc.lines if ln.text.strip() and not tx.CREDIT_RE.match(ln.text.strip())]
+    if len(valid) < 4:
+        return False
+    enh = sum(1 for ln in valid if ln.chars and len(ln.chars) >= 2)
+    return (enh / len(valid)) >= 0.50
+
+
+def _transfer_enhanced_lrc(ref_path: Path, vocals: Path, total: float) -> tuple[fmt.Lrc, str]:
+    """将原唱逐字 LRC 的逐字节奏迁移到目标音频（Live 版 / 翻唱版）：
+    1) 用目标人声轨 RMS 包络与原唱模板活动掩码做全局互相关，秒级锁定主偏移 global_shift；
+    2) 每句在 global_shift 附近做小范围局部相关性微调（吸收 Live 抢拍/拖拍与间奏微差）；
+    3) 自动清理原唱 YRC 首字吃前奏静音（如 5s）或末字吃长间奏静音（如 18s）的瑕疵。"""
+    import numpy as np
+
+    hop = 0.02
+    voc_16k = au.decode(vocals, 16000)
+    env = au.rms_envelope(voc_16k, sr=16000, hop=hop)
+    n_env = len(env)
+    p80 = float(np.percentile(env, 80)) if n_env else 0.1
+    act_th = max(0.02, p80 * 0.20)
+    voc_act = (env >= act_th).astype(np.float32)
+
+    src = fmt.parse(Path(ref_path).read_text(encoding="utf-8-sig"))
+    src_lines = [
+        ln for ln in src.lines
+        if ln.text.strip() and not tx.CREDIT_RE.match(ln.text.strip())
+    ]
+
+    # 先清理每句的合理有效时间跨度（去掉 YRC 常见首字吃 5s 前奏 / 末字吃 18s 间奏）
+    clean_spans: list[tuple[float, float]] = []
+    for ln in src_lines:
+        cs = ln.chars or [(ln.text, ln.start)]
+        t_s = cs[0][1]
+        if len(cs) >= 2 and (cs[1][1] - cs[0][1]) > 1.8:
+            t_s = cs[1][1] - 0.35
+        t_e = ln.end if ln.end is not None else cs[-1][1] + 0.5
+        if (t_e - cs[-1][1]) > 4.0:
+            t_e = cs[-1][1] + 1.5
+        clean_spans.append((max(0.0, t_s), max(t_s + 0.2, t_e)))
+
+    # 构建模板有声掩码，与目标人声活动做 [-30s, +30s] 互相关找全局最优偏移
+    max_t = max(total, max((e for _, e in clean_spans), default=0.0)) + 32.0
+    m_len = int(max_t / hop) + 1
+    tmpl = np.zeros(m_len, dtype=np.float32)
+    for ts, te in clean_spans:
+        i0 = max(0, int(ts / hop))
+        i1 = min(m_len, int(te / hop))
+        tmpl[i0:i1] = 1.0
+
+    # 粗搜 0.1s 步长 [-30s, +30s]，再精搜 0.02s 步长 ±0.5s
+    def _corr_at(shift_f: int) -> float:
+        if shift_f >= 0:
+            ln_c = min(n_env - shift_f, m_len)
+            if ln_c <= 0:
+                return -1.0
+            return float(np.dot(voc_act[shift_f: shift_f + ln_c], tmpl[:ln_c]))
+        off_t = -shift_f
+        ln_c = min(n_env, m_len - off_t)
+        if ln_c <= 0:
+            return -1.0
+        return float(np.dot(voc_act[:ln_c], tmpl[off_t: off_t + ln_c]))
+
+    max_shift_f = int(30.0 / hop)
+    best_f = 0
+    best_c = -1.0
+    for sf in range(-max_shift_f, max_shift_f + 1, 5):
+        c = _corr_at(sf)
+        if c > best_c:
+            best_c = c
+            best_f = sf
+    for sf in range(best_f - 25, best_f + 26):
+        c = _corr_at(sf)
+        if c > best_c:
+            best_c = c
+            best_f = sf
+    global_shift = best_f * hop
+
+    # 逐句在 global_shift 附近做 ±0.35s 局部相关性微调，并清理首/尾静音瑕疵
+    out_lines: list[fmt.Line] = []
+    for idx, ln in enumerate(src_lines):
+        ts, te = clean_spans[idx]
+        win_len = max(10, int((te - ts) / hop))
+        seg_tmpl = np.ones(win_len, dtype=np.float32)
+        base_f = int(round((ts + global_shift) / hop))
+        best_lf = 0
+        best_lc = -1.0
+        for df in range(-17, 18):  # ±0.34s
+            p0 = base_f + df
+            if p0 < 0 or p0 + win_len > n_env:
+                continue
+            # 偏好紧贴真实起音：开头 0.15s 有声、开头前 0.10s 尽量安静
+            sc = float(np.dot(voc_act[p0: p0 + win_len], seg_tmpl))
+            if p0 >= 4:
+                sc -= 0.35 * float(voc_act[p0 - 4: p0].sum())
+            sc -= 0.015 * abs(df)  # 轻微偏向 global_shift，防止无依据漂移
+            if sc > best_lc:
+                best_lc = sc
+                best_lf = df
+        shift = global_shift + best_lf * hop
+
+        new_chars: list[tuple[str, float]] = []
+        if ln.chars:
+            for j, (ch, ct) in enumerate(ln.chars):
+                nt = max(0.0, ct + shift)
+                # 清理 YRC 首字吃超长前奏（如第 1 句 11.37 -> 16.59）
+                if j == 0 and len(ln.chars) >= 2 and (ln.chars[1][1] - ct) > 1.8:
+                    nt = max(0.0, (ln.chars[1][1] - 0.35) + shift)
+                new_chars.append((ch, round(nt, 3)))
+            new_start = new_chars[0][1]
+        else:
+            new_start = round(max(0.0, ln.start + shift), 3)
+
+        raw_end = (ln.end + shift) if ln.end is not None else (new_chars[-1][1] + 0.5 if new_chars else new_start + 1.0)
+        # 清理 YRC 末字吃超长间奏（如 18s）
+        last_char_t = new_chars[-1][1] if new_chars else new_start
+        if (raw_end - last_char_t) > 3.5:
+            # 沿目标人声包络找到真实衰减结束点（不超过 3.0s，避开 Live 观众欢呼/伴奏残留）
+            k0 = max(0, int(last_char_t / hop))
+            k_lim = min(n_env, int(min(total, raw_end, last_char_t + 3.0) / hop))
+            sil_run = 0
+            cut_k = min(k_lim, k0 + int(1.2 / hop))
+            for k in range(k0, k_lim):
+                if env[k] < act_th:
+                    sil_run += 1
+                    if sil_run >= 8:  # 0.16s 静音
+                        cut_k = max(k0 + 5, k - 6)
+                        break
+                else:
+                    sil_run = 0
+                    cut_k = k + 2
+            raw_end = cut_k * hop
+
+        new_end = round(min(total, max(last_char_t + 0.08, raw_end)), 3)
+        out_lines.append(fmt.Line(new_start, ln.text, new_chars, new_end))
+
+    # 句间防重叠夹断（同时确保末字起点也不越过下一行行首）
+    for i in range(len(out_lines) - 1):
+        cap = round(out_lines[i + 1].start - 0.02, 3)
+        if out_lines[i].chars:
+            for j in range(len(out_lines[i].chars)):
+                ch, ct = out_lines[i].chars[j]
+                if ct > cap - 0.04:
+                    out_lines[i].chars[j] = (ch, round(max(out_lines[i].start, cap - 0.04), 3))
+        if out_lines[i].end is not None and out_lines[i].end > cap:
+            out_lines[i].end = max(round(out_lines[i].start + 0.04, 3), cap)
+
+    return fmt.Lrc([], out_lines), f"原唱逐字模板迁移 (全局偏移 {global_shift:+.2f}s，{len(out_lines)} 行)"
+
+
+def _jp_wall_collision_ratio(lrc: fmt.Lrc) -> tuple[int, int]:
+    """检测非中文逐字 LRC 是否因参考时间戳整体偏早/失配（如 CD 版 LRC 配 Live 版音频）
+    导致大量句子尾部多字被挤扁在切片右边界（<=60ms）。"""
+    hit = 0
+    total = 0
+    for ln in lrc.lines:
+        cs = [(ch, t) for ch, t in (ln.chars or []) if ch.strip()]
+        if len(cs) < 4:
+            continue
+        total += 1
+        end_t = ln.end if ln.end is not None else cs[-1][1] + 0.1
+        durs = [
+            (cs[i + 1][1] if i + 1 < len(cs) else end_t) - cs[i][1]
+            for i in range(len(cs))
+        ]
+        # 末尾 4 字中至少 2 字被挤成 <= 65ms（不含末字被 restore_sustain 拉长的情况）
+        tail_durs = durs[-4:-1] if len(durs) >= 4 else durs[-3:]
+        if sum(1 for d in tail_durs if d <= 0.065) >= 2:
+            hit += 1
+    return hit, total
+
+
 def _metas(ti: str, ar: str, al: str, by: str) -> list[str]:
     """统一的头部：ti / ar / al / by，空字段跳过。"""
     return [x for x in (f"[ti:{ti}]" if ti else "", f"[ar:{ar}]" if ar else "",
@@ -292,7 +469,11 @@ def ensure_cover(audio_path: str | Path, cache: Path | None = None,
         cache = _cache_dir(audio_path)
     dst = cache / "cover.jpg"
     if dst.exists() and dst.stat().st_size > 1024:
-        return dst
+        try:
+            if not audio_path.exists() or audio_path.stat().st_mtime <= dst.stat().st_mtime:
+                return dst
+        except OSError:
+            return dst
 
     # 1) 同目录同名/通用封面图
     for cand in (
@@ -373,12 +554,39 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     total = au.duration(audio_path)
 
     emit(1, "确定歌词文本", audio_path.name)
-    ref_path, lines, note = resolve_reference(audio_path, Path(ref) if ref else None, query,
+    explicit_ref = Path(ref) if ref else None
+    ref_path, lines, note = resolve_reference(audio_path, explicit_ref, query,
                                                netease_id=netease_id)
     used_asr_fallback = False
     used_ref_times = False
     vocals: Path | None = None
     trans_map: dict[str, list[str]] = {}
+
+    # 若用户显式传入的是「原唱逐字 LRC」（含 <mm:ss.xxx>），且未强制忽略参考时间戳，
+    # 直接走「原唱逐字模板节奏迁移」（适用 Live 版 / 翻唱版，秒级精准对齐全语种）
+    if explicit_ref and not ignore_ref_times and _is_enhanced_ref(explicit_ref):
+        trans_map = _extract_trans_map(explicit_ref)
+        emit(3, "demucs 人声分离", "htdemucs")
+        vocals = _vocals(audio_path, cache)
+        emit(4, "主唱检测", vocals.name)
+        if not force_vocal:
+            act = au.vocal_activity(vocals)
+            if not act["has_vocal"]:
+                raise NoVocalError(f"无主唱 ({act['reason']})")
+        emit(5, "原唱逐字模板迁移", explicit_ref.name)
+        lrc, tr_note = _transfer_enhanced_lrc(explicit_ref, vocals, total)
+        note = f"{note} | {tr_note}"
+        by = "原唱逐字模板迁移"
+        emit(6, "输出并校验", f"{len(lrc.lines)} 行")
+        tr_cnt = _attach_translations(lrc, trans_map)
+        if tr_cnt:
+            note += f" | 保留译文 {tr_cnt} 行"
+        ensure_cover(audio_path, cache, query)
+        ref_meta = meta_from_ref(ref_path)
+        lrc.metas = _metas(ti or ref_meta.get("ti", "") or audio_path.stem,
+                           ar or ref_meta.get("ar", ""),
+                           al or ref_meta.get("al", ""), by)
+        return lrc, note
 
     if not lines:
         if not asr_fallback:
@@ -516,6 +724,44 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
         lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total,
                              en_granularity=en_granularity,
                              restore_long_vowel=restore_long_vowel)
+        if used_ref_times:
+            col_hit, col_tot = _jp_wall_collision_ratio(lrc)
+            if col_tot >= 6 and (col_hit / col_tot) >= 0.30:
+                emit(5, "参考时间戳失配，自动 ASR 重定位", f"{col_hit}/{col_tot} 句尾部被截断挤扁")
+                from . import asr
+
+                voc_16k = au.decode(vocals, 16000)
+                words_r, segs_r, dur_r = asr.transcribe(voc_16k, lang=lang)
+                (cache / "asr.json").write_text(
+                    json.dumps({"words": words_r, "segments": segs_r, "duration": dur_r}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                orig_texts = [l for _, l in rough]
+                rough2, _ = asr.assign_lines_detail(orig_texts, segs_r, min_coverage=0.0)
+                if rough2 and len(rough2) == len(rough):
+                    import numpy as np
+                    # 若 Whisper 把两句合并成同一分段（导致 t_i - t_{i-1} < 1.2s 而参考间隔 >= 2.0s），
+                    # 用前一句的局部偏移 + 参考原始句间间隔还原，避免把前一句压扁成 0.8s
+                    deltas = [
+                        rough2[i][0] - rough[i][0]
+                        for i in range(len(rough))
+                        if i == 0 or (rough2[i][0] - rough2[i - 1][0]) >= 1.2
+                    ]
+                    med_shift = float(np.median(deltas)) if deltas else 0.0
+                    repaired: list[tuple[float, str]] = []
+                    for i, (t_asr, txt) in enumerate(rough2):
+                        t_ref = rough[i][0]
+                        if i > 0 and (t_asr - repaired[i - 1][0]) < 1.2 and (t_ref - rough[i - 1][0]) >= 2.0:
+                            local_shift = repaired[i - 1][0] - rough[i - 1][0]
+                            t_asr = max(repaired[i - 1][0] + 1.0, t_ref + local_shift)
+                        elif i > 0 and t_asr < repaired[i - 1][0] + 0.05:
+                            t_asr = max(repaired[i - 1][0] + 0.5, t_ref + med_shift)
+                        repaired.append((t_asr, txt))
+                    rough = repaired
+                    lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total,
+                                         en_granularity=en_granularity,
+                                         restore_long_vowel=restore_long_vowel)
+                    note += f" | 参考时间戳失配({col_hit}/{col_tot}句撞墙)，已自动 ASR 重定位"
         by = "MMS 日语歌声逐字" if lang == "ja" else ("MMS 英文歌声逐字" if lang == "en" else f"MMS 多语歌声逐字 ({lang})")
 
     if used_asr_fallback:

@@ -2165,6 +2165,9 @@ func findCoverCache(audioPath string) string {
 			if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
 				cand := filepath.Join(wd, e.Name(), "cover.jpg")
 				if info, err := os.Stat(cand); err == nil && info.Size() > 512 {
+					if ainfo, aerr := os.Stat(audioPath); aerr == nil && ainfo.ModTime().After(info.ModTime()) {
+						continue
+					}
 					return cand
 				}
 			}
@@ -2519,6 +2522,8 @@ func (a *app) refreshEditor() {
 		return
 	}
 	prevLine := a.edSelectedLine
+	a.edCover = nil
+	a.edCoverAudio = ""
 	if err := a.loadLrcFile(a.edPath); err == nil {
 		if prevLine >= 0 && prevLine < len(a.edLines) {
 			a.selectEditorLine(prevLine)

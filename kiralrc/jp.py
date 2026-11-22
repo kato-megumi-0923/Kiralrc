@@ -20,6 +20,23 @@ SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
 MMS_JA_MODEL_ID = "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"
 MMS_EN_MODEL_ID = "hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner"
 
+# 日语歌词高频训读/惯用读音覆盖表：
+# MeCab/UniDic 偏向新闻书面音读（如「故郷→こきょう」「昨日→さくじつ」），
+# 但在日文歌曲中绝大多数唱作训读（如「ふるさと」「きのう」），读音不对会导致 MMS 强制对齐严重挤扁。
+JA_LYRIC_PRON_OVERRIDES: dict[str, str] = {
+    "故郷": "ふるさと",
+    "彼方": "かなた",
+    "何処": "どこ",
+    "何時": "いつ",
+    "此処": "ここ",
+    "其処": "そこ",
+    "昨日": "きのう",
+    "今日": "きょう",
+    "明日": "あした",
+    "一人": "ひとり",
+    "二人": "ふたり",
+}
+
 _warned: set[str] = set()
 
 
@@ -138,11 +155,14 @@ def _align_ja_mms_karaoke(
                 gap = seg_txt[cursor:idx]
                 out_toks.append((gap, gap))
                 cursor = idx
-            pron = getattr(w.feature, "pron", None) or getattr(w.feature, "kana", None) or ""
-            if pron and pron != "*":
-                hira = _kata_to_hira(pron)
+            if surf in JA_LYRIC_PRON_OVERRIDES:
+                hira = JA_LYRIC_PRON_OVERRIDES[surf]
             else:
-                hira = "".join(x["hira"] for x in kks.convert(surf))
+                pron = getattr(w.feature, "pron", None) or getattr(w.feature, "kana", None) or ""
+                if pron and pron != "*":
+                    hira = _kata_to_hira(pron)
+                else:
+                    hira = "".join(x["hira"] for x in kks.convert(surf))
             out_toks.append((surf, hira))
             cursor = idx + len(surf) if idx >= 0 else cursor + len(surf)
         if cursor < len(seg_txt):

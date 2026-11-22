@@ -1,10 +1,13 @@
 package app
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,6 +15,71 @@ import (
 	_ "github.com/egoist/mygo/audio/mp3"
 	"github.com/mewkiz/flac"
 )
+
+var (
+	playableMu    sync.Mutex
+	playableCache = map[string]string{}
+)
+
+// ensurePlayableAudio returns a path decodable by mygo's native audio engine.
+// Standard WAV/MP3/fLaC files return immediately; MP4-wrapped FLAC, M4A, AAC,
+// OGG, OPUS, or ID3-prefixed FLAC are transparently transcoded once via PyAV
+// into work/play_cache/<md5>.wav and cached for instant reuse.
+func ensurePlayableAudio(path string) string {
+	if path == "" {
+		return ""
+	}
+	playableMu.Lock()
+	if cached, ok := playableCache[path]; ok {
+		playableMu.Unlock()
+		return cached
+	}
+	playableMu.Unlock()
+
+	if f, err := os.Open(path); err == nil {
+		_, _, decErr := audio.NewDecoder(f)
+		_ = f.Close()
+		if decErr == nil {
+			playableMu.Lock()
+			playableCache[path] = path
+			playableMu.Unlock()
+			return path
+		}
+	}
+
+	sum := md5.Sum([]byte(path))
+	key := hex.EncodeToString(sum[:])[:12]
+	cacheDir := filepath.Join("work", "play_cache")
+	_ = os.MkdirAll(cacheDir, 0o755)
+	wavPath := filepath.Join(cacheDir, key+".wav")
+	if st, err := os.Stat(wavPath); err == nil && st.Size() > 1024 {
+		playableMu.Lock()
+		playableCache[path] = wavPath
+		playableMu.Unlock()
+		return wavPath
+	}
+
+	py := "python"
+	wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
+	if _, err := os.Stat(wb); err == nil {
+		py = wb
+	}
+	tmpPath := wavPath + ".tmp"
+	code := "import sys; from kiralrc import audio as au; au.write_wav(sys.argv[2], au.decode_stereo(sys.argv[1], 44100), 44100)"
+	cmd := newHiddenCmd(py, "-X", "utf8", "-c", code, path, tmpPath)
+	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+	if err := cmd.Run(); err == nil {
+		if st, err2 := os.Stat(tmpPath); err2 == nil && st.Size() > 1024 {
+			_ = os.Rename(tmpPath, wavPath)
+			playableMu.Lock()
+			playableCache[path] = wavPath
+			playableMu.Unlock()
+			return wavPath
+		}
+	}
+	_ = os.Remove(tmpPath)
+	return path
+}
 
 func init() {
 	audio.SetLatency(audio.LatencyInteractive)
@@ -141,7 +209,8 @@ func (p *audioPlayer) Load(path string) (float64, error) {
 		_ = p.file.Close()
 		p.file = nil
 	}
-	f, err := os.Open(path)
+	playPath := ensurePlayableAudio(path)
+	f, err := os.Open(playPath)
 	if err != nil {
 		return 0, err
 	}
@@ -246,7 +315,7 @@ func extractWaveformPeaks(path string, tStart, tEnd float64, nBars int) []float3
 	if path == "" || nBars <= 0 || tEnd <= tStart {
 		return nil
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(ensurePlayableAudio(path))
 	if err != nil {
 		return nil
 	}

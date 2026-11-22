@@ -50,7 +50,7 @@ class Line:
             return True
         if self.tag_count == len(self.text) + 1:
             return True          # 单字行（<字><行尾>）也在这里
-        return bool(self.chars) and len(self.chars) >= len(self.text)
+        return bool(self.chars) and (len(self.chars) >= 2 or len(self.chars) >= len(self.text))
 
     def render(self) -> str:
         if not self.enhanced:
@@ -126,10 +126,12 @@ def _append_line(lrc: Lrc, start: float, body: str) -> None:
     enhanced = len(tags) > 2 or len(tags) == len(plain) + 1
     chars = []
     if enhanced:
-        for idx, ch in enumerate(plain):
-            t = (to_sec(tags[idx].group(1), tags[idx].group(2))
-                 if idx < len(tags) else (chars[-1][1] if chars else start))
-            chars.append((ch, t))
+        for ti, m in enumerate(tags):
+            t = to_sec(m.group(1), m.group(2))
+            seg_end = tags[ti + 1].start() if ti + 1 < len(tags) else len(body)
+            seg = body[m.end():seg_end]
+            if seg:
+                chars.append((seg, t))
     # 行尾标签：逐字行是「字数 + 1 个标签」，纯翻译行则是「首 + 尾」两个标签
     end = None
     if len(tags) >= 2 and (enhanced or len(tags) == 2):
