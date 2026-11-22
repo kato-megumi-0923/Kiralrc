@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -170,6 +171,9 @@ type app struct {
 	// 1. 曲库（默认未添加文件夹，用户点击添加后再扫描）
 	libFolders        []string
 	downloading       bool // 正在批量下载歌词
+	downloadDone      int
+	downloadAll       int
+	downloadNote      string
 	libScanning       bool
 	libScanDone       int
 	libScanAll        int
@@ -545,7 +549,7 @@ func newApp() *app {
 		setModels: []modelStatusItem{
 			{Lang: "通用", Name: "Demucs 人声分离（htdemucs）", Path: "models/hf/hub/models--adefossez--HTDemucs", Exists: false},
 			{Lang: "通用", Name: "faster-whisper large-v3（ASR 句级定位）", Path: "models/faster-whisper-large-v3", Exists: false},
-			{Lang: "中文", Name: "SOFA 中文歌声对齐模型（主环境直跑）", Path: "models/sofa/v1.0.0_mandarin_singing.ckpt", Exists: false},
+			{Lang: "中文", Name: "HubertFA v0.0.7 中文歌声对齐（默认）", Path: "models/hubertfa/model.onnx", Exists: false},
 			{Lang: "中文", Name: "FireRedASR-AED-L（中文专精听写）", Path: "models/FireRedASR-AED-L", Exists: false},
 			{Lang: "日文", Name: "MMS 日语卡拉 OK 歌声模型（NextFire）", Path: "models/hf/hub/models--NextFire--mms-300m-ForcedAligner-karaoke-ja-Latn", Exists: false},
 			{Lang: "日文", Name: "fugashi + unidic-lite（日语词法读音）", Path: "Python 环境内置（MeCab / UniDic）", Exists: false},
@@ -911,7 +915,7 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 			})
 		} else {
 			st.LineOnly++
-			engine := "SOFA 逐字"
+			engine := "HubertFA 逐字"
 			if lang == "日文" {
 				engine = "MMS 日语逐字"
 			} else if lang == "英文" {
@@ -1012,6 +1016,7 @@ func (a *app) pythonCmd(args ...string) *exec.Cmd {
 // startDownloadLyrics 给曲库里的每个文件夹下载歌词：只下载，不跑模型。
 func (a *app) startDownloadLyrics() {
 	if a.downloading {
+		a.toast = "正在下载中，请稍候"
 		return
 	}
 	folders := append([]string{}, a.libFolders...)
@@ -1019,29 +1024,71 @@ func (a *app) startDownloadLyrics() {
 		folders = append(folders, a.alignBatchDir)
 	}
 	if len(folders) == 0 {
-		a.toolLog = "还没有添加音乐文件夹"
+		a.toast = "还没有添加音乐文件夹"
 		return
 	}
 	a.downloading = true
-	a.toolLog = "正在下载歌词…"
+	a.downloadDone, a.downloadAll, a.downloadNote = 0, 0, "准备中…"
+	a.toast = "开始下载歌词"
 	go func() {
-		var lines []string
+		var last string
 		for _, dir := range folders {
 			cmd := a.pythonCmd("download", dir, "--jobs", "2")
-			out, err := cmd.CombinedOutput()
-			lines = append(lines, strings.TrimSpace(string(out)))
-			if err != nil && len(out) == 0 {
-				lines = append(lines, err.Error())
-			}
-			a.post(func() {
-				a.toolLog = strings.Join(lines, "\n")
-			})
+			last = a.streamDownload(cmd, last)
 		}
 		a.post(func() {
 			a.downloading = false
+			a.downloadNote = last
+			a.toast = "歌词下载结束：" + last
 			a.scanLibraryAsync()
 		})
 	}()
+}
+
+// streamDownload 边跑边把「第几首、在做什么」显示出来，返回最后一行汇总。
+func (a *app) streamDownload(cmd *exec.Cmd, last string) string {
+	stdout, err := cmd.StdoutPipe()
+	cmd.Stderr = cmd.Stdout
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		return err.Error()
+	}
+	sc := bufio.NewScanner(stdout)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		last = line
+		done, all, note := parseDownloadLine(line)
+		a.post(func() {
+			if all > 0 {
+				a.downloadDone, a.downloadAll = done, all
+			}
+			a.downloadNote = note
+		})
+	}
+	_ = cmd.Wait()
+	return last
+}
+
+// parseDownloadLine 读「[3/19] upgraded 歌名 QQ音乐 逐字」这样的行。
+func parseDownloadLine(line string) (done, all int, note string) {
+	note = line
+	if !strings.HasPrefix(line, "[") {
+		return 0, 0, note
+	}
+	end := strings.Index(line, "]")
+	if end < 0 {
+		return 0, 0, note
+	}
+	head := line[1:end]
+	if _, err := fmt.Sscanf(head, "%d/%d", &done, &all); err != nil {
+		return 0, 0, note
+	}
+	return done, all, strings.TrimSpace(line[end+1:])
 }
 
 // downloadLyricsOf 给勾选的这些歌下载歌词：只下载，不跑模型。
@@ -1063,14 +1110,11 @@ func (a *app) downloadLyricsOf(tracks []trackItem) {
 	go func() {
 		defer os.Remove(list.Name())
 		cmd := a.pythonCmd("download", "--paths-file", list.Name(), "--jobs", "2")
-		out, err := cmd.CombinedOutput()
-		msg := strings.TrimSpace(string(out))
-		if err != nil && msg == "" {
-			msg = err.Error()
-		}
+		last := a.streamDownload(cmd, "")
 		a.post(func() {
 			a.downloading = false
-			a.toolLog = msg
+			a.downloadNote = last
+			a.toast = "歌词下载结束：" + last
 			a.scanLibraryAsync()
 		})
 	}()
@@ -1137,7 +1181,7 @@ func (a *app) deleteModel(m modelStatusItem) {
 
 func (a *app) checkModels() {
 	paths := [3]string{
-		"models/sofa/v1.0.0_mandarin_singing.ckpt",
+		"models/hubertfa/model.onnx",
 		"third_party/SOFA/dictionary/opencpop-extension.txt",
 		"models/faster-whisper-large-v3",
 	}
@@ -1955,7 +1999,7 @@ func (a *app) enqueueCurrentAlign() {
 	}
 	lang := "zh"
 	langLbl := "中文"
-	engine := "SOFA 歌声对齐"
+	engine := "HubertFA 歌声对齐"
 	if a.alignLang == 1 {
 		lang = "ja"
 		langLbl = "日文"

@@ -247,6 +247,7 @@ def _detect_gpu_label() -> str:
 
 
 def _check_models() -> list[dict]:
+    from . import hubertfa
     import importlib.util
 
     torch_ckpt = config.torch_home_dir() / "hub" / "checkpoints"
@@ -297,7 +298,8 @@ def _check_models() -> list[dict]:
     return [
         {"lang": "通用", "name": "Demucs 人声分离（htdemucs）", "path": demucs_path, "exists": demucs_ok},
         {"lang": "通用", "name": "faster-whisper large-v3（ASR 句级定位）", "path": wh_path or "models/faster-whisper-large-v3", "exists": wh_ok},
-        {"lang": "中文", "name": "SOFA 中文歌声对齐模型（主环境直跑）", "path": sofa_ckpt_path or "models/sofa/v1.0.0_mandarin_singing.ckpt", "exists": sofa_ckpt_ok},
+        {"lang": "中文", "name": "HubertFA v0.0.7 中文歌声对齐（默认）", "path": str(hubertfa.model_dir() / "model.onnx"), "exists": hubertfa.available()},
+        {"lang": "中文", "name": "SOFA 中文歌声对齐（可选）", "path": sofa_ckpt_path or "models/sofa/v1.0.0_mandarin_singing.ckpt", "exists": sofa_ckpt_ok},
         {"lang": "中文", "name": "FireRedASR-AED-L（中文专精听写）", "path": fr_path or "models/FireRedASR-AED-L", "exists": fr_ok},
         {"lang": "日文", "name": "MMS 日语卡拉 OK 歌声模型（NextFire）", "path": str(ja_dir), "exists": ja_ok},
         {"lang": "日文", "name": "fugashi + unidic-lite（日语词法读音）", "path": "Python 环境内置（MeCab / UniDic）", "exists": ja_g2p_ok},

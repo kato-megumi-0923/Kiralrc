@@ -709,17 +709,33 @@ func (a *app) viewLibrary(c *ui.Context) {
 				ui.Column(c).Grow(1).Gap(4).Children(func() {
 					ui.Text(c, fmt.Sprintf("本地曲库总览 · 共 %d 首音频（有效人声 %d 首 · 已排除纯音乐 / OST / 伴奏 %d 首）",
 						st.Total, st.Vocal, st.InstTotal)).FontSize(12).FontWeight(600).TextColor(white.Alpha(0.78))
-					ui.Text(c, fmt.Sprintf("还有 %d 首人声歌曲待升级或待补词", needUpgrade)).FontSize(26).FontWeight(800).TextColor(white)
+					heroTitle := fmt.Sprintf("还有 %d 首人声歌曲待升级或待补词", needUpgrade)
+					if a.downloading {
+						if a.downloadAll > 0 {
+							heroTitle = fmt.Sprintf("正在下载歌词 %d / %d", a.downloadDone, a.downloadAll)
+						} else {
+							heroTitle = "正在下载歌词…"
+						}
+					}
+					ui.Text(c, heroTitle).FontSize(26).FontWeight(800).TextColor(white)
 					nfSub := ""
 					if st.NotFound > 0 {
 						nfSub = fmt.Sprintf("（含 %d 首全网未搜到）", st.NotFound)
 					}
-					ui.Text(c, fmt.Sprintf("%d 首逐字（占人声 %.1f%% · 官方 %d / 对齐 %d / 来源未知 %d）· %d 首仅整行 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
+					summary := fmt.Sprintf("%d 首逐字（占人声 %.1f%% · 官方 %d / 对齐 %d / 来源未知 %d）· %d 首仅整行 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
 						st.Enhanced, vocalPct, st.Official, st.Aligned, st.Unknown,
 						st.LineOnly, st.Missing, nfSub,
-						st.InstPure, st.InstOST, st.InstAccomp)).FontSize(12.5).TextColor(white.Alpha(0.88))
+						st.InstPure, st.InstOST, st.InstAccomp)
+					if a.downloading && a.downloadNote != "" {
+						summary = a.downloadNote
+					}
+					ui.Text(c, summary).FontSize(12.5).TextColor(white.Alpha(0.88))
 					ui.Row(c).Gap(8).Margin(12, 0, 0, 0).Children(func() {
-						if pillButton(c.Key("hero-download"), iconDownload, "下载歌词", white, ui.Hex("#1d1d1f")).Clicked() {
+						dlLabel := "下载歌词"
+						if a.downloading {
+							dlLabel = "下载中…"
+						}
+						if pillButton(c.Key("hero-download"), iconDownload, dlLabel, white, ui.Hex("#1d1d1f")).Clicked() {
 							a.startDownloadLyrics()
 						}
 						if pillButton(c.Key("hero-batch"), iconPlay, fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly), ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
@@ -1438,13 +1454,13 @@ func (a *app) viewAlign(c *ui.Context) {
 							statusPill(c, "3", p.accent.Alpha(0.14), p.accent)
 							ui.Text(c, "语言与对齐引擎").FontSize(14).FontWeight(700)
 						})
-						segmented(c, &a.alignLang, "中文 (SOFA)", "日文 (MMS 歌声)", "英文 (Echora MMS)", "其它")
+						segmented(c, &a.alignLang, "中文 (HubertFA)", "日文 (MMS 歌声)", "英文 (Echora MMS)", "其它")
 
 						ui.Row(c).FillWidth().Padding(12, 14, 12, 14).Gap(12).Radius(12).AlignItems(ui.Center).Background(p.bg).Children(func() {
 							artCover(c, 270, 36, 9, iconMic)
 							ui.Column(c).Grow(1).Gap(2).Children(func() {
 								if a.alignLang == 0 {
-									ui.Text(c, "SOFA 中文歌声强制对齐 · 推荐").FontSize(13.5).FontWeight(700)
+									ui.Text(c, "HubertFA 中文歌声强制对齐").FontSize(13.5).FontWeight(700)
 									ui.Text(c, "专为歌声训练，长音不被压扁；与声学起音误差 < 0.1 s").FontSize(11.5).TextColor(p.muted)
 								} else if a.alignLang == 1 {
 									ui.Text(c, "NextFire MMS 日语卡拉 OK 歌声对齐 + MeCab 词法读音").FontSize(13.5).FontWeight(700)
@@ -1471,7 +1487,7 @@ func (a *app) viewAlign(c *ui.Context) {
 						ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 							ui.Column(c).Grow(1).Gap(1).Children(func() {
 								ui.Text(c, "鬼畜 / 波形起音优先").FontSize(13).FontWeight(600)
-								ui.Text(c, "适合鬼畜调音、人力 VOCALOID、重度电音：先按人声波形起音与能量谷切分，SOFA 作锚点参考").FontSize(11.5).TextColor(p.muted)
+								ui.Text(c, "适合鬼畜调音、人力 VOCALOID、重度电音：按人声波形起音与能量谷切分，模型提供锚点").FontSize(11.5).TextColor(p.muted)
 							})
 							settingSwitch(c.Key("sw-waveform-first"), &a.alignWaveformFirst, "鬼畜 / 波形起音优先")
 						})
@@ -1524,7 +1540,7 @@ func (a *app) viewAlign(c *ui.Context) {
 							{"2", "确定每句位置", "自带时间戳或 ASR 句子定位"},
 							{"3", "demucs 人声分离", "htdemucs 44.1 kHz 分离人声轨"},
 							{"4", "主唱检测", "人声 1–4kHz 占比，无主唱跳过"},
-							{"5", "逐字强制对齐", "SOFA（中文）/ MMS 歌声（日英）"},
+							{"5", "逐字强制对齐", "HubertFA（中文）/ MMS 歌声（日英）"},
 							{"6", "输出并校验", "三位小数 · 行尾结束标签"},
 						}
 						for _, st := range steps {
@@ -1658,7 +1674,7 @@ func (a *app) viewQueue(c *ui.Context) {
 						{2, "2. 定每句位置", "时间戳 / ASR 定位"},
 						{3, "3. 人声分离", "htdemucs 分离"},
 						{4, "4. 主唱检测", "1–4kHz 占比"},
-						{5, "5. 逐字对齐", "SOFA / MMS 歌声"},
+						{5, "5. 逐字对齐", "HubertFA / MMS 歌声"},
 						{6, "6. 输出校验", "三位小数 · 行尾标签"},
 					}
 					ui.Row(c.Key("stepper")).FillWidth().Gap(8).Children(func() {

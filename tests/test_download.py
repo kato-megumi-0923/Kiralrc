@@ -198,3 +198,35 @@ def test_platform_name_alone_does_not_make_it_official(tmp_path, monkeypatch):
         lines=[sources.WordLine(1.0, "第一句", [("第", 1.0), ("一", 1.2), ("句", 1.4)], 1.8)],
         timed=True))
     assert download.download_one(audio).status == "upgraded"
+
+
+def test_name_and_artist_come_from_tags_then_filename(tmp_path):
+    from pathlib import Path
+    # 没有标签时按「标题 - 歌手」拆（本库的文件名就是这个样子）
+    p = tmp_path / "千百度 - 许嵩.flac"
+    p.write_bytes(b"")
+    assert download.song_name_artist(p) == ("千百度", "许嵩")
+
+    p2 = tmp_path / "02 - 好想好想 - 赵薇.mp3"
+    p2.write_bytes(b"")
+    assert download.song_name_artist(p2) == ("好想好想", "赵薇")
+
+    p3 = tmp_path / "只有歌名.mp3"
+    p3.write_bytes(b"")
+    assert download.song_name_artist(p3) == ("只有歌名", "")
+
+
+def test_name_and_artist_come_from_tags_then_filename(tmp_path):
+    from pathlib import Path
+    # 没有标签时按「标题 - 歌手」拆（本库的文件名就是这个样子）
+    p = tmp_path / "千百度 - 许嵩.flac"
+    p.write_bytes(b"")
+    assert download.song_name_artist(p) == ("千百度", "许嵩")
+
+    p2 = tmp_path / "02 - 好想好想 - 赵薇.mp3"
+    p2.write_bytes(b"")
+    assert download.song_name_artist(p2) == ("好想好想", "赵薇")
+
+    p3 = tmp_path / "只有歌名.mp3"
+    p3.write_bytes(b"")
+    assert download.song_name_artist(p3) == ("只有歌名", "")

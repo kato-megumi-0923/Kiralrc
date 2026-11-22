@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from . import ncm163
+from .ratelimit import RateLimited
 
 _DOWNLOADS: dict[str, int] | None = None
 
@@ -37,9 +38,19 @@ def _get_json(url: str, tries: int = 3, timeout: int = 20):
         try:
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
+                data = json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in (405, 418, 429):
+                raise RateLimited(f"网易云 HTTP {e.code}")
+            time.sleep(3)
+            continue
         except Exception:
             time.sleep(3)
+            continue
+        # 网易云把"问得太勤"也放在 200 响应的 code 里
+        if isinstance(data, dict) and data.get("code") in (405, 418, 429):
+            raise RateLimited(data.get("message") or data.get("msg") or "网易云限速")
+        return data
     return None
 
 

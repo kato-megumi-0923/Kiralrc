@@ -51,8 +51,9 @@ class WordLyric:
         return len(self.lines)
 
 
-class RateLimited(RuntimeError):
-    """平台要求慢一点（HTTP 405 一类）。"""
+from .ratelimit import RateLimited  # noqa: E402  （与 text 共用同一个异常）
+
+# 平台要求慢一点（HTTP 405 一类）
 
 
 def _get(url: str, timeout: int = 20) -> bytes:
@@ -185,10 +186,12 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
     # 逐行只是兜底：别的平台也许有逐字，别被排在前面的一档挡住
     fallback: WordLyric | None = None
     for which in order:
+        if which == "netease" and not netease_available():
+            continue          # 刚被限速过，这一轮先不碰它
         try:
             hit = None
-            if which == "netease" and song_id:
-                hit = from_netease(song_id)
+            if which == "netease":
+                hit = from_netease(song_id) if song_id else netease_by_search(name, artist, duration)
             elif which == "qq" and name:
                 hit = from_qq(name, artist, duration)
             elif which == "amll" and song_id:
@@ -200,6 +203,9 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
                     return hit
                 fallback = fallback or hit
         except RateLimited:
+            if which == "netease":
+                _trip_netease()   # 熔断：换下一个源，别让整批都卡在它身上
+                continue
             raise
         except Exception:
             pass
@@ -232,6 +238,19 @@ def to_lrc(lyric: WordLyric, ti: str = "", ar: str = "", al: str = ""):
         if ln.translation.strip():
             out.lines.append(fmt.Line(start=ln.start, text=ln.translation.strip()))
     return out
+
+
+# 网易云一旦说"操作频繁"，后面几十分钟都不必再问它，免得每首都等一轮
+_NETEASE_DOWN_UNTIL = {"at": 0.0}
+NETEASE_COOLDOWN = 600.0
+
+
+def netease_available() -> bool:
+    return time.time() >= _NETEASE_DOWN_UNTIL["at"]
+
+
+def _trip_netease(seconds: float = NETEASE_COOLDOWN) -> None:
+    _NETEASE_DOWN_UNTIL["at"] = max(_NETEASE_DOWN_UNTIL["at"], time.time() + seconds)
 
 
 def _post(url: str, payload: dict, timeout: int = 20) -> dict:
@@ -304,6 +323,18 @@ def parse_qrc(text: str) -> list[WordLine]:
                             end=(int(g.group(1)) + int(g.group(2))) / 1000))
     out.sort(key=lambda l: l.start)
     return out
+
+
+def netease_by_search(name: str, artist: str = "", duration: float | None = None,
+                      min_score: float = 0.55) -> WordLyric | None:
+    """没有 ID 的歌：按歌名+歌手搜一条够像的，再按它的 ID 取词。"""
+    from . import text as tx
+
+    keyword = f"{artist} {name}".strip() if artist else name
+    cands = tx.netease_candidates(keyword, duration, name=name, artist=artist)
+    if not cands or cands[0]["score"] < min_score:
+        return None
+    return from_netease(int(cands[0]["id"]))
 
 
 def from_qq(name: str, artist: str = "", duration: float | None = None) -> WordLyric | None:

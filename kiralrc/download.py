@@ -21,6 +21,8 @@ from pathlib import Path
 from . import format as fmt
 from . import sources
 from . import text as tx
+from .ratelimit import RateLimited
+from .ratelimit import RateLimited
 
 BY_RE = re.compile(r"^\[by:([^\]]*)\]", re.M)
 ALIGN_RE = re.compile(r"^\[kiralrc:aligned\]", re.M | re.I)
@@ -73,6 +75,37 @@ def lrc_kind(path: Path) -> str:
     return "word" if word else "line"
 
 
+def song_name_artist(audio: Path) -> tuple[str, str]:
+    """这首歌的标题与歌手：标签优先，其次按「标题 - 歌手」拆文件名。"""
+    title = artist = ""
+    try:
+        from mutagen import File as MutagenFile
+        f = MutagenFile(str(audio))
+        tags = getattr(f, "tags", None)
+        if tags:
+            for key in ("title", "TIT2"):
+                v = tags.get(key) if hasattr(tags, "get") else None
+                if v:
+                    title = str(v[0] if isinstance(v, list) else v).strip()
+                    break
+            for key in ("artist", "TPE1"):
+                v = tags.get(key) if hasattr(tags, "get") else None
+                if v:
+                    artist = str(v[0] if isinstance(v, list) else v).strip()
+                    break
+    except Exception:
+        pass
+    if not title:
+        parts = [x.strip() for x in audio.stem.split(" - ") if x.strip()]
+        if len(parts) >= 3 and parts[0].isdigit():
+            title, artist = parts[1], " - ".join(parts[2:])
+        elif len(parts) >= 2:
+            title, artist = parts[0], " - ".join(parts[1:])
+        else:
+            title = audio.stem
+    return title.strip(), artist.strip()
+
+
 @dataclass
 class Result:
     audio: Path
@@ -115,7 +148,9 @@ def download_one(audio: Path, force: bool = False) -> Result:
 
     wait_pause()
     song_id = tx.netease_id_of(audio)
-    name = tx.query_from_filename(audio.stem)
+    # 匹配要的是「歌名 + 歌手」，不是拼在一起的搜索串
+    title, artist = song_name_artist(audio)
+    name = title or tx.query_from_filename(audio.stem)
     duration = None
     try:
         from . import audio as au
@@ -124,10 +159,17 @@ def download_one(audio: Path, force: bool = False) -> Result:
         duration = None
 
     try:
-        lyric = sources.fetch(song_id, name=name, duration=duration)
-    except sources.RateLimited:
-        hold(30)
-        return Result(audio, "failed", "平台限速，稍后重试")
+        lyric = sources.fetch(song_id, name=name, artist=artist, duration=duration)
+    except RateLimited:
+        # 被限速时整条队列一起等，然后给这首一次机会
+        hold(60)
+        try:
+            wait_pause()
+            lyric = sources.fetch(song_id, name=name, artist=artist, duration=duration)
+        except RateLimited:
+            return Result(audio, "failed", "平台限速，稍后重试")
+        except Exception as e:
+            return Result(audio, "failed", f"{type(e).__name__}: {e}")
 
     if not lyric:
         return Result(audio, "missing" if kind == "missing" else "kept",
