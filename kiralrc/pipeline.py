@@ -89,7 +89,8 @@ def _vocals(audio_path: Path, cache: Path) -> Path:
 
 def resolve_reference(audio_path: Path, ref: Path | None,
                       query: str | None = None,
-                      netease_id: int | None = None) -> tuple[Path | None, list[str], str]:
+                      netease_id: int | None = None, *,
+                      duration: float | None = None) -> tuple[Path | None, list[str], str]:
     """返回 (参考文件, 歌词行, 说明)。
 
     歌词的来源按可靠程度排：显式参考文件 → 同目录 lrc → 指定的网易云 ID →
@@ -120,7 +121,7 @@ def resolve_reference(audio_path: Path, ref: Path | None,
             return sibling, lines, f"同目录 {sibling.name}"
 
     kw = query or tx.query_from_filename(audio_path.stem)
-    dur = round(au.duration(audio_path))
+    dur = round(au.duration(audio_path) if duration is None else duration)
     artist_hint, title_hint = tx.artist_title_from_filename(audio_path.stem)
     if query:
         title_hint, artist_hint = query, ""
@@ -695,7 +696,7 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     emit(1, "确定歌词文本", audio_path.name)
     explicit_ref = Path(ref) if ref else None
     ref_path, lines, note = resolve_reference(audio_path, explicit_ref, query,
-                                               netease_id=netease_id)
+                                               netease_id=netease_id, duration=total)
     used_asr_fallback = False
     used_ref_times = False
     vocals: Path | None = None
@@ -881,11 +882,20 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     else:
         from . import jp
 
+        reference_ends = None
+        if lang == "ja" and used_ref_times and ref_path:
+            reference_ends = {
+                (line.start, line.text.strip()): line.end
+                for line in fmt.parse(str(ref_path)).lines
+                if line.enhanced and line.end is not None and line.chars
+                and line.end > max(start for _, start in line.chars)
+            }
         stage_lbl = "MMS 日语歌声" if lang == "ja" else ("MMS 英文歌声" if lang == "en" else f"MMS 多语歌声 ({lang})")
         emit(5, f"{stage_lbl} 逐句对齐", f"{len(rough)} 句")
         lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total,
                              en_granularity=en_granularity,
-                             restore_long_vowel=restore_long_vowel)
+                             restore_long_vowel=restore_long_vowel,
+                             reference_ends=reference_ends)
         if used_ref_times:
             col_hit, col_tot = _jp_wall_collision_ratio(lrc)
             if col_tot >= 6 and (col_hit / col_tot) >= 0.30:

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -1882,6 +1881,8 @@ func (a *app) startQueueRunner() {
 
 func (a *app) runQueueWorker() {
 	py := a.pythonExe()
+	var worker alignWorker
+	defer worker.close()
 	for {
 		// Pick next waiting item on UI thread
 		var idx = -1
@@ -1929,7 +1930,7 @@ func (a *app) runQueueWorker() {
 			return
 		}
 
-		args := []string{"-u", "-X", "utf8", "-m", "kiralrc", "align", item.AudioPath, "--lang", item.Lang}
+		args := []string{item.AudioPath, "--lang", item.Lang}
 		if !a.setAutoSkipNoVocal {
 			args = append(args, "--force-vocal")
 		}
@@ -1953,23 +1954,21 @@ func (a *app) runQueueWorker() {
 		if item.WaveformFirst {
 			args = append(args, "--waveform-first")
 		}
-		cmd := newHiddenCmd(py, args...)
-		cmd.Dir = appRootDir()
-		cmd.Env = a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
-		stdout, err := cmd.StdoutPipe()
-		cmd.Stderr = cmd.Stdout
+		var err error
+		if worker.cmd == nil {
+			cmd := newHiddenCmd(py, "-u", "-X", "utf8", "-m", "kiralrc", "--align-worker")
+			cmd.Dir = appRootDir()
+			cmd.Env = a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
+			err = worker.start(cmd)
+		}
 		var lastLine string
 		var skippedNoVocal bool
 		var skippedNoLyrics bool
 		if err == nil {
-			err = cmd.Start()
-		}
-		if err == nil {
-			sc := bufio.NewScanner(stdout)
-			for sc.Scan() {
-				line := cleanLogLine(sc.Text())
+			err = worker.run(args, func(raw string) {
+				line := cleanLogLine(raw)
 				if line == "" {
-					continue
+					return
 				}
 				lastLine = line
 				if strings.HasPrefix(line, "[skip-nolyrics]") {
@@ -2004,8 +2003,7 @@ func (a *app) runQueueWorker() {
 						a.queueLogs = a.queueLogs[len(a.queueLogs)-14:]
 					}
 				})
-			}
-			err = cmd.Wait()
+			})
 		}
 
 		songPath := item.AudioPath

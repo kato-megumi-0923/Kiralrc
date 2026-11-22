@@ -125,6 +125,30 @@ def test_cli_accepts_asr_fallback_flag():
     assert "--netease-id" in r.stdout
 
 
+def test_align_worker_continues_after_failed_request(monkeypatch, capsys):
+    import io
+    import sys
+    from kiralrc import cli
+
+    def align(args):
+        if args.audio == "bad.flac":
+            raise RuntimeError("alignment failed")
+        assert args.lang == "ja"
+        print(f"[ok] {args.audio}")
+        return 0
+
+    monkeypatch.setattr(cli, "cmd_align", align)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(
+        '["bad.flac"]\n["good.flac", "--lang", "ja"]\n'
+    ))
+    assert cli.main(["--align-worker"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.split() == [
+        "[kiralrc-worker-result]", "1", "[ok]", "good.flac", "[kiralrc-worker-result]", "0",
+    ]
+    assert "RuntimeError: alignment failed" in captured.err
+
+
 def test_multilingual_char_to_latin():
     from kiralrc import jp
     assert jp._char_to_latin("사") == ("sa", True)

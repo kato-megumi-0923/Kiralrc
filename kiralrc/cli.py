@@ -5,6 +5,7 @@ import argparse
 import json
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 from . import config, format as fmt, pipeline, text as tx
@@ -52,6 +53,23 @@ def cmd_align(a) -> int:
     print(f"[ok] {out}  {len(lrc.lines)} 行  | {note}")
     for p in probs:
         print("  -", p)
+    return 0
+
+
+def _align_worker(parser: argparse.ArgumentParser) -> int:
+    """Read one alignment request per line and delimit its streamed output."""
+    for request in sys.stdin:
+        try:
+            args = json.loads(request)
+            if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+                raise ValueError("expected a JSON array of alignment arguments")
+            code = cmd_align(parser.parse_args(args))
+        except SystemExit as exc:
+            code = int(exc.code or 0)
+        except Exception:
+            traceback.print_exc()
+            code = 1
+        print(f"\n[kiralrc-worker-result] {code}", flush=True)
     return 0
 
 
@@ -314,6 +332,7 @@ def cmd_gui(a) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     ap = argparse.ArgumentParser(prog="kiralrc", description="歌词逐字对齐工具")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -341,6 +360,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="鬼畜 / 波形起音优先模式：先按人声轨波形起音与能量谷切分，SOFA 仅作参考")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_align)
+    if argv == ["--align-worker"]:
+        return _align_worker(p)
 
     p = sub.add_parser("batch", help="批量补齐目录下的逐字 LRC（KI-4）")
     p.add_argument("dir")

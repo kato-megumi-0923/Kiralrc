@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import sys
+from functools import lru_cache
 import numpy as np
 
 from . import config, format as fmt
@@ -19,6 +20,19 @@ KANA_CHAR_RE = re.compile(r"^[\u3041-\u3096\u30a1-\u30faー]$")
 SMALL_KANA = set("ゃゅょぁぃぅぇぉャュョァィゥェォ")
 MMS_JA_MODEL_ID = "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"
 MMS_EN_MODEL_ID = "hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner"
+
+
+@lru_cache(maxsize=1)
+def _load_mms(model_id: str, device: str):
+    from transformers import AutoModelForCTC, AutoTokenizer
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_id, local_files_only=True)
+        model = AutoModelForCTC.from_pretrained(model_id, local_files_only=True)
+    except OSError:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCTC.from_pretrained(model_id)
+    return tokenizer, model.to(device).eval()
 
 # 日语歌词高频训读/惯用读音覆盖表：
 # MeCab/UniDic 偏向新闻书面音读（如「故郷→こきょう」「昨日→さくじつ」），
@@ -112,26 +126,24 @@ def _split_ja_units(orig: str, hira: str, kks) -> list[tuple[str, str]]:
     return prefix + mid + suffix
 
 
+def _tail_squeeze_count(starts: list[float]) -> int:
+    tail = starts[-4:]
+    return sum(1 for first, second in zip(tail, tail[1:]) if second - first <= 0.065)
+
+
 def _align_ja_mms_karaoke(
     audio: np.ndarray,
     lines: list[tuple[float, str]],
     dur: float,
     device: str = "cuda",
+    reference_ends: dict[tuple[float, str], float] | None = None,
 ) -> list[fmt.Line]:
     """使用 NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn（日语卡拉OK歌声专精模型）做逐字对齐。"""
     import pykakasi
     import torch
     import torchaudio
-    from transformers import AutoModelForCTC, AutoTokenizer
-
     dev = device if (device == "cuda" and torch.cuda.is_available()) else "cpu"
-    try:
-        tok = AutoTokenizer.from_pretrained(MMS_JA_MODEL_ID, local_files_only=True)
-        model = AutoModelForCTC.from_pretrained(MMS_JA_MODEL_ID, local_files_only=True)
-    except Exception:
-        tok = AutoTokenizer.from_pretrained(MMS_JA_MODEL_ID)
-        model = AutoModelForCTC.from_pretrained(MMS_JA_MODEL_ID)
-    model = model.to(dev).eval()
+    tok, model = _load_mms(MMS_JA_MODEL_ID, dev)
     vocab = tok.get_vocab()
     pad_id = tok.pad_token_id if tok.pad_token_id is not None else 29
     kks = pykakasi.kakasi()
@@ -173,6 +185,58 @@ def _align_ja_mms_karaoke(
     # 预先计算人声包络，用于避免切片向前吞进上一句未唱完的拖音（如慢歌句尾延长超过参考时间戳）
     from . import audio as au
     env_20ms = au.rms_envelope(audio, sr=16000, hop=0.02)
+
+    def align_slice(seg_start: float, seg_end_t: float, text: str,
+                    rom_chars: list[str], char_rom_span: dict[int, tuple[int, int]],
+                    tag_mask: list[bool]) -> fmt.Line | None:
+        s_idx = int(seg_start * 16000)
+        e_idx = min(len(audio), int(seg_end_t * 16000))
+        seg_wav = audio[s_idx:e_idx]
+        if len(seg_wav) < 400:
+            return None
+
+        inp = torch.tensor(seg_wav, dtype=torch.float32, device=dev).unsqueeze(0)
+        inp = (inp - inp.mean()) / (inp.std() + 1e-7)
+        with torch.no_grad():
+            logits = model(inp).logits
+            em = torch.log_softmax(logits, dim=-1).cpu()
+
+        # 如果音频帧数少于目标 token 数，跳过以免 forced_align 报错
+        if em.shape[1] <= len(rom_chars) + 3:
+            return None
+        # 首尾通配符 * 惩罚设为 -3.2：仅吸收真正的静音/换气/非匹配杂音，绝不吞掉真实唱出的首字（如「君は」）
+        star_id = em.shape[-1]
+        star_col = torch.full((em.shape[0], em.shape[1], 1), -3.2, dtype=em.dtype)
+        em_star = torch.cat([em, star_col], dim=-1)
+        targets = torch.tensor([[star_id] + [vocab[c] for c in rom_chars] + [star_id]], dtype=torch.int32)
+        aligned, scores = torchaudio.functional.forced_align(em_star, targets, blank=pad_id)
+        spans = torchaudio.functional.merge_tokens(aligned[0], scores[0], blank=pad_id)
+        if len(spans) == len(rom_chars) + 2:
+            spans = spans[1:-1]
+        elif len(spans) != len(rom_chars):
+            return None
+
+        frame_dur = (len(seg_wav) / 16000.0) / float(em.shape[1])
+        first_sung_idx = min(char_rom_span.keys())
+        first_t = round(seg_start + spans[char_rom_span[first_sung_idx][0]].start * frame_dur, 3)
+
+        placed: list[tuple[str, float]] = []
+        last_end = first_t
+        for ci, ch in enumerate(text):
+            if tag_mask[ci]:
+                placed.append((ch, first_t if ci < first_sung_idx else last_end))
+            elif ci in char_rom_span:
+                r0, r1 = char_rom_span[ci]
+                cs = round(seg_start + spans[r0].start * frame_dur, 3)
+                ce = round(seg_start + spans[r1 - 1].end * frame_dur, 3)
+                placed.append((ch, cs))
+                last_end = max(ce, cs + 0.03)
+            else:
+                # 空格/标点放在前一演唱字的结束时间，不吞拖音
+                placed.append((ch, last_end))
+
+        end_t = max(last_end, placed[-1][1] + 0.08)
+        return fmt.Line(placed[0][1], text, placed, round(end_t, 3))
 
     rows: list[fmt.Line] = []
     for i, (t0, text) in enumerate(lines):
@@ -226,54 +290,28 @@ def _align_ja_mms_karaoke(
             seg_end_t = min(dur, max(next_cap, seg_start + 1.0), t0 + max_line_dur)
         else:
             seg_end_t = min(dur, t0 + max_line_dur)
-        s_idx = int(seg_start * 16000)
-        e_idx = min(len(audio), int(seg_end_t * 16000))
-        seg_wav = audio[s_idx:e_idx]
-        if len(seg_wav) < 400:
+        ref_end = reference_ends.get((t0, text)) if reference_ends else None
+        # A valid reference end protects the tail even if a valley inside the line is quieter.
+        if ref_end is not None and t0 < ref_end <= min(nxt, dur):
+            seg_end_t = max(seg_end_t, min(ref_end + 0.08, nxt, dur))
+        row = align_slice(seg_start, seg_end_t, text, rom_chars, char_rom_span, tag_mask)
+        if row is None:
             continue
 
-        inp = torch.tensor(seg_wav, dtype=torch.float32, device=dev).unsqueeze(0)
-        inp = (inp - inp.mean()) / (inp.std() + 1e-7)
-        with torch.no_grad():
-            logits = model(inp).logits
-            em = torch.log_softmax(logits, dim=-1).cpu()
-
-        # 如果音频帧数少于目标 token 数，跳过以免 forced_align 报错
-        if em.shape[1] <= len(rom_chars) + 3:
-            continue
-        # 首尾通配符 * 惩罚设为 -3.2：仅吸收真正的静音/换气/非匹配杂音，绝不吞掉真实唱出的首字（如「君は」）
-        star_id = em.shape[-1]
-        star_col = torch.full((em.shape[0], em.shape[1], 1), -3.2, dtype=em.dtype)
-        em_star = torch.cat([em, star_col], dim=-1)
-        targets = torch.tensor([[star_id] + [vocab[c] for c in rom_chars] + [star_id]], dtype=torch.int32)
-        aligned, scores = torchaudio.functional.forced_align(em_star, targets, blank=pad_id)
-        spans = torchaudio.functional.merge_tokens(aligned[0], scores[0], blank=pad_id)
-        if len(spans) == len(rom_chars) + 2:
-            spans = spans[1:-1]
-        elif len(spans) != len(rom_chars):
-            continue
-
-        frame_dur = (len(seg_wav) / 16000.0) / float(em.shape[1])
-        first_sung_idx = min(char_rom_span.keys())
-        first_t = round(seg_start + spans[char_rom_span[first_sung_idx][0]].start * frame_dur, 3)
-
-        placed: list[tuple[str, float]] = []
-        last_end = first_t
-        for ci, ch in enumerate(text):
-            if tag_mask[ci]:
-                placed.append((ch, first_t if ci < first_sung_idx else last_end))
-            elif ci in char_rom_span:
-                r0, r1 = char_rom_span[ci]
-                cs = round(seg_start + spans[r0].start * frame_dur, 3)
-                ce = round(seg_start + spans[r1 - 1].end * frame_dur, 3)
-                placed.append((ch, cs))
-                last_end = max(ce, cs + 0.03)
-            else:
-                # 空格/标点放在前一演唱字的结束时间，不吞拖音
-                placed.append((ch, last_end))
-
-        end_t = max(last_end, placed[-1][1] + 0.08)
-        rows.append(fmt.Line(placed[0][1], text, placed, round(end_t, 3)))
+        # Retry a clipped tail before sustain restoration can stretch the last character.
+        sung_starts = [row.chars[i][1] for i in char_rom_span]
+        squeezed = _tail_squeeze_count(sung_starts)
+        if squeezed >= 2 and seg_end_t - sung_starts[-1] <= 0.25:
+            retry_end = min(dur, t0 + max_line_dur, seg_end_t + 1.75, nxt + 1.35)
+            if retry_end - seg_end_t >= 0.25:
+                retry = align_slice(seg_start, retry_end, text, rom_chars, char_rom_span, tag_mask)
+                if retry is not None:
+                    retry_starts = [retry.chars[i][1] for i in char_rom_span]
+                    if (abs(retry_starts[0] - sung_starts[0]) <= 0.25
+                            and retry_starts[-1] >= sung_starts[-1] + 0.15
+                            and _tail_squeeze_count(retry_starts) < squeezed):
+                        row = retry
+        rows.append(row)
 
     return rows
 
@@ -568,20 +606,13 @@ def _align_en_mms_lyrics(
     import math
     import torch
     import torchaudio
-    from transformers import AutoModelForCTC, AutoTokenizer
     from . import audio as au
 
     if en_granularity is None:
         en_granularity = str(config.opt("en_granularity", "word"))
 
     dev = device if (device == "cuda" and torch.cuda.is_available()) else "cpu"
-    try:
-        tok = AutoTokenizer.from_pretrained(MMS_EN_MODEL_ID, local_files_only=True)
-        model = AutoModelForCTC.from_pretrained(MMS_EN_MODEL_ID, local_files_only=True)
-    except Exception:
-        tok = AutoTokenizer.from_pretrained(MMS_EN_MODEL_ID)
-        model = AutoModelForCTC.from_pretrained(MMS_EN_MODEL_ID)
-    model = model.to(dev).eval()
+    tok, model = _load_mms(MMS_EN_MODEL_ID, dev)
     vocab = tok.get_vocab()
     pad_id = tok.pad_token_id if tok.pad_token_id is not None else 29
     env_20ms = au.rms_envelope(audio, sr=16000, hop=0.02)
@@ -700,7 +731,8 @@ def _align_en_mms_lyrics(
 def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja",
                 total: float | None = None, device: str = "cuda",
                 en_granularity: str | None = None,
-                restore_long_vowel: bool | None = None) -> fmt.Lrc:
+                restore_long_vowel: bool | None = None,
+                reference_ends: dict[tuple[float, str], float] | None = None) -> fmt.Lrc:
     from . import audio as au
 
     audio = au.decode(vocal_wav, 16000)
@@ -708,7 +740,7 @@ def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja"
 
     # 日语走 NextFire 日语卡拉 OK 歌声模型；英文及其它多语种统一走 Echora-300M 多语歌词歌声模型
     if lang == "ja":
-        rows = _align_ja_mms_karaoke(audio, lines, dur, device=device)
+        rows = _align_ja_mms_karaoke(audio, lines, dur, device=device, reference_ends=reference_ends)
         by_tag = "[by:MMS 日语歌声逐字]"
     else:
         rows = _align_en_mms_lyrics(audio, lines, dur, device=device, en_granularity=en_granularity)
