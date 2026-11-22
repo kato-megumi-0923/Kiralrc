@@ -12,6 +12,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from . import ncm163
+
 from . import config
 
 HAN = re.compile(r"[\u4e00-\u9fff]")
@@ -76,44 +78,44 @@ def parse_song_id(value: str | int | None) -> int | None:
 
 
 def netease_id_from_file(path: str | Path) -> int | None:
-    """音频标签里的 NETEASE_ID 或网易云客户端写入的 163 key 加密注释。"""
+    """音频标签里的网易云 ID：Cloudy 写的明文 NETEASE_ID，或网易云的加密 163 key。"""
     try:
         from mutagen import File as MutagenFile
+        from mutagen.id3 import ID3
     except Exception:
         return None
+    tags = None
     try:
         audio = MutagenFile(str(path))
-        tags = getattr(audio, "tags", None)
-        if not tags:
+        tags = getattr(audio, "tags", None) if audio is not None else None
+    except Exception:
+        tags = None
+    if not tags:
+        # 音频容器认不出来时，标签仍可能读得出来
+        try:
+            tags = ID3(str(path))
+        except Exception:
             return None
+    if not tags:
+        return None
+    encrypted: list[str] = []
+    try:
         for key in tags.keys():
-            if "NETEASE_ID" in str(key).upper():
-                value = tags[key]
-                if isinstance(value, list):
-                    value = value[0] if value else ""
-                nid = parse_song_id(str(value))
-                if nid:
-                    return nid
-        # 兜底解析网易云官方客户端写入的 `163 key(Don't modify):...`
-        for key, value in tags.items():
-            s = str(value)
-            if "163 key(Don't modify):" in s:
-                try:
-                    import base64, json
-                    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-                    raw = s.split("163 key(Don't modify):", 1)[1].strip()
-                    enc = base64.b64decode(raw)
-                    dec = Cipher(algorithms.AES(b"#14ljk_!\\]&0U<'("), modes.ECB()).decryptor()
-                    out = dec.update(enc) + dec.finalize()
-                    out = out[:-out[-1]].decode("utf-8")
-                    if out.startswith("music:"):
-                        mid = json.loads(out[6:]).get("musicId")
-                        if mid and int(mid) > 0:
-                            return int(mid)
-                except Exception:
-                    pass
+            raw = tags[key]
+            for text in (raw if isinstance(raw, list) else [raw]):
+                text = str(text)
+                if "NETEASE_ID" in str(key).upper():
+                    sid = parse_song_id(text)
+                    if sid:
+                        return sid
+                if "163 key" in text:
+                    encrypted.append(text)
     except Exception:
         return None
+    for text in encrypted:
+        sid = ncm163.music_id(text)
+        if sid:
+            return sid
     return None
 
 
