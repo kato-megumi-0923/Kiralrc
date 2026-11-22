@@ -195,9 +195,10 @@ def decrypt_ncm(path: str | Path, out_dir: str | Path | None = None,
 
 def meta_tags(meta: dict) -> list[tuple[str, str]]:
     """网易云元信息里值得留下的字段，键名与 ncm解密.py 保持一致。"""
-    artists = "/".join(str(a[0]) for a in meta.get("artist") or [] if a)
-    alias = "/".join(str(x) for x in meta.get("alias") or [] if x)
-    trans = "/".join(str(x) for x in meta.get("transNames") or [] if x)
+    pairs = _artist_pairs(meta)
+    artists = "/".join(name for name, _ in pairs)
+    alias = _join_meta(meta.get("alias"))
+    trans = _join_meta(meta.get("transNames"))
     pairs = [
         ("NETEASE_ID", meta.get("musicId")),
         ("NETEASE_ALBUM_ID", meta.get("albumId")),
@@ -210,7 +211,7 @@ def meta_tags(meta: dict) -> list[tuple[str, str]]:
         ("NETEASE_ALIAS", alias),
         ("NETEASE_TRANSLATION", trans),
         ("NETEASE_ARTIST", artists),
-        ("NETEASE_ARTIST_IDS", "/".join(str(a[1]) for a in meta.get("artist") or [] if len(a) > 1)),
+        ("NETEASE_ARTIST_IDS", "/".join(i for _, i in pairs if i)),
         ("NETEASE_ALBUM_PIC_URL", meta.get("albumPic")),
         ("NETEASE_ALBUM_PIC_DOC_ID", meta.get("albumPicDocId")),
         ("NETEASE_MP3_DOC_ID", meta.get("mp3DocId")),
@@ -220,30 +221,71 @@ def meta_tags(meta: dict) -> list[tuple[str, str]]:
     return [(k, str(v)) for k, v in pairs if v not in (None, "", [])]
 
 
+ILLEGAL = '<>:"/\\|?*'
+
+
+def _safe_name(name: str) -> str:
+    """Windows 文件名：去掉非法字符，末尾的点和空格也去掉。"""
+    cleaned = "".join("_" if (c in ILLEGAL or ord(c) < 32) else c for c in name)
+    cleaned = cleaned.strip().rstrip(". ")
+    return cleaned or "未命名"
+
+
 def _output_name(src: Path, meta: dict) -> str:
     title = str(meta.get("musicName") or "").strip()
     artist = _artists(meta).strip()
     if title and artist:
-        return f"{title} - {artist}"
-    return title or src.stem
+        return _safe_name(f"{title} - {artist}")
+    return _safe_name(title) if title else src.stem
+
+
+def _artist_pairs(meta: dict) -> list[tuple[str, str]]:
+    """歌手元信息可能是 [["名", id]]、[{"name","id"}]、["名"] 甚至单个字符串。"""
+    raw = meta.get("artist")
+    items: list = []
+    if isinstance(raw, dict):
+        items = [raw]
+    elif isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    pairs: list[tuple[str, str]] = []
+    for item in items:
+        name = artist_id = ""
+        if isinstance(item, (list, tuple)):
+            if item:
+                name = str(item[0] or "")
+            if len(item) > 1 and item[1] is not None:
+                artist_id = str(item[1])
+        elif isinstance(item, dict):
+            name = str(item.get("name") or "")
+            if item.get("id") is not None:
+                artist_id = str(item.get("id"))
+        elif isinstance(item, str):
+            name = item
+        name = name.strip()
+        if name and not name.isdigit():
+            pairs.append((name, artist_id))
+    return pairs
 
 
 def _artists(meta: dict) -> str:
-    out = []
-    for item in meta.get("artist") or []:
-        if isinstance(item, (list, tuple)) and item:
-            out.append(str(item[0]))
-        elif isinstance(item, dict):
-            out.append(str(item.get("name") or ""))
-        elif isinstance(item, str):
-            out.append(item)
-    return ", ".join(x for x in out if x and not x.isdigit())
+    return ", ".join(name for name, _ in _artist_pairs(meta))
+
+
+def _join_meta(value) -> str:
+    """别名、译名这类字段也可能是字符串而不是数组，别按字符拆开。"""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        return "/".join(str(x).strip() for x in value if str(x).strip())
+    return ""
 
 
 def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
     """歌名、歌手、专辑、时长、封面，以及网易云的一整套字段。"""
     extras = meta_tags(meta or {})
-    duration = (meta or {}).get("duration")
+    duration = _duration_ms((meta or {}).get("duration"))
     try:
         if info.format == "mp3":
             from mutagen.id3 import APIC, ID3, TALB, TIT2, TLEN, TPE1, TXXX
@@ -255,7 +297,7 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
             if info.album:
                 tag.add(TALB(encoding=3, text=info.album))
             if duration:
-                tag.add(TLEN(encoding=3, text=str(int(duration))))
+                tag.add(TLEN(encoding=3, text=str(duration)))
             for key, value in extras:
                 tag.delall("TXXX:" + key)
                 tag.add(TXXX(encoding=3, desc=key, text=value))
@@ -273,10 +315,11 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
             if info.album:
                 audio["album"] = info.album
             if duration:
-                audio["length"] = str(int(duration))
+                audio["length"] = str(duration)
             for key, value in extras:
                 audio[key] = value
-            if info.cover and not audio.pictures:
+            # 只认正面封面（type 3）：只有封底时仍要把 NCM 的正面图写进去
+            if info.cover and not any(p.type == 3 for p in audio.pictures):
                 pic = Picture()
                 pic.type = 3
                 pic.mime = _cover_mime(info.cover)
@@ -287,6 +330,14 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
     except Exception:
         # 标签写不进去不该让音频白解一遍
         pass
+
+
+def _duration_ms(value) -> int:
+    """时长可能是数字、数字字符串，也可能根本没有；取不到就当没有。"""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _cover_mime(data: bytes) -> str:

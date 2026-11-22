@@ -106,3 +106,77 @@ def test_rename_gives_title_and_artist(tmp_path):
     src.write_bytes(build_ncm(META))
     info = decrypt.decrypt_ncm(src, write_tags=False, rename=True)
     assert info.path.name == "千百度 - 许嵩.mp3"
+
+
+# ---- 元信息格式不规范时的边界 ----
+
+def _minimal_flac(pictures=()) -> bytes:
+    """一个能做标签读写的极简 FLAC（只有 STREAMINFO）。"""
+    import struct
+    info = struct.pack(">HH", 4096, 4096) + b"\x00" * 6
+    packed = (44100 << 44) | (1 << 41) | (15 << 36) | 44100
+    info += packed.to_bytes(8, "big") + b"\x00" * 16
+    return b"fLaC" + bytes([0x80, 0, 0, len(info)]) + info
+
+
+def test_artist_as_dict_or_string(tmp_path):
+    from mutagen.id3 import ID3
+
+    for i, artist in enumerate(({"name": "许嵩", "id": 5771}, "许嵩", ["许嵩"])):
+        meta = dict(META, artist=artist)
+        src = tmp_path / f"a{i}.ncm"
+        src.write_bytes(build_ncm(meta))
+        info = decrypt.decrypt_ncm(src)
+        tags = ID3(str(info.path))
+        assert str(tags["TPE1"]) == "许嵩", artist
+        assert str(tags["TXXX:NETEASE_ARTIST"]) == "许嵩"
+        if isinstance(artist, dict):
+            assert str(tags["TXXX:NETEASE_ARTIST_IDS"]) == "5771"
+
+
+def test_a_bad_duration_only_skips_the_length(tmp_path):
+    from mutagen.id3 import ID3
+
+    src = tmp_path / "b.ncm"
+    src.write_bytes(build_ncm(dict(META, duration="unknown")))
+    info = decrypt.decrypt_ncm(src)
+    tags = ID3(str(info.path))
+    assert str(tags["TIT2"]) == "千百度"                  # 别的标签照写
+    assert str(tags["TXXX:NETEASE_ID"]) == "167732"
+    assert "TLEN" not in tags                            # 只少了时长
+
+
+def test_a_back_cover_does_not_block_the_front_one(tmp_path):
+    from mutagen.flac import FLAC, Picture
+    import io
+
+    # NCM 里的音频自带一张封底（type 4）
+    audio = _minimal_flac()
+    tmp = tmp_path / "with-back.flac"
+    tmp.write_bytes(audio)
+    f = FLAC(str(tmp))
+    back = Picture()
+    back.type = 4
+    back.mime = "image/png"
+    back.data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
+    f.add_picture(back)
+    f.save()
+    audio_with_back = io.open(tmp, "rb").read()
+
+    cover = b"\x89PNG\r\n\x1a\n" + b"\xff" * 80
+    src = tmp_path / "c.ncm"
+    src.write_bytes(build_ncm(META, cover=cover, audio=audio_with_back))
+    info = decrypt.decrypt_ncm(src)
+
+    pics = FLAC(str(info.path)).pictures
+    assert any(p.type == 3 for p in pics), [(p.type, len(p.data)) for p in pics]
+    assert any(p.type == 4 for p in pics)          # 原来的封底还在
+
+
+def test_rename_replaces_characters_windows_refuses(tmp_path):
+    src = tmp_path / "01.ncm"
+    src.write_bytes(build_ncm(dict(META, musicName="A/B:C*?")))
+    info = decrypt.decrypt_ncm(src, write_tags=False, rename=True)
+    assert info.path.parent == tmp_path
+    assert "/" not in info.path.name and ":" not in info.path.name
+    assert info.path.name.startswith("A_B_C__")
