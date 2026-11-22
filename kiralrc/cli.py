@@ -148,7 +148,8 @@ def cmd_decrypt(a) -> int:
     ok = bad = 0
     for p in todo:
         try:
-            info = decrypt.decrypt(p, out_dir=a.out, write_tags=not a.no_tags)
+            info = decrypt.decrypt(p, out_dir=a.out, write_tags=not a.no_tags,
+                                   rename=getattr(a, "rename", False))
             ok += 1
             if not a.quiet:
                 print(f"[ok] {p.name} → {info.path.name}  {info.title} / {info.artist}"
@@ -452,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("paths", nargs="+", help="文件或目录，目录会递归")
     p.add_argument("--out", help="输出目录，默认放在原文件旁边")
     p.add_argument("--no-tags", action="store_true", help="只出音频，不写标签")
+    p.add_argument("--rename", action="store_true",
+                   help="按「歌名 - 歌手」改名（默认沿用 .ncm 的文件名，好跟同名 .lrc 配对）")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_decrypt)
 

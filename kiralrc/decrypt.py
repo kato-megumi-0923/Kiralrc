@@ -116,7 +116,7 @@ def _parse_meta(blob: bytes) -> dict:
 
 
 def decrypt_ncm(path: str | Path, out_dir: str | Path | None = None,
-                write_tags: bool = True) -> Decrypted:
+                write_tags: bool = True, rename: bool = False) -> Decrypted:
     """把一个 NCM 解成普通音频，元信息与封面一并写回标签。"""
     src = Path(path)
     data = src.read_bytes()
@@ -173,7 +173,8 @@ def decrypt_ncm(path: str | Path, out_dir: str | Path | None = None,
 
     out_dir = Path(out_dir) if out_dir else src.parent
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = _output_name(src, meta)
+    # 默认沿用原文件名：同名的 .lrc 才对得上
+    name = _output_name(src, meta) if rename else src.stem
     target = out_dir / f"{name}.{fmt}"
     n = 1
     while target.exists() and target.resolve() != src.resolve():
@@ -188,8 +189,35 @@ def decrypt_ncm(path: str | Path, out_dir: str | Path | None = None,
                      song_id=int(meta.get("musicId") or 0),
                      cover=cover)
     if write_tags:
-        _write_tags(info)
+        _write_tags(info, meta)
     return info
+
+
+def meta_tags(meta: dict) -> list[tuple[str, str]]:
+    """网易云元信息里值得留下的字段，键名与 ncm解密.py 保持一致。"""
+    artists = "/".join(str(a[0]) for a in meta.get("artist") or [] if a)
+    alias = "/".join(str(x) for x in meta.get("alias") or [] if x)
+    trans = "/".join(str(x) for x in meta.get("transNames") or [] if x)
+    pairs = [
+        ("NETEASE_ID", meta.get("musicId")),
+        ("NETEASE_ALBUM_ID", meta.get("albumId")),
+        ("NETEASE_ALBUM", meta.get("album")),
+        ("NETEASE_MVID", meta.get("mvId")),
+        ("NETEASE_BITRATE", meta.get("bitrate")),
+        ("NETEASE_DURATION", meta.get("duration")),
+        ("NETEASE_FORMAT", meta.get("format")),
+        ("NETEASE_FEE", meta.get("fee")),
+        ("NETEASE_ALIAS", alias),
+        ("NETEASE_TRANSLATION", trans),
+        ("NETEASE_ARTIST", artists),
+        ("NETEASE_ARTIST_IDS", "/".join(str(a[1]) for a in meta.get("artist") or [] if len(a) > 1)),
+        ("NETEASE_ALBUM_PIC_URL", meta.get("albumPic")),
+        ("NETEASE_ALBUM_PIC_DOC_ID", meta.get("albumPicDocId")),
+        ("NETEASE_MP3_DOC_ID", meta.get("mp3DocId")),
+        ("NETEASE_VOLUME_DELTA", meta.get("volumeDelta")),
+        ("NETEASE_PRIVILEGE_FLAG", (meta.get("privilege") or {}).get("flag")),
+    ]
+    return [(k, str(v)) for k, v in pairs if v not in (None, "", [])]
 
 
 def _output_name(src: Path, meta: dict) -> str:
@@ -212,11 +240,13 @@ def _artists(meta: dict) -> str:
     return ", ".join(x for x in out if x and not x.isdigit())
 
 
-def _write_tags(info: Decrypted) -> None:
-    """歌名、歌手、专辑、封面，以及网易云 ID（后面下歌词要用）。"""
+def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
+    """歌名、歌手、专辑、时长、封面，以及网易云的一整套字段。"""
+    extras = meta_tags(meta or {})
+    duration = (meta or {}).get("duration")
     try:
         if info.format == "mp3":
-            from mutagen.id3 import APIC, ID3, TALB, TIT2, TPE1, TXXX
+            from mutagen.id3 import APIC, ID3, TALB, TIT2, TLEN, TPE1, TXXX
             tag = ID3()
             if info.title:
                 tag.add(TIT2(encoding=3, text=info.title))
@@ -224,8 +254,11 @@ def _write_tags(info: Decrypted) -> None:
                 tag.add(TPE1(encoding=3, text=info.artist))
             if info.album:
                 tag.add(TALB(encoding=3, text=info.album))
-            if info.song_id:
-                tag.add(TXXX(encoding=3, desc="NETEASE_ID", text=str(info.song_id)))
+            if duration:
+                tag.add(TLEN(encoding=3, text=str(int(duration))))
+            for key, value in extras:
+                tag.delall("TXXX:" + key)
+                tag.add(TXXX(encoding=3, desc=key, text=value))
             if info.cover:
                 tag.add(APIC(encoding=3, mime=_cover_mime(info.cover), type=3,
                              desc="Cover", data=info.cover))
@@ -239,9 +272,11 @@ def _write_tags(info: Decrypted) -> None:
                 audio["artist"] = info.artist
             if info.album:
                 audio["album"] = info.album
-            if info.song_id:
-                audio["NETEASE_ID"] = str(info.song_id)
-            if info.cover:
+            if duration:
+                audio["length"] = str(int(duration))
+            for key, value in extras:
+                audio[key] = value
+            if info.cover and not audio.pictures:
                 pic = Picture()
                 pic.type = 3
                 pic.mime = _cover_mime(info.cover)
@@ -263,9 +298,9 @@ def _cover_mime(data: bytes) -> str:
 
 
 def decrypt(path: str | Path, out_dir: str | Path | None = None,
-            write_tags: bool = True) -> Decrypted:
+            write_tags: bool = True, rename: bool = False) -> Decrypted:
     """按扩展名/文件头选解密方式。"""
     p = Path(path)
     if p.suffix.lower() in QQ_FORMATS:
         raise NotEncrypted(f"{p.name}：QQ 的加密格式还没支持")
-    return decrypt_ncm(p, out_dir=out_dir, write_tags=write_tags)
+    return decrypt_ncm(p, out_dir=out_dir, write_tags=write_tags, rename=rename)

@@ -53,7 +53,8 @@ def test_audio_and_metadata_come_back(tmp_path):
     assert info.format == "mp3"
     assert info.title == "千百度" and info.artist == "许嵩"
     assert info.album == "寻雾启示" and info.song_id == 167732
-    assert info.path.name == "千百度 - 许嵩.mp3"
+    # 默认沿用 .ncm 的名字，同名 .lrc 才配得上；要改名用 rename=True
+    assert info.path.name == "千百度.mp3"
     assert info.path.read_bytes() == AUDIO
 
 
@@ -98,3 +99,10 @@ def test_qq_formats_are_named_as_unsupported(tmp_path):
         assert "QQ" in str(e)
         return
     raise AssertionError("QQ 格式应当报「没支持」，而不是硬解")
+
+
+def test_rename_gives_title_and_artist(tmp_path):
+    src = tmp_path / "01.ncm"
+    src.write_bytes(build_ncm(META))
+    info = decrypt.decrypt_ncm(src, write_tags=False, rename=True)
+    assert info.path.name == "千百度 - 许嵩.mp3"

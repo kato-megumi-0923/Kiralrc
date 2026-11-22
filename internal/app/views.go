@@ -2839,7 +2839,7 @@ func (a *app) viewTools(c *ui.Context) {
 				{"人声分离", "demucs htdemucs 分离出人声与伴奏轨，可单独导出用于试听。", "separate", 285, iconMic, []string{"info"}},
 				{"网易云歌词抓取", "按清洗后的关键词与时长搜索原文 / 翻译 LRC；自动限速避免 405。", "fetch", 45, iconDownload, []string{"info"}},
 				{"起音与主唱检测", "分析人声轨能量包络与 1–4kHz 占比，核对起音或筛除纯音乐。", "rms_envelope", 168, iconWave, []string{"info"}},
-				{"解密加密音频", "把网易云 NCM 解成普通音频，保留歌名、歌手、封面与 ID；QQ 的加密格式暂不支持。", "decrypt", 20, iconUnlock, []string{"info"}},
+				{"解密加密音频", "把网易云 NCM 解成普通音频，歌名、歌手、专辑、封面与 ID 等原始信息全部写回标签。", "decrypt", 20, iconUnlock, []string{"info"}},
 			}
 
 			// 三列等分：行先撑满，卡片用 Grow/Basis(0) 平分，文字允许收缩换行
