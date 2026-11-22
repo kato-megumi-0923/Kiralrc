@@ -705,7 +705,13 @@ func classifyAudioTrack(audioPath, relPath, lrcRaw string) string {
 	return ""
 }
 
-func parseArtistTitle(stem string) (artist, title string) {
+func parseArtistTitle(fullPath, stem string) (artist, title string) {
+	// 标签里写的才是真的，文件名只能猜（「标题 - 歌手」和「歌手 - 标题」都可能）
+	tagTitle, tagArtist, _ := readAudioTags(fullPath)
+	tagTitle, tagArtist = strings.TrimSpace(tagTitle), strings.TrimSpace(tagArtist)
+	if tagTitle != "" && tagArtist != "" {
+		return tagArtist, tagTitle
+	}
 	if idx := strings.Index(stem, " - "); idx > 0 {
 		left := strings.TrimSpace(stem[:idx])
 		right := strings.TrimSpace(stem[idx+3:])
@@ -714,6 +720,9 @@ func parseArtistTitle(stem string) (artist, title string) {
 			return strings.TrimSpace(right[idx2+3:]), strings.TrimSpace(right[:idx2])
 		}
 		return left, right
+	}
+	if tagTitle != "" {
+		return "本地曲目", tagTitle
 	}
 	return "本地曲目", stem
 }
@@ -801,7 +810,7 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 			lrcRaw = string(b)
 		}
 
-		artist, title := parseArtistTitle(stem)
+		artist, title := parseArtistTitle(f.full, stem)
 		relDir := filepath.ToSlash(filepath.Dir(f.rel))
 		if relDir == "." {
 			relDir = filepath.Base(filepath.Dir(f.full))
@@ -1443,7 +1452,7 @@ func (a *app) setAlignAudioPath(p string) {
 	a.alignAudio = filepath.Base(p)
 	ext := filepath.Ext(p)
 	stem := strings.TrimSuffix(filepath.Base(p), ext)
-	artist, title := parseArtistTitle(stem)
+	artist, title := parseArtistTitle(p, stem)
 	a.alignArtist = artist
 	a.alignTitle = title
 	a.alignSearch = strings.TrimSpace(title + " " + artist)

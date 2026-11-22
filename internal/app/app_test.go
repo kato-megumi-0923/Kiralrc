@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"image/png"
 	"net/http"
@@ -485,5 +486,63 @@ func TestCandidatePythonsPriority(t *testing.T) {
 	}
 	if cands[1][0] != envPy || cands[1][1] != "环境变量" {
 		t.Fatalf("expected env python second, got %+v", cands[1])
+	}
+}
+
+// 标签里写着歌名与歌手时，就别再靠文件名猜「标题 - 歌手」的顺序了。
+func TestParseArtistTitlePrefersTags(t *testing.T) {
+	dir := t.TempDir()
+	flac := filepath.Join(dir, "千百度 - 许嵩.flac")
+	writeTestFLAC(t, flac, "千百度", "许嵩")
+	artist, title := parseArtistTitle(flac, "千百度 - 许嵩")
+	if title != "千百度" || artist != "许嵩" {
+		t.Fatalf("got title=%q artist=%q, want 千百度 / 许嵩", title, artist)
+	}
+
+	mp3 := filepath.Join(dir, "反向 - 命名.mp3")
+	writeTestMP3(t, mp3, "反向的标题", "反向的歌手")
+	artist, title = parseArtistTitle(mp3, "反向 - 命名")
+	if title != "反向的标题" || artist != "反向的歌手" {
+		t.Fatalf("mp3 tag: got title=%q artist=%q", title, artist)
+	}
+}
+
+func writeTestFLAC(t *testing.T, path, title, artist string) {
+	t.Helper()
+	vendor := []byte("test")
+	body := binary.LittleEndian.AppendUint32(nil, uint32(len(vendor)))
+	body = append(body, vendor...)
+	entries := []string{"TITLE=" + title, "ARTIST=" + artist, "ALBUM=专辑"}
+	body = binary.LittleEndian.AppendUint32(body, uint32(len(entries)))
+	for _, e := range entries {
+		body = binary.LittleEndian.AppendUint32(body, uint32(len(e)))
+		body = append(body, e...)
+	}
+	out := []byte("fLaC")
+	out = append(out, 0x00, 0x00, 0x00, 34)          // STREAMINFO，34 字节
+	out = append(out, make([]byte, 34)...)
+	out = append(out, 0x84, byte(len(body)>>16), byte(len(body)>>8), byte(len(body))) // 最后一块
+	out = append(out, body...)
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestMP3(t *testing.T, path, title, artist string) {
+	t.Helper()
+	frame := func(id, value string) []byte {
+		data := append([]byte{3}, []byte(value)...)
+		head := []byte(id)
+		n := len(data)
+		head = append(head, byte(n>>21)&0x7F, byte(n>>14)&0x7F, byte(n>>7)&0x7F, byte(n)&0x7F)
+		head = append(head, 0, 0)
+		return append(head, data...)
+	}
+	body := append(frame("TIT2", title), frame("TPE1", artist)...)
+	n := len(body)
+	head := []byte{'I', 'D', '3', 4, 0, 0,
+		byte(n>>21) & 0x7F, byte(n>>14) & 0x7F, byte(n>>7) & 0x7F, byte(n) & 0x7F}
+	if err := os.WriteFile(path, append(head, body...), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
