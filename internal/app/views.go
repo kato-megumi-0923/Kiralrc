@@ -1110,9 +1110,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 							})
 							ui.Text(c, tr.Note).Grow(1).MinWidth(0).FontSize(12).TextColor(p.muted).SingleLine()
 						})
-						if mainBtn.DoubleClicked() {
-							a.openTrackInEditor(tr)
-						} else if mainBtn.Clicked() {
+						// 只切换勾选：整行是一个按钮，连点两下会被当成双击，
+						// 于是勾选没做成，人却跳进了校对页。进校对走铅笔按钮或底部按钮。
+						if mainBtn.Clicked() {
 							tr.Selected = !tr.Selected
 						}
 
