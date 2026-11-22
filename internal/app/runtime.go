@@ -145,7 +145,7 @@ type pyProbeResult struct {
 
 func probePython(pyPath string) (pyProbeResult, error) {
 	code := `import importlib.util, json, sys
-req = ["torch", "torchaudio", "numpy", "av", "faster_whisper", "demucs", "transformers", "pypinyin", "fugashi", "unidic_lite", "yaml", "pykakasi"]
+req = ["torch", "torchaudio", "numpy", "av", "faster_whisper", "demucs", "transformers", "pypinyin", "fugashi", "unidic_lite", "yaml", "pykakasi", "onnxruntime"]
 miss = [m for m in req if importlib.util.find_spec(m) is None]
 print(json.dumps({"version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}", "missing": miss}))`
 	cmd := newHiddenCmd(pyPath, "-X", "utf8", "-c", code)
@@ -413,6 +413,7 @@ func (a *app) bootstrapEnv() {
 			"transformers>=4.40", "pypinyin>=0.49", "fugashi>=1.3", "unidic-lite>=1.0.8",
 			"scipy>=1.10", "soundfile>=0.12",
 			"pyyaml", "pykakasi", "numba", "mutagen",
+			"onnxruntime>=1.19",
 		}
 		args := append([]string{"pip", "install", "--python", venvPy}, pkgs...)
 		cmd := newHiddenCmd(uvExe, args...)
@@ -434,7 +435,7 @@ func (a *app) bootstrapEnv() {
 	}()
 }
 
-// downloadBaseModels 调用 scripts/fetch_models.py 一键下载基础模型（Whisper large-v3 + SOFA）。
+// downloadBaseModels 调用 scripts/fetch_models.py 一键下载基础模型。
 func (a *app) downloadBaseModels() {
 	if a.envInstalling {
 		return
@@ -447,7 +448,7 @@ func (a *app) downloadBaseModels() {
 		return
 	}
 	a.envInstalling = true
-	a.envInstallLog = "开始下载基础模型（faster-whisper-large-v3 + SOFA 中文模型）...\n"
+	a.envInstallLog = "开始下载基础模型（faster-whisper-large-v3 + HubertFA 中文模型）...\n"
 	a.toast = "正在下载基础模型，请保持网络畅通…"
 	envExtra := a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
 	proxyAddr := ""

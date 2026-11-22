@@ -1203,11 +1203,11 @@ def align_syls_waveform_first(syl: list[tuple[float, float, str]], off: float,
 def build_lrc(meta: list[dict], words_dir: Path, ti: str = "", ar: str = "",
               al: str = "", by: str = "SOFA 歌声对齐",
               vocal_wav: Path | None = None,
-              waveform_first: bool = False) -> fmt.Lrc:
+              waveform_first: bool = False, *, refine_syllables: bool = True) -> fmt.Lrc:
     """把逐音节时间贴回汉字，生成逐字 Lrc（含行尾标签、句间夹断）。"""
     env = None
     voc_16k = None
-    if vocal_wav is not None and Path(vocal_wav).exists():
+    if (waveform_first or refine_syllables) and vocal_wav is not None and Path(vocal_wav).exists():
         try:
             voc_16k = au.decode(vocal_wav, 16000)
             env = au.rms_envelope(voc_16k, sr=16000, hop=0.02)
@@ -1227,7 +1227,7 @@ def build_lrc(meta: list[dict], words_dir: Path, ti: str = "", ar: str = "",
             syl = align_syls_waveform_first(syl, m["offset"], voc_16k, m["seg_end"], hop_s=0.02)
             syl = _trim_leading_silence(syl, m["offset"], env, hop=0.02)
             syl = _split_internal_silence(syl, m["offset"], env, hop=0.02)
-        else:
+        elif refine_syllables:
             syl = _fix_collapsed_syllables(syl)
             syl = _pull_back_voiced_sp(syl, m["offset"], env, hop=0.02)
             syl = _trim_leading_silence(syl, m["offset"], env, hop=0.02)

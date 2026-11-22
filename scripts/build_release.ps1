@@ -23,6 +23,9 @@ try {
     $PkgDst = Join-Path $Stage "kiralrc"
     New-Item -ItemType Directory -Force -Path $PkgDst | Out-Null
     Get-ChildItem "kiralrc" -Filter "*.py" | Copy-Item -Destination $PkgDst
+    $HubertDst = Join-Path $PkgDst "_hubertfa"
+    New-Item -ItemType Directory -Force -Path $HubertDst | Out-Null
+    Get-ChildItem "kiralrc\_hubertfa" -File | Copy-Item -Destination $HubertDst
 
     # SOFA 拼音词典与原版 LICENSE
     $SofaDictDst = Join-Path $Stage "third_party\SOFA\dictionary"

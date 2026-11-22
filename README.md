@@ -7,20 +7,20 @@
 核心思路只有一条：**时间必须由专门的对齐器从音频里算出来，不能靠 ASR 的句子边界去猜。**
 
 - 文本：优先使用参考歌词（支持多平台顺序拉取），ASR 只用来给每句找个大致位置；
-- 时间：按语种选用专门的歌声/歌词强制对齐模型（中文走 SOFA，日文走 NextFire MMS，英文及其他语言走 Echora-300M MMS）；
+- 时间：按语种选用专门的歌声/歌词强制对齐模型（中文默认走 HubertFA，日文走 NextFire MMS，英文及其他语言走 Echora-300M MMS）；
 - 所有对齐都在 **demucs 分离出的人声轨**上跑，因为伴奏会显著干扰对齐。
 
 ## 支持语言与对齐模型
 
 | 语言 | 强制对齐模型 | 文本 / 音素处理 | 特色支持 |
 |---|---|---|---|
-| **中文（`zh`）** | **SOFA**（`v1.0.0_mandarin_singing.ckpt`，歌声专精） | `pypinyin` + `opencpop-extension` 词典 | 支持 `polyphone.toml` 自定义多音字读音覆盖 |
+| **中文（`zh`）** | **HubertFA v0.0.7**（ONNX，默认）；可选 SOFA | `pypinyin` + `ds-zh-pinyin-lite` 词典 | 支持 `polyphone.toml` 自定义多音字读音覆盖 |
 | **日文（`ja`）** | **NextFire MMS**（`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`，歌声专精） | `fugashi`（MeCab + unidic）精确注音切分 | 准确处理「は→わ」「へ→え」等助词及长音、促音、拗音 |
 | **英文（`en`）及其他** | **Echora-300M MMS**（`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`，多语歌词专精） | 24s 长滑窗 + 词级/音节级对齐 | 支持 `en_granularity` 切换按词（`word`）或按字母（`char`），并按人声能量包络保真长音 |
 
 > 前置定位与人声分离全语种统一采用 `demucs` + `faster-whisper-large-v3`。
 
-## 为什么不用纯 Whisper / WhisperX（而选用 SOFA / MMS）
+## 为什么用歌声对齐模型处理逐字时间
 
 实测（本机）：
 
@@ -57,7 +57,7 @@
 3. **人声分离**：使用 `demucs`（`htdemucs`）分离人声轨 `vocals.wav`（同一首歌会复用缓存）。
 4. **主唱检测**：分析人声轨 1~4kHz 能量占比与 P90 RMS（`min_vocal_ratio` / `min_vocal_rms`），拦截纯音乐或无人声轨道。
 5. **分语种逐字强制对齐**（在分离后的人声轨上按句切片运行）：
-   - **中文（`zh`）**：`pypinyin` + `polyphone.toml` 词表转拼音 → 在主环境用纯 PyTorch（CUDA/CPU）直接运行 **SOFA** 歌声模型对齐。
+   - **中文（`zh`）**：`pypinyin` + `polyphone.toml` 词表转拼音，再用 **HubertFA** 在句内对齐。ONNX Runtime CPU 版即可运行；装有 GPU 版且 CUDA 可用时也可走 GPU。
    - **日文（`ja`）**：`fugashi`（MeCab + unidic）切分注音，结合人声能量包络避开上句拖音 → 运行 **NextFire MMS** 日语歌声模型对齐。
    - **英文（`en`）及其他**：24s 长滑窗全上下文计算发射概率 → 运行 **Echora-300M MMS** 多语歌词专精模型对齐，按 `en_granularity`（`word` / `char`）切分粒度，并按人声能量包络做长音时长保真。
 6. **回填译文与输出**：挂载对应中文译文行，写入 `[ti:]` / `[ar:]` / `[al:]` / `[by:]` 元信息并按统一格式输出。
@@ -67,7 +67,7 @@
 ```
 [ti:曲名]
 [ar:歌手]
-[by:SOFA 歌声对齐]
+[by:HubertFA 歌声对齐]
 [00:06.232]<00:06.232>走<00:07.115>在<00:07.440>乡...
 ```
 
@@ -93,13 +93,15 @@
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # 2) 安装其余 Python 依赖（支持 Python 3.10~3.13 + NumPy 2.x）
-pip install transformers faster-whisper demucs pypinyin fugashi unidic-lite pykakasi av numpy pyyaml numba mutagen scipy soundfile
+pip install transformers faster-whisper demucs pypinyin fugashi unidic-lite pykakasi av numpy pyyaml numba mutagen scipy soundfile onnxruntime
 
 # 3) 下载基础模型
 python scripts/fetch_models.py
 ```
 
 `python -m kiralrc info` 可以检查路径和模型是否齐备。
+
+要使用 SOFA，可在 `config.toml` 的 `[defaults]` 将 `zh_aligner` 设置为 `"sofa"`，并用 `python scripts/fetch_models.py --with-sofa` 下载其权重。HubertFA 尚未安装时，已有 SOFA 权重的环境会提示回退。
 
 ## 桌面端 GUI（Windows）
 
@@ -201,7 +203,8 @@ scripts/           模型下载、环境安装、便携打包（build_release.ps
 |---|---|---|
 | `kiralrc/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
 | `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 保留词典与原版 LICENSE，推理已内嵌到 `kiralrc/sofa.py` |
-| `models/` | 本地下载（不提交到 Git） | CT2 whisper：`Systran/faster-whisper-large-v3`（ModelScope 镜像）<br>SOFA：`v1.0.0_mandarin_singing.ckpt`<br>MMS 歌声/歌词：`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`、`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`<br>人声分离：`htdemucs` |
+| `kiralrc/_hubertfa/` | [HubertFA v0.0.7](https://github.com/wolfgitpr/HubertFA/releases/tag/v0.0.7)，Apache-2.0 | 保留上游解码代码和许可证，权重由模型下载脚本获取 |
+| `models/` | 本地下载（不提交到 Git） | CT2 Whisper：`Systran/faster-whisper-large-v3`<br>中文：HubertFA v0.0.7 ONNX，可选 SOFA<br>MMS 歌声/歌词：`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`、`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`<br>人声分离：`htdemucs` |
 | 依赖库 | PyPI | faster-whisper / demucs / transformers / PyAV / pypinyin / torch … |
 | `kiralrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
 

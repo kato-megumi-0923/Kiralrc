@@ -4,7 +4,7 @@
     2. 定每句起始时间：参考歌词本身带时间戳就直接用，否则用 ASR + 行级 DP 估；
     3. demucs 分离人声（缓存）；
     4. 主唱检测（KI-1）：筛除纯音乐/无主唱曲目；
-    5. 中文走 SOFA 歌声对齐，日文走 NextFire MMS，英文及其它多语种走 Echora-300M MMS（带长音保真 KI-3 与英文粒度 KI-7）；
+    5. 中文默认走 HubertFA 歌声对齐，日文走 NextFire MMS，英文及其它多语种走 Echora-300M MMS；
     6. 输出三位小数、带行尾标签的逐字 LRC。
 """
 from __future__ import annotations
@@ -866,14 +866,30 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
                 suspect_starts.add((line.start, line.text.strip()))
 
     if lang == "zh":
-        from . import sofa
+        from . import hubertfa, sofa
 
-        emit(5, "SOFA 逐句对齐", f"{len(rough)} 句")
+        engine = config.opt("zh_aligner", "hubertfa").strip().lower()
+        if engine not in {"hubertfa", "sofa"}:
+            raise ValueError("zh_aligner 必须是 hubertfa 或 sofa")
+        if engine == "hubertfa" and not hubertfa.available():
+            if not config.path("sofa_ckpt").is_file():
+                raise RuntimeError("缺少 HubertFA 模型或 onnxruntime，请下载基础模型并检查 Python 运行环境")
+            engine = "sofa"
+            note += " | HubertFA 未就绪，本次使用 SOFA"
+        engine_name = "HubertFA" if engine == "hubertfa" else "SOFA"
+        emit(5, f"{engine_name} 逐句对齐", f"{len(rough)} 句")
         seg_dir = cache / "segments"
+
+        def run_mandarin_alignment(meta: list[dict]) -> None:
+            if engine == "hubertfa":
+                hubertfa.run(seg_dir, meta)
+            else:
+                sofa.run(seg_dir)
+
         meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total, reference_ends=reference_ends)
         if missing:
             note += f" | 拼音异常 {len(missing)} 处"
-        sofa.run(seg_dir)
+        run_mandarin_alignment(meta)
         if used_ref_times:
             clipped, seg_cnt = sofa.clipped_start_ratio(seg_dir / "htk" / "words")
             if suspect_starts or (seg_cnt >= 6 and (clipped / seg_cnt) >= 0.40):
@@ -923,14 +939,14 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
                         rough = rough_fixed
                         meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total,
                                                            reference_ends=shifted_ends)
-                        sofa.run(seg_dir)
+                        run_mandarin_alignment(meta)
                         if shift:
                             note += f" | 参考时间戳整体偏移 {shift:+.2f}s，已自动校准"
                         if corrected:
                             note += f" | 单独修正 {corrected} 处异常句首"
         lrc = sofa.build_lrc(meta, seg_dir / "htk" / "words", vocal_wav=vocals,
-                             waveform_first=waveform_first)
-        by = "SOFA 波形优先对齐" if waveform_first else "SOFA 歌声对齐"
+                             waveform_first=waveform_first, refine_syllables=engine == "sofa")
+        by = f"{engine_name} 波形优先对齐" if waveform_first else f"{engine_name} 歌声对齐"
     else:
         from . import jp
 

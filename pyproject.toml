@@ -1,7 +1,7 @@
 [project]
 name = "kiralrc"
 version = "0.2.0"
-description = "给歌曲生成逐字 LRC：SOFA 歌声对齐 + faster-whisper + demucs"
+description = "给歌曲生成逐字 LRC：HubertFA 歌声对齐 + faster-whisper + demucs"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
@@ -16,6 +16,7 @@ dependencies = [
     "unidic-lite>=1.0.8",
     "scipy>=1.10",
     "soundfile>=0.12",
+    "onnxruntime>=1.19",
 ]
 
 [project.scripts]
@@ -25,5 +26,8 @@ kiralrc = "kiralrc.cli:main"
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["kiralrc"]
+[tool.setuptools.packages.find]
+include = ["kiralrc", "kiralrc._hubertfa"]
+
+[tool.setuptools.package-data]
+"kiralrc._hubertfa" = ["LICENSE"]
