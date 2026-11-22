@@ -2839,7 +2839,7 @@ func (a *app) viewTools(c *ui.Context) {
 				{"人声分离", "demucs htdemucs 分离出人声与伴奏轨，可单独导出用于试听。", "separate", 285, iconMic, []string{"info"}},
 				{"网易云歌词抓取", "按清洗后的关键词与时长搜索原文 / 翻译 LRC；自动限速避免 405。", "fetch", 45, iconDownload, []string{"info"}},
 				{"起音与主唱检测", "分析人声轨能量包络与 1–4kHz 占比，核对起音或筛除纯音乐。", "rms_envelope", 168, iconWave, []string{"info"}},
-				{"解密加密音频", "网易云 NCM 解成普通音频，保留歌名、歌手、专辑、封面与网易云 ID。QQ 的 qmc/mflac/mgg 暂不支持。", "decrypt", 20, iconUnlock, []string{"info"}},
+				{"解密加密音频", "把网易云 NCM 解成普通音频，保留歌名、歌手、封面与 ID；QQ 的加密格式暂不支持。", "decrypt", 20, iconUnlock, []string{"info"}},
 			}
 
 			for rowIdx := 0; rowIdx < len(tools); rowIdx += 3 {
@@ -2847,8 +2847,8 @@ func (a *app) viewTools(c *ui.Context) {
 				ui.Row(c.Key(fmt.Sprintf("trow-%d", rStart))).Gap(14).AlignItems(ui.Stretch).Children(func() {
 					for i := rStart; i < rStart+3; i++ {
 						if i >= len(tools) {
-							// 最后一排不足三个时补空位，保持三列等宽
-							ui.Box(c).Grow(1).Basis(0).MinWidth(0)
+							// 最后一排不足三个时补空位，跟卡片同样的伸缩配置，宽度才对得上
+							ui.Column(c).Grow(1).Basis(0).MinWidth(0)
 							continue
 						}
 						tl := tools[i]
