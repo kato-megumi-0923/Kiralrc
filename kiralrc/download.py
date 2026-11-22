@@ -78,6 +78,20 @@ def lrc_kind(path: Path) -> str:
 def song_name_artist(audio: Path) -> tuple[str, str]:
     """这首歌的标题与歌手：标签优先，其次按「标题 - 歌手」拆文件名。"""
     title = artist = ""
+    # 同目录的 .lrc 里常有 [ti:] / [ar:]（平台写下的），比文件名可靠
+    lrc = audio.with_suffix(".lrc")
+    if lrc.exists():
+        try:
+            body = lrc.read_text(encoding="utf-8-sig", errors="ignore")
+            for tag, slot in (("ti", "title"), ("ar", "artist")):
+                m = re.search(r"^\[" + tag + r":([^\]]*)\]", body, re.M | re.I)
+                if m and m.group(1).strip():
+                    if slot == "title":
+                        title = m.group(1).strip()
+                    else:
+                        artist = m.group(1).strip()
+        except Exception:
+            pass
     try:
         from mutagen import File as MutagenFile
         f = MutagenFile(str(audio))
@@ -179,11 +193,11 @@ def download_one(audio: Path, force: bool = False) -> Result:
         # 只有逐行：缺的时候才写，别拿逐行盖掉已有的逐行或逐字
         if kind != "missing":
             return Result(audio, "kept", f"只拿到逐行（{lyric.source}）", lyric.source)
-        lrc = sources.to_lrc(lyric, ti=audio.stem)
+        lrc = sources.to_lrc(lyric, ti=title, ar=artist)
         _write(audio, lrc)
         return Result(audio, "line", f"逐行（{lyric.source}）", lyric.source)
 
-    lrc = sources.to_lrc(lyric, ti=audio.stem)
+    lrc = sources.to_lrc(lyric, ti=title, ar=artist)
     if kind == "aligned":
         _write(audio, lrc)
         return Result(audio, "replaced", f"官方逐字替换对齐结果（{lyric.source}）", lyric.source)

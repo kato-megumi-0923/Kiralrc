@@ -154,7 +154,8 @@ def netease_lyric(song_id: int, timeout: int = 20) -> dict:
     }
 
 
-def from_netease(song_id: int, timeout: int = 20) -> WordLyric | None:
+def from_netease(song_id: int, timeout: int = 20, name: str = "",
+                 artist: str = "") -> WordLyric | None:
     """按 ID 取网易云歌词：有逐字用逐字，否则逐行；译文一并挂上。"""
     raw = netease_lyric(song_id, timeout)
     lines = parse_yrc(raw["yrc"])
@@ -167,6 +168,7 @@ def from_netease(song_id: int, timeout: int = 20) -> WordLyric | None:
         for i, (sec, text) in enumerate(timed_lines):
             end = timed_lines[i + 1][0] if i + 1 < len(timed_lines) else sec + 6
             lines.append(WordLine(start=sec, text=text, end=min(end, sec + 6)))
+    lines = trim_preamble(lines, name, artist)
     if len(lines) <= 2 and PLACEHOLDER.search("".join(l.text for l in lines)):
         return None
     if raw["tlyric"]:
@@ -191,7 +193,8 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
         try:
             hit = None
             if which == "netease":
-                hit = from_netease(song_id) if song_id else netease_by_search(name, artist, duration)
+                hit = (from_netease(song_id, name=name, artist=artist) if song_id
+                       else netease_by_search(name, artist, duration))
             elif which == "qq" and name:
                 hit = from_qq(name, artist, duration)
             elif which == "amll" and song_id:
@@ -213,6 +216,39 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
             if pause:
                 time.sleep(pause)
     return fallback
+
+
+# 制作人员行：词：X / 作曲：X / 编曲：X …，不是唱出来的
+CREDIT = re.compile(
+    r"^\s*(作词|作曲|编曲|制作人?|出品|监制|混音|母带|和声|吉他|贝斯|鼓|键盘|弦乐|"
+    r"词|曲|演唱|原唱|翻唱|lyrics?|music|composer|arranger|producer|mixed|mastered)\s*[:：]",
+    re.I)
+
+
+def _is_preamble(text: str, name: str, artist: str) -> bool:
+    """开头的歌曲信息行与制作人员行：QQ / 酷狗的逐字歌词常带这几行。"""
+    head = text.strip()
+    if not head:
+        return True
+    if CREDIT.match(head):
+        return True
+    flat = re.sub(r"[\s\-–—_·.,，。!！?？'\"、:：~～/]", "", head).lower()
+    for candidate in (name, f"{name} {artist}".strip(), f"{artist} {name}".strip(),
+                      f"{name} - {artist}", f"{artist} - {name}"):
+        c = (candidate or "").strip()
+        if not c:
+            continue
+        if flat == re.sub(r"[\s\-–—_·.,，。!！?？'\"、:：~～/]", "", c).lower():
+            return True
+    return False
+
+
+def trim_preamble(lines: list[WordLine], name: str = "", artist: str = "") -> list[WordLine]:
+    """去掉开头的歌曲信息与制作人员行，只留真正唱出来的。"""
+    out = list(lines)
+    while out and _is_preamble(out[0].text, name, artist):
+        out.pop(0)
+    return out
 
 
 PLACEHOLDER = re.compile(r"纯音乐|請欣賞|请欣赏|暂无歌词|没有歌词|此歌曲为没有填词的纯音乐", re.I)
@@ -334,7 +370,7 @@ def netease_by_search(name: str, artist: str = "", duration: float | None = None
     cands = tx.netease_candidates(keyword, duration, name=name, artist=artist)
     if not cands or cands[0]["score"] < min_score:
         return None
-    return from_netease(int(cands[0]["id"]))
+    return from_netease(int(cands[0]["id"]), name=name, artist=artist)
 
 
 def from_qq(name: str, artist: str = "", duration: float | None = None) -> WordLyric | None:
@@ -372,7 +408,7 @@ def from_qq(name: str, artist: str = "", duration: float | None = None) -> WordL
         qrc_text = plain.decode("utf-8-sig")
     except Exception:
         return None
-    lines = parse_qrc(qrc_text)
+    lines = trim_preamble(parse_qrc(qrc_text), name, artist)
     if not lines:
         return None
     trans = body.get("trans") or ""
@@ -555,7 +591,7 @@ def from_kugou(name: str, artist: str = "", duration: float | None = None) -> Wo
     if not content:
         return None
     try:
-        lines = parse_krc(decode_krc(content))
+        lines = trim_preamble(parse_krc(decode_krc(content)), name, artist)
     except Exception:
         return None
     if not lines:
