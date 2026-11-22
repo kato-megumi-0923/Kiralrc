@@ -7,10 +7,15 @@ dependencies = [
     "numpy>=1.24",
     "av>=12",
     "torch>=2.0",
+    "torchaudio>=2.0",
     "faster-whisper>=1.1",
     "demucs>=4.0",
     "transformers>=4.40",
     "pypinyin>=0.49",
+    "fugashi>=1.3",
+    "unidic-lite>=1.0.8",
+    "scipy>=1.10",
+    "soundfile>=0.12",
 ]
 
 [project.scripts]

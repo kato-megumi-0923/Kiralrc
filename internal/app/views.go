@@ -94,6 +94,28 @@ func (a *app) view(c *ui.Context) {
 				}
 			})
 
+			if a.page != pageSettings && a.envChecked && !a.envInfo.Ready {
+				banner := ui.Row(c.Key("env-setup-banner")).Absolute().Top(buttonsHeight+4).Left(38).Right(38).Height(44).
+					PaddingX(16).Radius(12).Gap(10).AlignItems(ui.Center).Background(p.warnBg)
+				banner.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.warn.Alpha(0.35), 12, 1) })
+				banner.Children(func() {
+					msg := "检测到 Python 运行环境尚未就绪，对齐功能暂不可用"
+					if a.envInstalling {
+						msg = "正在后台初始化运行环境 / 下载模型，可前往设置页查看实时进度"
+					} else if len(a.envInfo.Missing) > 0 {
+						msg = fmt.Sprintf("检测到当前 Python 缺少 %d 个核心依赖（%s）", len(a.envInfo.Missing), strings.Join(a.envInfo.Missing[:min(4, len(a.envInfo.Missing))], "、"))
+					}
+					ui.Text(c, msg).FontSize(12.5).FontWeight(600).TextColor(p.warn).Grow(1).SingleLine()
+					btnTxt := "前往一键安装"
+					if a.envInstalling {
+						btnTxt = "查看进度"
+					}
+					if pillButton(c.Key("env-banner-go"), nil, btnTxt, p.accent, p.onAccent).Clicked() {
+						a.navigate(pageSettings, 1)
+					}
+				})
+			}
+
 			if a.page != pageEditor && (a.edFile != "" || a.queueActiveTitle != "") {
 				a.viewGlassDock(c)
 			}
@@ -2792,7 +2814,15 @@ func (a *app) viewSettings(c *ui.Context) {
 				if gpuLbl == "" {
 					gpuLbl = "检测中…"
 				}
-				ui.Text(c, "项目根目录 D:\\WindowsDev\\Kiralrc · 环境就绪 · "+gpuLbl).FontSize(11.5).FontWeight(600).TextColor(p.muted)
+				envLbl := "环境检测中"
+				if a.envChecked {
+					if a.envInfo.Ready {
+						envLbl = "环境就绪 (" + a.envInfo.Source + ")"
+					} else {
+						envLbl = "环境待初始化"
+					}
+				}
+				ui.Text(c, "程序目录 "+appRootDir()+" · "+envLbl+" · "+gpuLbl).FontSize(11.5).FontWeight(600).TextColor(p.muted)
 				ui.Text(c, "设置").FontSize(28).FontWeight(800)
 			})
 
@@ -2860,6 +2890,81 @@ func (a *app) viewSettings(c *ui.Context) {
 					a.toast = "正在重新检测模型与运行环境…"
 				}
 			})
+
+			// 2a) Python 运行环境卡片（分层检测已有环境 + 一键初始化内置 .venv + 一键下载基础模型）
+			envCard := ui.Column(c.Key("set-env-card")).FillWidth().Padding(14, 18, 14, 18).Radius(16).Gap(10).Background(p.surface)
+			envCard.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 16, 1) })
+			envCard.Children(func() {
+				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+					switch {
+					case a.envInstalling:
+						statusPill(c, "安装中…", p.accent.Alpha(0.14), p.accent)
+					case !a.envChecked:
+						statusPill(c, "检测中", p.surface2, p.muted)
+					case a.envInfo.Ready:
+						statusPill(c, "已就绪", p.okBg, p.ok)
+					default:
+						statusPill(c, "需初始化", p.warnBg, p.warn)
+					}
+					srcLbl := a.envInfo.Source
+					if srcLbl == "" {
+						srcLbl = "自动检测"
+					}
+					statusPill(c, srcLbl, p.surface2, p.muted)
+					ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+						title := "Python 运行环境"
+						if a.envInfo.Version != "" {
+							title += " · Python " + a.envInfo.Version
+						}
+						ui.Text(c, title).FontSize(13.5).FontWeight(700).SingleLine()
+						sub := a.envInfo.Path
+						if sub == "" {
+							sub = a.envInfo.ErrorText
+						}
+						if sub == "" {
+							sub = "正在检测本机与内置 .venv 环境…"
+						}
+						if a.envChecked && !a.envInfo.Ready && len(a.envInfo.Missing) > 0 {
+							sub += " · 缺少: " + strings.Join(a.envInfo.Missing, ", ")
+						}
+						ui.Text(c, sub).FontSize(11.5).TextColor(p.muted).SingleLine()
+					})
+				})
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					installLbl := "一键安装/补全运行环境"
+					if a.envInstalling {
+						installLbl = "正在执行…"
+					}
+					if pillButton(c.Key("env-bootstrap"), nil, installLbl, p.accent, p.onAccent).Clicked() && !a.envInstalling {
+						a.bootstrapEnv()
+					}
+					if pillButton(c.Key("env-fetch-models"), nil, "一键下载基础模型", p.surface2, p.text).Clicked() && !a.envInstalling {
+						a.downloadBaseModels()
+					}
+					if pillButton(c.Key("env-pick-py"), nil, "选择自定义 Python", p.surface2, p.text).Clicked() && !a.envInstalling {
+						a.pickCustomPython()
+					}
+					if strings.TrimSpace(a.setCustomPython) != "" {
+						if pillButton(c.Key("env-reset-py"), nil, "恢复自动检测", p.surface2, p.muted).Clicked() && !a.envInstalling {
+							a.setCustomPython = ""
+							a.savePrefs()
+							a.toast = "已恢复自动检测 Python 环境"
+							a.refreshBackendInfo()
+						}
+					}
+				})
+				if strings.TrimSpace(a.envInstallLog) != "" {
+					logBox := ui.Box(c.Key("env-install-log")).FillWidth().Padding(10, 12, 10, 12).Radius(10).Background(p.surface2)
+					logBox.Children(func() {
+						lines := strings.Split(strings.TrimSpace(a.envInstallLog), "\n")
+						if len(lines) > 10 {
+							lines = lines[len(lines)-10:]
+						}
+						ui.Text(c, strings.Join(lines, "\n")).FontSize(11).TextColor(p.muted)
+					})
+				}
+			})
+
 			g2 := ui.Column(c.Key("set-g2")).FillWidth().Padding(6, 18, 6, 18).Radius(16).Background(p.surface)
 			g2.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 16, 1) })
 			g2.Children(func() {

@@ -299,6 +299,11 @@ type app struct {
 	setAIURLDropOpen      bool
 	setAIModelDropOpen    bool
 	setConfirmDeleteModel string
+	setCustomPython       string
+	envInfo               pythonEnvInfo
+	envChecked            bool
+	envInstalling         bool
+	envInstallLog         string
 	setScroll             ui.ScrollState
 
 	toast     string
@@ -320,6 +325,7 @@ type userPrefs struct {
 	AIBaseURL        string   `json:"ai_base_url,omitempty"`
 	AIModel          string   `json:"ai_model,omitempty"`
 	AIAPIKey         string   `json:"ai_api_key,omitempty"`
+	CustomPython     string   `json:"custom_python,omitempty"`
 }
 
 func prefsPath() string {
@@ -397,6 +403,7 @@ func (a *app) loadPrefs() {
 	}
 	a.setAIBaseURL = strings.TrimSpace(up.AIBaseURL)
 	a.setAIModel = strings.TrimSpace(up.AIModel)
+	a.setCustomPython = strings.TrimSpace(up.CustomPython)
 	if key, migrate, err := unprotectSecret(up.AIAPIKey); err == nil {
 		a.setAIAPIKey = key
 		if migrate && key != "" {
@@ -486,6 +493,7 @@ func (a *app) savePrefs() {
 		AIBaseURL:        strings.TrimSpace(a.setAIBaseURL),
 		AIModel:          strings.TrimSpace(a.setAIModel),
 		AIAPIKey:         encAIKey,
+		CustomPython:     strings.TrimSpace(a.setCustomPython),
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)
@@ -973,14 +981,11 @@ func (a *app) pythonSubprocessEnv(extra ...string) []string {
 // runKiralrcCLI invokes `python -m kiralrc <args>` asynchronously and updates the UI.
 func (a *app) runKiralrcCLI(args ...string) {
 	env := a.pythonSubprocessEnv()
+	py := a.pythonExe()
 	go func() {
-		py := "python"
-		wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-		if _, err := os.Stat(wb); err == nil {
-			py = wb
-		}
 		cmdArgs := append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)
 		cmd := newHiddenCmd(py, cmdArgs...)
+		cmd.Dir = appRootDir()
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		msg := strings.TrimSpace(string(out))
@@ -1088,13 +1093,10 @@ func (a *app) validateCurrentLrc() {
 		return
 	}
 	path := a.edPath
+	py := a.pythonExe()
 	go func() {
-		py := "python"
-		wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-		if _, err := os.Stat(wb); err == nil {
-			py = wb
-		}
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "validate", path)
+		cmd.Dir = appRootDir()
 		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 		out, _ := cmd.CombinedOutput()
 		var issues []string
@@ -1118,13 +1120,10 @@ func (a *app) heartsCurrentLrc() {
 		return
 	}
 	path := a.edPath
+	py := a.pythonExe()
 	go func() {
-		py := "python"
-		wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-		if _, err := os.Stat(wb); err == nil {
-			py = wb
-		}
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "hearts", path)
+		cmd.Dir = appRootDir()
 		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 		out, _ := cmd.CombinedOutput()
 		msg := strings.TrimSpace(string(out))
@@ -1166,13 +1165,22 @@ func (a *app) runToolInteractive(toolCmd string) {
 
 func (a *app) refreshBackendInfo() {
 	a.checkModels()
+	customPy := a.setCustomPython
 	go func() {
-		py := "python"
-		wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-		if _, err := os.Stat(wb); err == nil {
-			py = wb
+		envInfo := detectPythonEnv(customPy)
+		if envInfo.Path != "" {
+			setActivePythonPath(envInfo.Path)
+		}
+		a.post(func() {
+			a.envInfo = envInfo
+			a.envChecked = true
+		})
+		py := envInfo.Path
+		if py == "" {
+			py = "python"
 		}
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "info", "--json")
+		cmd.Dir = appRootDir()
 		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 		out, err := cmd.Output()
 		if err != nil {
@@ -1873,11 +1881,7 @@ func (a *app) startQueueRunner() {
 }
 
 func (a *app) runQueueWorker() {
-	py := "python"
-	wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-	if _, err := os.Stat(wb); err == nil {
-		py = wb
-	}
+	py := a.pythonExe()
 	for {
 		// Pick next waiting item on UI thread
 		var idx = -1
@@ -1950,6 +1954,7 @@ func (a *app) runQueueWorker() {
 			args = append(args, "--waveform-first")
 		}
 		cmd := newHiddenCmd(py, args...)
+		cmd.Dir = appRootDir()
 		cmd.Env = a.pythonSubprocessEnv("PYTHONUNBUFFERED=1")
 		stdout, err := cmd.StdoutPipe()
 		cmd.Stderr = cmd.Stdout
@@ -2220,12 +2225,9 @@ func (a *app) loadEditorCoverAsync(audioPath string) {
 	go func(ap string) {
 		coverPath := findCoverCache(ap)
 		if coverPath == "" {
-			py := "python"
-			wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-			if _, err := os.Stat(wb); err == nil {
-				py = wb
-			}
+			py := getActivePythonPath()
 			cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "cover", ap)
+			cmd.Dir = appRootDir()
 			cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 			if out, err := cmd.Output(); err == nil {
 				p := strings.TrimSpace(string(out))

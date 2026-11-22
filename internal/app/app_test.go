@@ -463,3 +463,27 @@ func TestRenderFrames(t *testing.T) {
 		f.Close()
 	}
 }
+
+func TestCandidatePythonsPriority(t *testing.T) {
+	tmp := t.TempDir()
+	customPy := filepath.Join(tmp, "custom_python.exe")
+	envPy := filepath.Join(tmp, "env_python.exe")
+	if err := os.WriteFile(customPy, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPy, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KIRALRC_PYTHON", envPy)
+
+	cands := candidatePythons(customPy)
+	if len(cands) < 2 {
+		t.Fatalf("expected at least 2 candidates, got %v", cands)
+	}
+	if cands[0][0] != customPy || cands[0][1] != "自定义" {
+		t.Fatalf("expected custom python first, got %+v", cands[0])
+	}
+	if cands[1][0] != envPy || cands[1][1] != "环境变量" {
+		t.Fatalf("expected env python second, got %+v", cands[1])
+	}
+}

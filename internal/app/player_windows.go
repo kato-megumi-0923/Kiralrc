@@ -59,14 +59,11 @@ func ensurePlayableAudio(path string) string {
 		return wavPath
 	}
 
-	py := "python"
-	wb := `C:\Users\yxljs\AppData\Local\Programs\WorkBuddy\resources\vendor\python\python.exe`
-	if _, err := os.Stat(wb); err == nil {
-		py = wb
-	}
+	py := getActivePythonPath()
 	tmpPath := wavPath + ".tmp"
 	code := "import sys; from kiralrc import audio as au; au.write_wav(sys.argv[2], au.decode_stereo(sys.argv[1], 44100), 44100)"
 	cmd := newHiddenCmd(py, "-X", "utf8", "-c", code, path, tmpPath)
+	cmd.Dir = appRootDir()
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 	if err := cmd.Run(); err == nil {
 		if st, err2 := os.Stat(tmpPath); err2 == nil && st.Size() > 1024 {
