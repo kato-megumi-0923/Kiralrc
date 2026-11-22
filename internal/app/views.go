@@ -2842,35 +2842,44 @@ func (a *app) viewTools(c *ui.Context) {
 				{"解密加密音频", "把网易云 NCM 解成普通音频，保留歌名、歌手、封面与 ID；QQ 的加密格式暂不支持。", "decrypt", 20, iconUnlock, []string{"info"}},
 			}
 
-			// 用网格排，格子天然等宽等高；最后一行只剩一张卡也不会被撑大
-			ui.Grid(c.Key("tools-grid")).Columns(3).Gap(14).Children(func() {
-				for _, item := range tools {
-					tl := item
-					card := ui.Column(c.Key("tool-"+tl.cmd)).FillWidth().Padding(18, 20, 18, 20).Gap(10).Radius(16)
-					cBg := p.surface
-					if card.Hovered() {
-						cBg = p.surface2
-					}
-					card.Background(card.AnimateColor("bg", cBg, ui.Animation{Duration: 150 * time.Millisecond}))
-					lift := ui.Pose{}
-					if card.Hovered() {
-						lift = ui.Pose{Y: -4, Scale: 1.01}
-					}
-					card.AnimatePose(lift, ui.Snappy)
-					card.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 16, 1) })
-					card.Children(func() {
-						artCover(c, tl.hue, 42, 12, tl.ic)
-						ui.Text(c, tl.t).FontSize(15).FontWeight(700)
-						ui.Text(c, tl.d).FontSize(12.5).TextColor(p.muted).Grow(1)
-						ui.Row(c).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, tl.cmd).FontSize(11.5).TextColor(p.faint).Grow(1)
-							if pillButton(c.Key("run-"+tl.cmd), nil, "执行", p.surface2, p.text).Clicked() {
-								a.runToolInteractive(tl.cmd)
-							}
+			// 三列等分：行先撑满，卡片用 Grow/Basis(0) 平分，文字允许收缩换行
+			for rowIdx := 0; rowIdx < len(tools); rowIdx += 3 {
+				rStart := rowIdx
+				ui.Row(c.Key(fmt.Sprintf("trow-%d", rStart))).FillWidth().Gap(14).AlignItems(ui.Stretch).Children(func() {
+					for i := rStart; i < rStart+3; i++ {
+						if i >= len(tools) {
+							// 空位与卡片同样的伸缩配置，宽度才分得一样
+							ui.Column(c).Grow(1).Basis(0).MinWidth(0)
+							continue
+						}
+						tl := tools[i]
+						card := ui.Column(c.Key("tool-"+tl.cmd)).Grow(1).Basis(0).MinWidth(0).
+							Padding(18, 20, 18, 20).Gap(10).Radius(16)
+						cBg := p.surface
+						if card.Hovered() {
+							cBg = p.surface2
+						}
+						card.Background(card.AnimateColor("bg", cBg, ui.Animation{Duration: 150 * time.Millisecond}))
+						lift := ui.Pose{}
+						if card.Hovered() {
+							lift = ui.Pose{Y: -4, Scale: 1.01}
+						}
+						card.AnimatePose(lift, ui.Snappy)
+						card.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 16, 1) })
+						card.Children(func() {
+							artCover(c, tl.hue, 42, 12, tl.ic)
+							ui.Text(c, tl.t).FontSize(15).FontWeight(700).MinWidth(0)
+							ui.Text(c, tl.d).FontSize(12.5).TextColor(p.muted).Grow(1).MinWidth(0)
+							ui.Row(c).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, tl.cmd).FontSize(11.5).TextColor(p.faint).Grow(1).MinWidth(0)
+								if pillButton(c.Key("run-"+tl.cmd), nil, "执行", p.surface2, p.text).Clicked() {
+									a.runToolInteractive(tl.cmd)
+								}
+							})
 						})
-					})
-				}
-			})
+					}
+				})
+			}
 
 			ui.Text(c, "工具运行输出").FontSize(16).FontWeight(800).Margin(6, 0, 0, 0)
 			outBox := ui.Column(c.Key("tool-output")).FillWidth().Padding(18, 20, 18, 20).Gap(8).Radius(16).Background(p.surface)
