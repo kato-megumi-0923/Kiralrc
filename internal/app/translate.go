@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -258,7 +259,9 @@ func requestAITranslations(client *http.Client, baseURL, model, apiKey, title, a
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	if key := strings.TrimSpace(apiKey); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
@@ -288,9 +291,19 @@ func requestAITranslations(client *http.Client, baseURL, model, apiKey, title, a
 }
 
 func (a *app) aiTranslateConfigured() bool {
-	return strings.TrimSpace(a.setAIBaseURL) != "" &&
-		strings.TrimSpace(a.setAIModel) != "" &&
-		strings.TrimSpace(a.setAIAPIKey) != ""
+	baseURL := strings.TrimSpace(a.setAIBaseURL)
+	if baseURL == "" || strings.TrimSpace(a.setAIModel) == "" {
+		return false
+	}
+	if strings.TrimSpace(a.setAIAPIKey) != "" {
+		return true
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "127.0.0.1" || host == "localhost"
 }
 
 func (a *app) editorNeedsTranslation() bool {

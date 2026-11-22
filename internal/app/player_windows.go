@@ -49,7 +49,7 @@ func ensurePlayableAudio(path string) string {
 
 	sum := md5.Sum([]byte(path))
 	key := hex.EncodeToString(sum[:])[:12]
-	cacheDir := filepath.Join("work", "play_cache")
+	cacheDir := filepath.Join(appRootDir(), "work", "play_cache")
 	_ = os.MkdirAll(cacheDir, 0o755)
 	wavPath := filepath.Join(cacheDir, key+".wav")
 	if st, err := os.Stat(wavPath); err == nil && st.Size() > 1024 {

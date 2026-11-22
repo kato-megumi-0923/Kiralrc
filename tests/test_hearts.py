@@ -26,6 +26,22 @@ def test_idempotent(tmp_path):
     assert hearts.wrap(p) == 0        # 已经是 ❤️ 包着的，不再加
 
 
+def test_wrap_plain_translation_after_enhanced_line(tmp_path):
+    path = tmp_path / "ai.lrc"
+    original = (
+        "\ufeff[00:01.00]<00:01.00>あ<00:01.40>い<00:02.00>\r\n"
+        "  [00:01.050] 爱意  \n"
+        "[00:01.050]第二条整行歌词\r\n"
+        "[00:02.00]<00:02.00>こ<00:02.40>い<00:03.00>\n"
+        "[00:02.060]不同时的歌词"
+    )
+    path.write_bytes(original.encode("utf-8"))
+
+    assert hearts.wrap(path) == 1
+    assert path.read_bytes() == original.replace(" 爱意  ", " ❤️爱意❤️  ").encode("utf-8")
+    assert hearts.wrap(path) == 0
+
+
 def test_skip_credits(tmp_path):
     p = tmp_path / "a.lrc"
     p.write_bytes("[00:00.000]<00:00.000>QQ音乐享有本翻译作品的著作权<00:01.000>\r\n".encode())
