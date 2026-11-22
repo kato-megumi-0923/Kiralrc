@@ -57,6 +57,7 @@ type libStats struct {
 	Total      int
 	Vocal      int
 	Enhanced   int
+	Official   int // 其中来自平台（网易云 / QQ / AMLL / 酷狗）的逐字
 	LineOnly   int
 	Missing    int // 无歌词总数（本地缺词 + 全网无词）
 	NotFound   int // 其中：多源均未搜到的「全网无词」数量
@@ -166,12 +167,13 @@ type app struct {
 
 	// 1. 曲库（默认未添加文件夹，用户点击添加后再扫描）
 	libFolders        []string
+	downloading       bool // 正在批量下载歌词
 	libScanning       bool
 	libScanDone       int
 	libScanAll        int
 	libScanTime       string
 	libStats          libStats
-	libFilter         int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏
+	libFilter         int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏 5:官方逐字
 	libQuery          string
 	tracks            []trackItem
 	libScroll         ui.ScrollState
@@ -883,6 +885,9 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		lang := guessLang(norm, stem)
 		if enhCount > 0 {
 			st.Enhanced++
+			if lrcByOfficial(norm) {
+				st.Official++
+			}
 			items = append(items, trackItem{
 				Selected: false,
 				Title:    title,
@@ -891,7 +896,7 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 				FullPath: f.full,
 				LrcPath:  lrcPath,
 				Duration: "—",
-				Status:   "enhanced",
+				Status:   libWordStatus(norm),
 				Lang:     lang,
 				Note:     fmt.Sprintf("逐字已就绪 · %d 行", lineCount),
 				Lines:    lineCount,
@@ -984,6 +989,85 @@ func (a *app) pythonSubprocessEnv(extra ...string) []string {
 		)
 	}
 	return env
+}
+
+// pythonCmd builds `python -m kiralrc <args>` with the interpreter this app found.
+func (a *app) pythonCmd(args ...string) *exec.Cmd {
+	py := "python"
+	wb := `C://Users//yxljs//AppData//Local//Programs//WorkBuddy//resources//vendor//python//python.exe`
+	if _, err := os.Stat(wb); err == nil {
+		py = wb
+	}
+	cmd := newHiddenCmd(py, append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)...)
+	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+	return cmd
+}
+
+// startDownloadLyrics 给曲库里的每个文件夹下载歌词：只下载，不跑模型。
+func (a *app) startDownloadLyrics() {
+	if a.downloading {
+		return
+	}
+	folders := append([]string{}, a.libFolders...)
+	if len(folders) == 0 && a.alignBatchDir != "" {
+		folders = append(folders, a.alignBatchDir)
+	}
+	if len(folders) == 0 {
+		a.toolLog = "还没有添加音乐文件夹"
+		return
+	}
+	a.downloading = true
+	a.toolLog = "正在下载歌词…"
+	go func() {
+		var lines []string
+		for _, dir := range folders {
+			cmd := a.pythonCmd("download", dir, "--jobs", "2")
+			out, err := cmd.CombinedOutput()
+			lines = append(lines, strings.TrimSpace(string(out)))
+			if err != nil && len(out) == 0 {
+				lines = append(lines, err.Error())
+			}
+			a.post(func() {
+				a.toolLog = strings.Join(lines, "\n")
+			})
+		}
+		a.post(func() {
+			a.downloading = false
+			a.scanLibraryAsync()
+		})
+	}()
+}
+
+// downloadLyricsOf 给勾选的这些歌下载歌词：只下载，不跑模型。
+func (a *app) downloadLyricsOf(tracks []trackItem) {
+	if a.downloading || len(tracks) == 0 {
+		return
+	}
+	list, err := os.CreateTemp("", "kiralrc-paths-*.txt")
+	if err != nil {
+		a.toolLog = err.Error()
+		return
+	}
+	for _, tr := range tracks {
+		fmt.Fprintln(list, tr.FullPath)
+	}
+	list.Close()
+	a.downloading = true
+	a.toolLog = fmt.Sprintf("正在为 %d 首歌下载歌词…", len(tracks))
+	go func() {
+		defer os.Remove(list.Name())
+		cmd := a.pythonCmd("download", "--paths-file", list.Name(), "--jobs", "2")
+		out, err := cmd.CombinedOutput()
+		msg := strings.TrimSpace(string(out))
+		if err != nil && msg == "" {
+			msg = err.Error()
+		}
+		a.post(func() {
+			a.downloading = false
+			a.toolLog = msg
+			a.scanLibraryAsync()
+		})
+	}()
 }
 
 // runKiralrcCLI invokes `python -m kiralrc <args>` asynchronously and updates the UI.
@@ -1346,6 +1430,32 @@ func (a *app) setLibFilter(f int) {
 	}
 }
 
+// libWordStatus 分「官方逐字」与「对齐逐字」：前者是平台给的，后者是我们算的。
+func libWordStatus(body string) string {
+	if lrcByOfficial(body) {
+		return "official"
+	}
+	return "enhanced"
+}
+
+// lrcByOfficial 看 [by:] 是不是平台的名字。
+func lrcByOfficial(body string) bool {
+	i := strings.Index(body, "[by:")
+	if i < 0 {
+		return false
+	}
+	rest := body[i+len("[by:"):]
+	if j := strings.Index(rest, "]"); j >= 0 {
+		rest = rest[:j]
+	}
+	for _, tag := range []string{"NeteaseCloud", "QQMusic", "AMLL", "Kugou"} {
+		if strings.EqualFold(strings.TrimSpace(rest), tag) {
+			return true
+		}
+	}
+	return false
+}
+
 func isNoLyricsStatus(status string) bool {
 	return status == "missing" || status == "nolyrics_notfound"
 }
@@ -1366,6 +1476,8 @@ func (a *app) trackMatchesFilter(tr *trackItem) bool {
 		return tr.Status == "line_only"
 	case 2:
 		return tr.Status == "enhanced"
+	case 5:
+		return tr.Status == "official"
 	case 3:
 		return isNoLyricsStatus(tr.Status)
 	case 4:

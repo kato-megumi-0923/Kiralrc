@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -56,8 +57,14 @@ class RateLimited(RuntimeError):
 
 def _get(url: str, timeout: int = 20) -> bytes:
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        # 405/429 是"问得太勤"，跟"没有这首歌"是两回事
+        if e.code in (405, 429, 418):
+            raise RateLimited(f"HTTP {e.code}") from e
+        raise
 
 
 def _json(url: str, timeout: int = 20):
@@ -223,16 +230,299 @@ def to_lrc(lyric: WordLyric, ti: str = "", ar: str = "", al: str = ""):
     return out
 
 
+def _post(url: str, payload: dict, timeout: int = 20) -> dict:
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={**HEADERS, "Content-Type": "application/json",
+                 "Referer": "https://y.qq.com/"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _pick(cands: list[dict], name: str, artist: str = "",
+          duration: float | None = None, tol: float = 3.0) -> dict | None:
+    """同名（允许一字之差）、时长在容差内，优先歌手对得上的那一条。"""
+    from . import text as tx
+
+    want = tx._fold(name)
+    survivors = []
+    for c in cands:
+        title = tx._fold(str(c.get("name") or ""))
+        if title != want and not tx.one_rune_apart(want, title):
+            continue
+        if duration and c.get("duration"):
+            if abs(float(c["duration"]) - float(duration)) > tol:
+                continue
+        survivors.append(c)
+    for c in survivors:
+        if artist and tx._artists_alike(str(c.get("artist") or ""), artist) >= 0.6:
+            return c
+    return survivors[0] if survivors else None
+
+
+QQ_SEARCH = ("https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+             "?w={keyword}&format=json&n=20&p=1&t=0")
+QQ_LYRIC = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+QQ_KEY = b"!@#)(*$%123ZXC!@!@#)(NHL"
+
+QRC_CONTENT = re.compile(r'<Lyric_1 LyricType="1" LyricContent="(.*?)"/>', re.S)
+QRC_LINE = re.compile(r"^\[(\d+),(\d+)\](.*)$")
+QRC_WORD = re.compile(r"\((\d+),(\d+)\)")
+
+
+def parse_qrc(text: str) -> list[WordLine]:
+    """QQ 的 QRC：`[行起点,时长]字(起点,时长)…`，时间都是毫秒。"""
+    import html
+
+    m = QRC_CONTENT.search(text)
+    if not m:
+        return []
+    out: list[WordLine] = []
+    for raw in html.unescape(m.group(1)).split("\n"):
+        g = QRC_LINE.match(raw.rstrip("\r"))
+        if not g:
+            continue
+        body = g.group(3)
+        chars: list[tuple[str, float]] = []
+        prev = 0
+        for w in QRC_WORD.finditer(body):
+            piece = body[prev:w.start()]
+            at = int(w.group(1)) / 1000
+            if piece:
+                chars.append((piece, at))
+            prev = w.end()
+        if not chars:
+            continue
+        line_text = "".join(c for c, _ in chars).strip()
+        if not line_text:
+            continue
+        out.append(WordLine(start=int(g.group(1)) / 1000, text=line_text, chars=chars,
+                            end=(int(g.group(1)) + int(g.group(2))) / 1000))
+    out.sort(key=lambda l: l.start)
+    return out
+
+
 def from_qq(name: str, artist: str = "", duration: float | None = None) -> WordLyric | None:
-    """QQ 音乐 QRC（待实现）。"""
-    return None
+    """QQ 音乐：搜歌取 mid，再要 QRC（逐字，密文）与译文（明文 base64）。"""
+    from . import qqcipher
+
+    keyword = f"{artist} {name}".strip() if artist else name
+    data = _json(QQ_SEARCH.format(keyword=urllib.parse.quote(keyword)))
+    songs = (((data.get("data") or {}).get("song") or {}).get("list")) or []
+    cands = [{
+        "id": s.get("songmid") or "",
+        "name": s.get("songname") or "",
+        "artist": ",".join(a.get("name", "") for a in (s.get("singer") or [])),
+        "duration": int(s.get("interval") or 0),
+    } for s in songs if s.get("songmid")]
+    hit = _pick(cands, name, artist, duration)
+    if not hit:
+        return None
+
+    payload = {
+        "comm": {"uin": "0", "format": "json", "ct": 11, "cv": "1003006"},
+        "req_1": {"module": "music.musichallSong.PlayLyricInfo",
+                  "method": "GetPlayLyricInfo",
+                  "param": {"songMID": hit["id"], "songID": 0, "qrc": 1,
+                            "lrcType": 1, "trans": 1}},
+    }
+    res = _post(QQ_LYRIC, payload)
+    body = ((res.get("req_1") or {}).get("data")) or {}
+    encrypted = str(body.get("lyric") or "")
+    if not encrypted or encrypted == "0":
+        return None
+    try:
+        import zlib
+        plain = zlib.decompress(qqcipher.triple_decrypt(bytes.fromhex(encrypted), QQ_KEY))
+        qrc_text = plain.decode("utf-8-sig")
+    except Exception:
+        return None
+    lines = parse_qrc(qrc_text)
+    if not lines:
+        return None
+    trans = body.get("trans") or ""
+    if trans:
+        import base64
+        try:
+            attach_translation(lines, base64.b64decode(trans).decode("utf-8-sig"))
+        except Exception:
+            pass
+    return WordLyric(source="QQ音乐", tag=TAGS["qq"], lines=lines, timed=True)
+
+
+AMLL_BASES = (
+    "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/ncm-lyrics/",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/ncm-lyrics/",
+    "https://ghfast.top/https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/ncm-lyrics/",
+)
+
+
+def _ttml_time(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        parts = value.strip().split(":")
+        sec = 0.0
+        for p in parts:
+            sec = sec * 60 + float(p)
+        return sec
+    except Exception:
+        return None
+
+
+def parse_ttml(text: str) -> list[WordLine]:
+    """AMLL 的 TTML：<p> 一行，带 begin/end 的 <span> 是一个词。"""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(text)
+    except Exception:
+        return []
+    out: list[WordLine] = []
+    for p in root.iter():
+        if p.tag.split("}")[-1] != "p":
+            continue
+        start = _ttml_time(p.get("begin")) or 0.0
+        end = _ttml_time(p.get("end")) or 0.0
+        chars: list[tuple[str, float]] = []
+        translation = ""
+        for span in p.iter():
+            if span is p or span.tag.split("}")[-1] != "span":
+                continue
+            role = span.get("role") or ""
+            words = "".join(span.itertext())
+            if role == "x-translation":
+                translation = (translation + words).strip()
+                continue
+            if role in ("x-roman", "x-bg"):
+                continue
+            at = _ttml_time(span.get("begin"))
+            if at is None:
+                continue
+            piece = words
+            if piece.strip():
+                chars.append((piece, at))
+        if not chars:
+            continue
+        line_text = "".join(c for c, _ in chars).strip()
+        if not line_text:
+            continue
+        out.append(WordLine(start=start, text=line_text, chars=chars, end=end or start,
+                            translation=translation))
+    out.sort(key=lambda l: l.start)
+    return out
 
 
 def from_amll(song_id: int) -> WordLyric | None:
-    """AMLL TTML（待实现）。"""
+    """AMLL TTML 库按网易云 ID 存，一次一个镜像地试。"""
+    for base in AMLL_BASES:
+        try:
+            raw = _get(f"{base}{song_id}.ttml", timeout=15)
+        except Exception:
+            continue
+        if not raw:
+            continue
+        lines = parse_ttml(raw.decode("utf-8", "replace"))
+        if lines:
+            return WordLyric(source="AMLL", tag=TAGS["amll"], lines=lines, timed=True)
     return None
+
+
+KRC_KEY = bytes([64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105])
+KRC_LINE = re.compile(r"^\[(\d+),(\d+)\](.*)$")
+KRC_WORD = re.compile(r"<(\d+),(\d+),\d+>([^<]*)")
+KRC_LANG = re.compile(r"^\[language:([^\]]*)\]")
+
+
+def decode_krc(content: str) -> str:
+    """酷狗的 KRC：base64 → "krc1" → 按固定表异或 → zlib。"""
+    import base64
+    import zlib
+
+    raw = base64.b64decode(content.strip())
+    if len(raw) < 5 or raw[:4] != b"krc1":
+        raise ValueError("not a KRC")
+    data = bytearray(raw[4:])
+    for i in range(len(data)):
+        data[i] ^= KRC_KEY[i % len(KRC_KEY)]
+    return zlib.decompress(bytes(data)).decode("utf-8-sig")
+
+
+def _krc_translations(b64: str) -> list[str]:
+    import base64
+
+    try:
+        payload = json.loads(base64.b64decode(b64).decode("utf-8"))
+    except Exception:
+        return []
+    out = []
+    for item in payload.get("content") or []:
+        if item.get("type") == 1:
+            out.append(str(item.get("lyricContent") or "").strip())
+    return out
+
+
+def parse_krc(text: str) -> list[WordLine]:
+    out: list[WordLine] = []
+    trans: list[str] = []
+    for raw in text.splitlines():
+        raw = raw.strip()
+        m = KRC_LANG.match(raw)
+        if m:
+            trans = _krc_translations(m.group(1))
+            continue
+        g = KRC_LINE.match(raw)
+        if not g:
+            continue
+        start = int(g.group(1)) / 1000
+        length = int(g.group(2)) / 1000
+        chars: list[tuple[str, float]] = []
+        for w in KRC_WORD.finditer(g.group(3)):
+            off, dur, piece = int(w.group(1)) / 1000, int(w.group(2)) / 1000, w.group(3)
+            if piece:
+                chars.append((piece, start + off))
+        if not chars:
+            continue
+        line_text = "".join(c for c, _ in chars).strip()
+        if not line_text:
+            continue
+        out.append(WordLine(start=start, text=line_text, chars=chars, end=start + length))
+    for i, line in enumerate(out):
+        if i < len(trans) and trans[i]:
+            line.translation = trans[i]
+    return out
 
 
 def from_kugou(name: str, artist: str = "", duration: float | None = None) -> WordLyric | None:
-    """酷狗 KRC（待实现）。"""
-    return None
+    """酷狗：搜歌取 hash，再要 KRC 逐字（歌词链路要它，译文不用）。"""
+    keyword = f"{artist} - {name}" if artist else name
+    q = urllib.parse.urlencode({
+        "ver": "1", "man": "yes", "client": "pc", "keyword": keyword,
+        "duration": int((duration or 0) * 1000), "hash": "",
+    })
+    data = _json(f"http://lyrics.kugou.com/search?{q}", timeout=15)
+    cands = [{
+        "id": c.get("id") or "",
+        "accesskey": c.get("accesskey") or "",
+        "name": c.get("song") or "",
+        "artist": c.get("singer") or "",
+        "duration": (int(c.get("duration") or 0)) / 1000,
+    } for c in (data.get("candidates") or [])]
+    hit = _pick(cands, name, artist, duration)
+    if not hit or not hit["accesskey"]:
+        return None
+    q = urllib.parse.urlencode({
+        "ver": "1", "client": "pc", "id": hit["id"],
+        "accesskey": hit["accesskey"], "fmt": "krc", "charset": "utf8",
+    })
+    data = _json(f"http://lyrics.kugou.com/download?{q}", timeout=15)
+    content = data.get("content") or ""
+    if not content:
+        return None
+    try:
+        lines = parse_krc(decode_krc(content))
+    except Exception:
+        return None
+    if not lines:
+        return None
+    return WordLyric(source="酷狗", tag=TAGS["kugou"], lines=lines, timed=True)

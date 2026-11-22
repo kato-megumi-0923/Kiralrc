@@ -176,6 +176,13 @@ def _fold(text: str) -> str:
     return text.lower()
 
 
+def one_rune_apart(a: str, b: str) -> bool:
+    """两个歌名的折叠形态只差一个字（渾/混 这类跨海峡写法）。"""
+    if not a or not b or len(a) != len(b) or len(a) < 2:
+        return False
+    return sum(x != y for x, y in zip(a, b)) == 1
+
+
 def _titles_alike(a: str, b: str) -> float:
     """两个歌名的相似度（0~1），差一个字也算像。"""
     import difflib
@@ -184,7 +191,7 @@ def _titles_alike(a: str, b: str) -> float:
         return 0.0
     if fa == fb:
         return 1.0
-    if len(fa) == len(fb) and sum(x != y for x, y in zip(fa, fb)) == 1:
+    if one_rune_apart(fa, fb):
         return 0.9
     return difflib.SequenceMatcher(None, fa, fb, autojunk=False).ratio()
 

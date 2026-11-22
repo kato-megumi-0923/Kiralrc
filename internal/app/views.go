@@ -714,10 +714,15 @@ func (a *app) viewLibrary(c *ui.Context) {
 					if st.NotFound > 0 {
 						nfSub = fmt.Sprintf("（含 %d 首全网未搜到）", st.NotFound)
 					}
-					ui.Text(c, fmt.Sprintf("%d 首逐字已就绪 · %d 首仅整行时间 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
-						st.Enhanced, st.LineOnly, st.Missing, nfSub, st.InstPure, st.InstOST, st.InstAccomp)).FontSize(12.5).TextColor(white.Alpha(0.88))
+					ui.Text(c, fmt.Sprintf("%d 首逐字（占人声 %.1f%% · 官方 %d / 对齐 %d）· %d 首仅整行 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
+						st.Enhanced, vocalPct, st.Official, st.Enhanced-st.Official,
+						st.LineOnly, st.Missing, nfSub,
+						st.InstPure, st.InstOST, st.InstAccomp)).FontSize(12.5).TextColor(white.Alpha(0.88))
 					ui.Row(c).Gap(8).Margin(12, 0, 0, 0).Children(func() {
-						if pillButton(c.Key("hero-batch"), iconPlay, fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly), white, ui.Hex("#1d1d1f")).Clicked() {
+						if pillButton(c.Key("hero-download"), iconDownload, "下载歌词", white, ui.Hex("#1d1d1f")).Clicked() {
+							a.startDownloadLyrics()
+						}
+						if pillButton(c.Key("hero-batch"), iconPlay, fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly), ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
 							a.enqueueLineOnlyTracks()
 						}
 						if pillButton(c.Key("hero-folder"), iconFolder, "添加文件夹", ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
@@ -774,7 +779,8 @@ func (a *app) viewLibrary(c *ui.Context) {
 					bg, fg           ui.Color
 					filter           int
 				}{
-					{"ready", fmt.Sprintf("%d", st.Enhanced), "", fmt.Sprintf("逐字就绪 · 占人声 %.1f%%", vocalPct), iconCheck, p.okBg, p.ok, 2},
+					{"official", fmt.Sprintf("%d", st.Official), "", "官方逐字 · 平台下载", iconCheck, p.okBg, p.ok, 5},
+					{"ready", fmt.Sprintf("%d", st.Enhanced-st.Official), "", "对齐逐字 · 本机算出", iconCheck, p.okBg, p.ok, 2},
 					{"upgrade", fmt.Sprintf("%d", st.LineOnly), "", "仅整行 LRC · 可直接升级逐字", iconNote, p.accent.Alpha(0.12), p.accent, 1},
 					{"nolyrics", fmt.Sprintf("%d", st.Missing), nfBadge, "无歌词 · 支持 ID / 手填 / ASR", iconWarn, p.warnBg, p.warn, 3},
 					{"inst", fmt.Sprintf("%d", st.InstTotal), "", fmt.Sprintf("已排除：纯音乐 %d · OST %d · 伴奏 %d", st.InstPure, st.InstOST, st.InstAccomp), iconWave, p.surface2, p.muted, 4},
@@ -919,6 +925,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 						a.enqueueNoLyricsAsr(selTracks)
 					}
 				} else if selCount > 0 {
+					if pillButton(c.Key("lib-download-lyrics"), iconDownload, fmt.Sprintf("下载歌词（%d 首）", selCount), p.surface2, p.text).Clicked() {
+						a.downloadLyricsOf(selTracks)
+					}
 					if pillButton(c.Key("lib-start-align"), iconPlay, fmt.Sprintf("开始对齐歌词（%d 首）", selCount), p.accent, p.onAccent).Clicked() {
 						a.enqueueFromLibrary()
 						a.navigate(pageQueue, 1)
@@ -1074,8 +1083,10 @@ func (a *app) viewLibrary(c *ui.Context) {
 							ui.Text(c, tr.Artist).Width(110).Shrink(0).FontSize(13).TextColor(p.text).SingleLine()
 							ui.Box(c).Width(96).Shrink(0).AlignItems(ui.Start).Children(func() {
 								switch tr.Status {
+								case "official":
+									statusPill(c, "官方逐字", p.okBg, p.ok)
 								case "enhanced":
-									statusPill(c, "逐字", p.okBg, p.ok)
+									statusPill(c, "对齐逐字", p.okBg, p.ok)
 								case "line_only":
 									statusPill(c, "仅整行", p.accent.Alpha(0.14), p.accent)
 								case "nolyrics_notfound":

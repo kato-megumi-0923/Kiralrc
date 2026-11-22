@@ -1,0 +1,123 @@
+"""下载：QRC/TTML/KRC 解析、状态判定、写盘规则。"""
+
+import base64
+import zlib
+
+from kiralrc import download, sources
+
+
+def test_qrc_words_are_read():
+    raw = ('<?xml version="1.0" encoding="utf-8"?>\n<QrcInfos><LyricInfo>'
+           '<Lyric_1 LyricType="1" LyricContent="[ti:测]\n'
+           '[100,1540]初(100,154)め(254,154)て(408,154)\n'
+           '[2000,600]BiliBili (2000,300)AV(2300,300)\n"/></LyricInfo></QrcInfos>')
+    lines = sources.parse_qrc(raw)
+    assert [l.text for l in lines] == ["初めて", "BiliBili AV"]
+    assert lines[0].start == 0.1 and lines[0].end == 1.64
+    assert lines[0].chars[1] == ("め", 0.254)
+
+
+def test_ttml_words_and_translation():
+    raw = """<tt xmlns="http://www.w3.org/ns/ttml"><body><div>
+      <p begin="00:00:01.000" end="00:00:03.000">
+        <span begin="00:00:01.000" end="00:00:01.500">故</span>
+        <span begin="00:00:01.500" end="00:00:02.000">事</span>
+        <span role="x-translation" begin="00:00:01.000" end="00:00:03.000">故事</span>
+      </p></div></body></tt>"""
+    lines = sources.parse_ttml(raw)
+    assert len(lines) == 1
+    line = lines[0]
+    assert line.text == "故事"
+    assert line.chars == [("故", 1.0), ("事", 1.5)]
+    assert line.translation == "故事"
+
+
+def _make_krc(text: str) -> str:
+    """按酷狗的规矩造一份 KRC：krc1 + 异或 + zlib + base64。"""
+    raw = zlib.compress(text.encode("utf-8"))
+    data = bytes(b ^ sources.KRC_KEY[i % len(sources.KRC_KEY)] for i, b in enumerate(raw))
+    return base64.b64encode(b"krc1" + data).decode("ascii")
+
+
+def test_krc_decode_and_parse():
+    body = ("[ti:测试]\n"
+            "[1000,1500]<0,300,0>初<300,300,0>め<600,300,0>て\n"
+            "[3000,900]<0,450,0>の<450,450,0>恋\n")
+    text = sources.decode_krc(_make_krc(body))
+    lines = sources.parse_krc(text)
+    assert [l.text for l in lines] == ["初めて", "の恋"]
+    assert lines[0].start == 1.0 and lines[0].end == 2.5
+    assert lines[0].chars[2] == ("て", 1.6)
+
+
+def _lrc(tmp_path, name, body):
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_lrc_kind_tells_official_from_aligned(tmp_path):
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(b"")
+    assert download.lrc_kind(audio) == "missing"
+
+    _lrc(tmp_path, "a.lrc", "[00:01.00]只有一行\n[00:02.00]第二行\n")
+    assert download.lrc_kind(audio) == "line"
+
+    _lrc(tmp_path, "a.lrc", "[by:NeteaseCloud]\n[00:01.000]<00:01.000>字<00:01.500>幕<00:02.000>\n")
+    assert download.lrc_kind(audio) == "official"
+
+    _lrc(tmp_path, "a.lrc", "[by:SOFA 歌声对齐]\n[00:01.000]<00:01.000>字<00:01.500>幕<00:02.000>\n")
+    assert download.lrc_kind(audio) == "aligned"
+
+    _lrc(tmp_path, "a.lrc", "[00:01.000]<00:01.000>字<00:01.500>幕<00:02.000>\n")
+    assert download.lrc_kind(audio) == "word"
+
+
+def test_official_replaces_aligned_but_keeps_a_backup(tmp_path, monkeypatch):
+    audio = tmp_path / "b.mp3"
+    audio.write_bytes(b"")
+    old = "[by:SOFA 歌声对齐]\n[00:01.000]<00:01.000>旧<00:01.500>的<00:02.000>\n"
+    _lrc(tmp_path, "b.lrc", old)
+
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 123)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="网易云", tag="NeteaseCloud",
+        lines=[sources.WordLine(1.0, "新的", [("新", 1.0), ("的", 1.4)], 1.8)], timed=True))
+
+    result = download.download_one(audio)
+    assert result.status == "replaced"
+    body = (tmp_path / "b.lrc").read_text(encoding="utf-8")
+    assert "[by:NeteaseCloud]" in body
+    assert "<00:01.000>新<00:01.400>的" in body
+    # 旧文件退到 .bak，没有真的丢
+    assert "SOFA" in (tmp_path / "b.lrc.bak").read_text(encoding="utf-8")
+
+
+def test_an_official_file_is_left_alone(tmp_path, monkeypatch):
+    audio = tmp_path / "c.mp3"
+    audio.write_bytes(b"")
+    _lrc(tmp_path, "c.lrc", "[by:QQMusic]\n[00:01.000]<00:01.000>字<00:02.000>\n")
+    called = []
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: called.append(1))
+    assert download.download_one(audio).status == "kept"
+    assert not called
+
+
+def test_line_lyrics_never_overwrite_what_is_there(tmp_path, monkeypatch):
+    audio = tmp_path / "d.mp3"
+    audio.write_bytes(b"")
+    _lrc(tmp_path, "d.lrc", "[00:01.00]已有的一行\n")
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 123)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="网易云", tag="NeteaseCloud",
+        lines=[sources.WordLine(1.0, "平台的一行", [], 2.0)], timed=False))
+    assert download.download_one(audio).status == "kept"
+    assert "已有的一行" in (tmp_path / "d.lrc").read_text(encoding="utf-8")
+
+
+def test_instrumentals_are_skipped(tmp_path):
+    for name in ("x - 伴奏.flac", "y - Off Vocal.mp3", "z - instrumental.wav"):
+        (tmp_path / name).write_bytes(b"")
+    counts = download.run(tmp_path)
+    assert counts.all == 0

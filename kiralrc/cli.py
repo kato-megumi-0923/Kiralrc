@@ -106,6 +106,22 @@ def cmd_batch(a) -> int:
     return 1 if res["failed"] else 0
 
 
+def cmd_fetch_lyrics(a) -> int:
+    from . import download
+
+    paths = None
+    if getattr(a, "paths_file", None):
+        with open(a.paths_file, encoding="utf-8") as f:
+            paths = [line.strip() for line in f if line.strip()]
+    counts = download.run(
+        a.dir, force=a.force, jobs=a.jobs, paths=paths,
+        on_song=(None if a.quiet else (lambda i, n, r: print(
+            f"[{i}/{n}] {r.status:<9} {r.audio.name[:44]}  {r.note}", flush=True))),
+    )
+    print(download.report(counts))
+    return 0 if counts.failed == 0 else 1
+
+
 def cmd_clean(a) -> int:
     from . import pipeline
 
@@ -380,6 +396,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force-vocal", action="store_true", help="跳过无主唱检测")
     p.add_argument("--en-granularity", choices=["word", "char"], default=None)
     p.set_defaults(func=cmd_batch)
+
+    p = sub.add_parser("download", help="批量下载歌词（网易云 → QQ → AMLL → 酷狗，不跑模型）")
+    p.add_argument("dir", nargs="?", default="", help="目录，可省略（用 --paths-file 给清单时）")
+    p.add_argument("--paths-file", help="只处理清单里的文件（每行一个路径）")
+    p.add_argument("--force", action="store_true", help="已有官方逐字也重新下载")
+    p.add_argument("--jobs", type=int, default=2, help="并发数，默认 2（平台会限速）")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_fetch_lyrics)
 
     p = sub.add_parser("clean", help="清理 work/ 中间产物缓存（默认仅清 30 天前，全清需加 --all）")
     p.add_argument("--days", type=float, default=30.0, help="仅清理超过 N 天的缓存（默认 30 天）")
