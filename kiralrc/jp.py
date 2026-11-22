@@ -291,9 +291,7 @@ def _align_ja_mms_karaoke(
         else:
             seg_end_t = min(dur, t0 + max_line_dur)
         ref_end = reference_ends.get((t0, text)) if reference_ends else None
-        # A valid reference end protects the tail even if a valley inside the line is quieter.
-        if ref_end is not None and t0 < ref_end <= min(nxt, dur):
-            seg_end_t = max(seg_end_t, min(ref_end + 0.08, nxt, dur))
+        seg_end_t = au.protect_reference_end(seg_end_t, ref_end, t0, nxt, dur)
         row = align_slice(seg_start, seg_end_t, text, rom_chars, char_rom_span, tag_mask)
         if row is None:
             continue
@@ -601,6 +599,7 @@ def _align_en_mms_lyrics(
     dur: float,
     device: str = "cuda",
     en_granularity: str | None = None,
+    reference_ends: dict[tuple[float, str], float] | None = None,
 ) -> list[fmt.Line]:
     """使用 hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner（多语歌声歌词专精模型）做英文及多语种逐字/逐词对齐。"""
     import math
@@ -674,6 +673,8 @@ def _align_en_mms_lyrics(
         else:
             seg_end_t = min(dur, t0 + max_line_dur)
 
+        ref_end = reference_ends.get((t0, text)) if reference_ends else None
+        seg_end_t = au.protect_reference_end(seg_end_t, ref_end, t0, nxt, dur)
         f0 = max(0, int(seg_start / frame_dur))
         f1 = min(em_full.shape[1], int(math.ceil(seg_end_t / frame_dur)))
         em = em_full[:, f0:f1, :]
@@ -743,7 +744,8 @@ def align_lines(vocal_wav: str, lines: list[tuple[float, str]], lang: str = "ja"
         rows = _align_ja_mms_karaoke(audio, lines, dur, device=device, reference_ends=reference_ends)
         by_tag = "[by:MMS 日语歌声逐字]"
     else:
-        rows = _align_en_mms_lyrics(audio, lines, dur, device=device, en_granularity=en_granularity)
+        rows = _align_en_mms_lyrics(audio, lines, dur, device=device,
+                                   en_granularity=en_granularity, reference_ends=reference_ends)
         by_tag = "[by:MMS 英文歌声逐字]" if lang == "en" else f"[by:MMS 多语歌声逐字 ({lang})]"
 
     if rows:

@@ -132,7 +132,8 @@ def _trim_short_line_silence(env: np.ndarray, hop: float, t0: float,
 
 
 def prep_segments(vocal_wav: Path, lines: list[tuple[float, str]], out_dir: Path,
-                  total: float) -> list[dict]:
+                  total: float, *, reference_ends: dict[tuple[float, str], float] | None = None
+                  ) -> tuple[list[dict], list[tuple[str, list[str] | str]]]:
     """按行切片写 wav + 拼音 lab，返回 meta。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     # 清理上次残留切片，避免旧的空/无效 wav 混入 SOFA 推理
@@ -173,6 +174,8 @@ def prep_segments(vocal_wav: Path, lines: list[tuple[float, str]], out_dir: Path
         end = min(eff_total, next_cap, t0 + max(3.0, len(chars) * 0.85) + 1.0)
         end = _trim_short_line_silence(env, 0.02, t0, end, len(chars))
         end = min(eff_total, max(end, start + 0.8))
+        ref_end = reference_ends.get((t0, line)) if reference_ends else None
+        end = au.protect_reference_end(end, ref_end, t0, nxt, eff_total)
         seg = wav[int(start * 44100): int(end * 44100)]
         if len(seg) < int(0.05 * 44100):
             continue

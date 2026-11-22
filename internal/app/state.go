@@ -50,6 +50,7 @@ type trackItem struct {
 	Note     string
 	Lines    int
 	Hue      float32
+	Cover    *ui.Bitmap
 }
 
 type libStats struct {
@@ -94,6 +95,7 @@ type queueItem struct {
 	AsrFallback    bool   // 是否显式开启 --asr-fallback 本地人声听写兜底
 	WaveformFirst  bool   // 是否开启 --waveform-first 鬼畜 / 波形起音优先模式
 	IgnoreRefTimes bool   // 是否开启 --ignore-ref-times 强制 ASR 重定位
+	IgnoreRefEnds  bool   // 沿用参考句首，重新对齐逐字时间与句尾
 	Status         string // "waiting", "running", "done", "skipped", "skipped_nolyrics", "failed"
 	Stage       int    // 0..6 live stage for this song
 	Note        string
@@ -192,6 +194,7 @@ type app struct {
 	alignBatchDir       string
 	alignBatchTracks    []trackItem
 	alignIgnoreRefTimes bool
+	alignIgnoreRefEnds  bool
 	alignWaveformFirst  bool // 鬼畜 / 波形起音优先模式（--waveform-first）
 	alignSource         int // 0:优先本地LRC(无则搜网易云) 1:手动指定参考文件 2:强制搜网易云
 	alignSearch    string
@@ -369,15 +372,17 @@ func (a *app) loadPrefs() {
 		}
 	}
 	a.libFolders = foldLibraryFolders(a.libFolders)
+	covers := indexCovers()
 	for _, rp := range up.RecentPaths {
 		if info, err := os.Stat(rp); err == nil && !info.IsDir() {
 			base := filepath.Base(rp)
 			stem := strings.TrimSuffix(base, filepath.Ext(base))
 			a.recents = append(a.recents, recentItem{
-				Name: stem,
-				File: base,
-				Path: rp,
-				Hue:  hueForString(stem),
+				Name:  stem,
+				File:  base,
+				Path:  rp,
+				Hue:   hueForString(stem),
+				Cover: covers.thumbnail(findSiblingAudio(rp)),
 			})
 		}
 	}
@@ -944,6 +949,10 @@ func (a *app) scanLibraryAsync() {
 	a.libScanAll = 0
 	go func() {
 		items, st := a.scanLibrarySync()
+		covers := indexCovers()
+		for i := range items {
+			items[i].Cover = covers.thumbnail(items[i].FullPath)
+		}
 		nowStr := time.Now().Format("15:04")
 		a.post(func() {
 			a.tracks = items
@@ -1091,13 +1100,24 @@ func (a *app) validateCurrentLrc() {
 	if a.edPath == "" {
 		return
 	}
-	path := a.edPath
+	if a.edModified {
+		a.toast = "请先保存歌词，再校验当前版本"
+		return
+	}
+	a.checkEditorLrc(a.edPath, findSiblingAudio(a.edPath))
+}
+
+func (a *app) checkEditorLrc(path, audioPath string) {
 	py := a.pythonExe()
 	go func() {
-		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "validate", path)
+		args := []string{"-X", "utf8", "-m", "kiralrc", "validate", path}
+		if audioPath != "" {
+			args = append(args, "--audio", audioPath)
+		}
+		cmd := newHiddenCmd(py, args...)
 		cmd.Dir = appRootDir()
 		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-		out, _ := cmd.CombinedOutput()
+		out, err := cmd.CombinedOutput()
 		var issues []string
 		for _, ln := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
 			ln = strings.TrimSpace(ln)
@@ -1105,11 +1125,13 @@ func (a *app) validateCurrentLrc() {
 				issues = append(issues, strings.TrimPrefix(ln, "- "))
 			}
 		}
-		if len(issues) == 0 {
-			issues = []string{"✓ 校验通过：BOM / 时间顺序 / 行尾标签全部符合规范"}
+		if err != nil && len(issues) == 0 {
+			issues = []string{"校验未完成，请检查 Python 运行环境"}
 		}
 		a.post(func() {
-			a.edIssues = issues
+			if a.edPath == path && !a.edModified {
+				a.edIssues = issues
+			}
 		})
 	}()
 }
@@ -1472,7 +1494,7 @@ func (a *app) enqueueLineOnlyTracks() {
 		a.toast = "当前没有仅整行 LRC 歌曲"
 		return
 	}
-	a.enqueueTracks(batch)
+	a.enqueueTracks(batch, false, false)
 	a.navigate(pageQueue, 1)
 }
 
@@ -1725,7 +1747,7 @@ func langCode(label string) string {
 	}
 }
 
-func (a *app) enqueueTracks(batch []trackItem) {
+func (a *app) enqueueTracks(batch []trackItem, ignoreRefTimes, ignoreRefEnds bool) {
 	if len(batch) == 0 {
 		return
 	}
@@ -1737,6 +1759,8 @@ func (a *app) enqueueTracks(batch []trackItem) {
 				// If already finished/failed/skipped, reset in place instead of duplicating!
 				if a.queueItems[i].Status != "running" && a.queueItems[i].Status != "waiting" {
 					a.queueItems[i].Status = "waiting"
+					a.queueItems[i].IgnoreRefTimes = ignoreRefTimes
+					a.queueItems[i].IgnoreRefEnds = ignoreRefEnds
 					a.queueItems[i].Note = "等待重新对齐"
 				}
 				break
@@ -1744,15 +1768,17 @@ func (a *app) enqueueTracks(batch []trackItem) {
 		}
 		if !found {
 			a.queueItems = append(a.queueItems, queueItem{
-				Title:     tr.Title,
-				Artist:    tr.Artist,
-				Sub:       fmt.Sprintf("%s · %s · %s", tr.Artist, tr.Lang, tr.File),
-				AudioPath: tr.FullPath,
-				LrcPath:   tr.LrcPath,
-				Lang:      langCode(tr.Lang),
-				Status:    "waiting",
-				Note:      tr.Note,
-				Hue:       tr.Hue,
+				Title:          tr.Title,
+				Artist:         tr.Artist,
+				Sub:            fmt.Sprintf("%s · %s · %s", tr.Artist, tr.Lang, tr.File),
+				AudioPath:      tr.FullPath,
+				LrcPath:        tr.LrcPath,
+				Lang:           langCode(tr.Lang),
+				Status:         "waiting",
+				Note:           tr.Note,
+				Hue:            tr.Hue,
+				IgnoreRefTimes: ignoreRefTimes,
+				IgnoreRefEnds:  ignoreRefEnds,
 			})
 		}
 	}
@@ -1768,12 +1794,12 @@ func (a *app) enqueueFromLibrary() {
 			}
 		}
 	}
-	a.enqueueTracks(batch)
+	a.enqueueTracks(batch, false, false)
 }
 
 func (a *app) enqueueCurrentAlign() {
 	if a.alignBatchDir != "" && len(a.alignBatchTracks) > 0 {
-		a.enqueueTracks(a.alignBatchTracks)
+		a.enqueueTracks(a.alignBatchTracks, a.alignIgnoreRefTimes, a.alignIgnoreRefEnds)
 		return
 	}
 	if a.alignAudio == "" {
@@ -1807,6 +1833,7 @@ func (a *app) enqueueCurrentAlign() {
 				a.queueItems[i].NeteaseID = strings.TrimSpace(a.alignNeteaseID)
 				a.queueItems[i].WaveformFirst = a.alignWaveformFirst
 				a.queueItems[i].IgnoreRefTimes = a.alignIgnoreRefTimes
+				a.queueItems[i].IgnoreRefEnds = a.alignIgnoreRefEnds
 				a.queueItems[i].Note = "等待重新对齐"
 			}
 			break
@@ -1823,6 +1850,7 @@ func (a *app) enqueueCurrentAlign() {
 			NeteaseID:      strings.TrimSpace(a.alignNeteaseID),
 			WaveformFirst:  a.alignWaveformFirst,
 			IgnoreRefTimes: a.alignIgnoreRefTimes,
+			IgnoreRefEnds:  a.alignIgnoreRefEnds,
 			Status:         "waiting",
 			Note:           "优先使用本地同目录 LRC",
 			Hue:            hueForString(title),
@@ -1936,6 +1964,8 @@ func (a *app) runQueueWorker() {
 		}
 		if item.IgnoreRefTimes {
 			args = append(args, "--ignore-ref-times")
+		} else if item.IgnoreRefEnds {
+			args = append(args, "--ignore-ref-ends")
 		}
 		if a.setEnMode == 1 || a.alignEnMode == 1 {
 			args = append(args, "--en-granularity", "char")
@@ -3020,6 +3050,9 @@ func (a *app) loadLrcFile(path string) error {
 			a.edIssues = append(a.edIssues, "当前文件仅含整行时间戳，可在「新建对齐」中生成逐字卡拉 OK 标签")
 		} else if missingEndTag > 0 {
 			a.edIssues = append(a.edIssues, fmt.Sprintf("发现 %d 行缺少行尾结束标签，建议在工具箱中一键补齐", missingEndTag))
+		}
+		if sib := findSiblingAudio(path); enhLines > 0 && sib != "" {
+			a.checkEditorLrc(path, sib)
 		}
 
 		// Record in recents (最近校对)

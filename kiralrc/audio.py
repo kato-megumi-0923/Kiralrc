@@ -197,6 +197,15 @@ def find_valley_start(env: np.ndarray, hop: float, t0: float,
     return seg_start
 
 
+def protect_reference_end(end: float, reference_end: float | None, start: float,
+                          next_start: float, total: float) -> float:
+    """Keep an explicit lyric tail in the slice, with room for the last phoneme."""
+    cap = min(next_start, total)
+    if reference_end is None or not start < reference_end <= cap:
+        return end
+    return max(end, min(reference_end + 0.08, cap))
+
+
 def find_valley_end(env: np.ndarray, hop: float, t0: float, nxt: float,
                     eff_total: float, min_line_dur: float = 0.8) -> float:
     """按人声轨 RMS 波形定位本句右边界：在交界处寻找换气静音谷，

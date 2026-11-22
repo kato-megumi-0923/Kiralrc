@@ -30,6 +30,7 @@ def cmd_align(a) -> int:
             ti=a.ti, ar=a.ar, al=a.al,
             force_vocal=getattr(a, "force_vocal", False),
             ignore_ref_times=getattr(a, "ignore_ref_times", False),
+            ignore_ref_ends=getattr(a, "ignore_ref_ends", False),
             en_granularity=getattr(a, "en_granularity", None),
             netease_id=tx.parse_song_id(getattr(a, "netease_id", None)),
             asr_fallback=getattr(a, "asr_fallback", False),
@@ -146,10 +147,16 @@ def cmd_scan(a) -> int:
 
 
 def cmd_validate(a) -> int:
+    from . import wavecheck
+
+    audio = getattr(a, "audio", None)
+    vocals = pipeline._cache_dir(Path(audio), create=False) / "vocals.wav" if audio else None
     bad = 0
     for f in a.files:
         probs = fmt.validate_enhanced(f, max_jump=a.max_jump)
         lrc = fmt.parse(f)
+        if vocals is not None and vocals.is_file():
+            probs.extend(wavecheck.check(lrc, vocals))
         print(f"=== {f}\n  逐字行 {sum(1 for l in lrc.lines if l.enhanced)} / {len(lrc.lines)}")
         if probs:
             bad += 1
@@ -354,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force-vocal", action="store_true", help="跳过主唱检测，强制生成")
     p.add_argument("--ignore-ref-times", action="store_true",
                    help="忽略参考 LRC 自带时间戳，强制用 ASR 重新定位每句起止时间")
+    p.add_argument("--ignore-ref-ends", action="store_true",
+                   help="沿用参考 LRC 的逐句起点，重新对齐逐字时间和句尾")
     p.add_argument("--en-granularity", choices=["word", "char"], default=None,
                    help="英文/数字逐字粒度：word（按词）或 char（按字母均分）")
     p.add_argument("--waveform-first", action="store_true",
@@ -386,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("validate", help="校验逐字 LRC")
     p.add_argument("files", nargs="+")
     p.add_argument("--max-jump", type=float, default=3.0)
+    p.add_argument("--audio", help="使用此音频已分离的人声轨，补充对齐校验")
     p.set_defaults(func=cmd_validate)
 
     p = sub.add_parser("hearts", help="双语歌词给翻译行加 ❤️")

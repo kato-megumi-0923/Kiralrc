@@ -62,10 +62,11 @@ class NoLyricsError(RuntimeError):
     """多源搜索与本地均未找到歌词且未开启 --asr-fallback。"""
 
 
-def _cache_dir(audio_path: Path) -> Path:
+def _cache_dir(audio_path: Path, *, create: bool = True) -> Path:
     key = hashlib.md5(str(audio_path.resolve()).encode()).hexdigest()[:10]
     d = config.work_dir() / f"{audio_path.stem[:40]}_{key}"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -164,11 +165,14 @@ def line_times(ref_path: Path | None, lines: list[str], audio_path: Path,
 
 def line_times_detail(ref_path: Path | None, lines: list[str], audio_path: Path,
                       cache: Path, lang: str,
-                      ignore_ref_times: bool = False) -> tuple[list[tuple[float, str]], list[dict]]:
+                      ignore_ref_times: bool = False, *,
+                      ignore_ref_ends: bool = False) -> tuple[list[tuple[float, str]], list[dict]]:
     """返回 (每句起始时间, 被剔除的剪辑版缺失行)。"""
     if ref_path and not ignore_ref_times:
         stamped = tx.lines_with_times(Path(ref_path).read_text(encoding="utf-8-sig"))
-        if len(stamped) >= max(6, len(lines) - 2) and not _is_coarse_timestamps(stamped):
+        if stamped and (ignore_ref_ends or (
+            len(stamped) >= max(6, len(lines) - 2) and not _is_coarse_timestamps(stamped)
+        )):
             return stamped, []
 
     from . import asr
@@ -684,10 +688,23 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
              en_granularity: str | None = None,
              restore_long_vowel: bool | None = None,
              waveform_first: bool = False,
-             on_progress: Callable[[int, int, str, str], None] | None = None) -> tuple[fmt.Lrc, str]:
+             on_progress: Callable[[int, int, str, str], None] | None = None,
+             *, ignore_ref_ends: bool = False) -> tuple[fmt.Lrc, str]:
     def emit(step: int, stage: str, detail: str = "") -> None:
         if on_progress is not None:
             on_progress(step, 6, stage, detail)
+
+    def report_waveform(lrc: fmt.Lrc, vocal_path: Path) -> str:
+        from . import wavecheck
+
+        try:
+            issues = wavecheck.check(lrc, vocal_path)
+        except (OSError, ValueError) as exc:
+            emit(6, "人声波形校验失败", str(exc))
+            return " | 人声波形校验失败"
+        for issue in issues:
+            emit(6, "人声波形提示", issue)
+        return f" | 人声波形发现 {len(issues)} 行需复核" if issues else ""
 
     audio_path = Path(audio_path)
     cache = _cache_dir(audio_path)
@@ -706,7 +723,7 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
 
     # 若用户显式传入的是「原唱逐字 LRC」（含 <mm:ss.xxx>），且未强制忽略参考时间戳，
     # 直接走「原唱逐字模板节奏迁移」（适用 Live 版 / 翻唱版，秒级精准对齐全语种）
-    if explicit_ref and not ignore_ref_times and _is_enhanced_ref(explicit_ref):
+    if explicit_ref and not (ignore_ref_times or ignore_ref_ends) and _is_enhanced_ref(explicit_ref):
         trans_map = _extract_trans_map(explicit_ref)
         sibling = audio_path.with_suffix(".lrc")
         sibling_bak = sibling.with_name(sibling.name + ".bak")
@@ -737,6 +754,7 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
                 trans_map = _merge_trans_maps(trans_map, fetched)
                 note += " | 自动补全中文译文"
         emit(6, "输出并校验", f"{len(lrc.lines)} 行")
+        note += report_waveform(lrc, vocals)
         tr_cnt = _attach_translations(lrc, trans_map)
         if tr_cnt:
             note += f" | 保留译文 {tr_cnt} 行"
@@ -808,11 +826,11 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
                 note += " | 自动补全中文译文"
 
         emit(2, "确定每句位置", f"{len(lines)} 行" + (" · 强制 ASR 重定位" if ignore_ref_times else ""))
-        if ref_path and not ignore_ref_times:
+        if ref_path and not (ignore_ref_times or ignore_ref_ends):
             _stamped = tx.lines_with_times(Path(ref_path).read_text(encoding="utf-8-sig"))
             used_ref_times = len(_stamped) >= max(6, len(lines) - 2) and not _is_coarse_timestamps(_stamped)
         rough, skipped = line_times_detail(ref_path, lines, audio_path, cache, lang,
-                                           ignore_ref_times=ignore_ref_times)
+                                           ignore_ref_times=ignore_ref_times, ignore_ref_ends=ignore_ref_ends)
         if not rough:
             raise RuntimeError("无法确定每句的起始时间")
         rough = [(t, l) for t, l in rough if not tx.CREDIT_RE.match(l)]
@@ -828,19 +846,34 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
             if not act["has_vocal"]:
                 raise NoVocalError(f"无主唱 ({act['reason']})")
 
+    reference_ends = None
+    suspect_starts = set()
+    if used_ref_times and ref_path:
+        reference_rows = fmt.parse(str(ref_path)).lines
+        reference_ends = {
+            (line.start, line.text.strip()): line.end
+            for line in reference_rows
+            if line.enhanced and line.end is not None and line.chars
+            and line.end > max(start for _, start in line.chars)
+        }
+        for line in reference_rows:
+            sung = [time for ch, time in line.chars if ch.isalnum()]
+            if len(sung) >= 3 and sung[1] - sung[0] >= 3.0:
+                suspect_starts.add((line.start, line.text.strip()))
+
     if lang == "zh":
         from . import sofa
 
         emit(5, "SOFA 逐句对齐", f"{len(rough)} 句")
         seg_dir = cache / "segments"
-        meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total)
+        meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total, reference_ends=reference_ends)
         if missing:
             note += f" | 拼音异常 {len(missing)} 处"
         sofa.run(seg_dir)
         if used_ref_times:
             clipped, seg_cnt = sofa.clipped_start_ratio(seg_dir / "htk" / "words")
-            if seg_cnt >= 6 and (clipped / seg_cnt) >= 0.40:
-                emit(5, "参考时间戳偏慢，自动校准偏移", f"{clipped}/{seg_cnt} 句开头被裁切")
+            if suspect_starts or (seg_cnt >= 6 and (clipped / seg_cnt) >= 0.40):
+                emit(5, "复核参考句首", f"{clipped}/{seg_cnt} 句开头疑似裁切")
                 from . import asr
                 import numpy as np
 
@@ -863,33 +896,40 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
                 deltas = [asr_by_idx[i] - rough[i][0] for i in asr_by_idx]
                 if deltas:
                     shift = float(np.median(deltas))
-                    if abs(shift) >= 0.25:
-                        rough_fixed: list[tuple[float, str]] = []
-                        for idx, (ref_t, txt) in enumerate(rough):
-                            # 保持参考 LRC 原有的句间相对节奏，统一按全局中位偏移平移，
-                            # 避免 Whisper 分段起点包含前一句尾音/换气静音导致首字抢占上一句尾音。
-                            t_new = max(0.0, ref_t + shift)
-                            if rough_fixed and t_new < rough_fixed[-1][0]:
-                                t_new = rough_fixed[-1][0] + 0.05
-                            rough_fixed.append((t_new, txt))
+                    shift = shift if abs(shift) >= 0.25 else 0.0
+                    rough_fixed = [(max(0.0, start + shift), text) for start, text in rough]
+                    corrected = 0
+                    for idx, row in enumerate(rough):
+                        if row not in suspect_starts or idx not in asr_by_idx:
+                            continue
+                        t_new = asr_by_idx[idx]
+                        lower = rough_fixed[idx - 1][0] if idx else -0.05
+                        upper = rough_fixed[idx + 1][0] if idx + 1 < len(rough_fixed) else total
+                        if lower + 0.05 < t_new < upper - 0.05 and abs(t_new - rough_fixed[idx][0]) >= 2.0:
+                            rough_fixed[idx] = (t_new, row[1])
+                            corrected += 1
+                    if shift or corrected:
+                        # Global calibration moves both ends of the same reference phrase.
+                        # A locally replaced start leaves its old end anchored to the song timeline.
+                        shifted_ends = {
+                            revised: end + shift
+                            for original, revised in zip(rough, rough_fixed)
+                            if (end := (reference_ends or {}).get(original)) is not None
+                        }
                         rough = rough_fixed
-                        meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total)
+                        meta, missing = sofa.prep_segments(vocals, rough, seg_dir, total,
+                                                           reference_ends=shifted_ends)
                         sofa.run(seg_dir)
-                        note += f" | 参考时间戳整体偏移 {shift:+.2f}s，已自动校准({len(rough)}行保留)"
+                        if shift:
+                            note += f" | 参考时间戳整体偏移 {shift:+.2f}s，已自动校准"
+                        if corrected:
+                            note += f" | 单独修正 {corrected} 处异常句首"
         lrc = sofa.build_lrc(meta, seg_dir / "htk" / "words", vocal_wav=vocals,
                              waveform_first=waveform_first)
         by = "SOFA 波形优先对齐" if waveform_first else "SOFA 歌声对齐"
     else:
         from . import jp
 
-        reference_ends = None
-        if lang == "ja" and used_ref_times and ref_path:
-            reference_ends = {
-                (line.start, line.text.strip()): line.end
-                for line in fmt.parse(str(ref_path)).lines
-                if line.enhanced and line.end is not None and line.chars
-                and line.end > max(start for _, start in line.chars)
-            }
         stage_lbl = "MMS 日语歌声" if lang == "ja" else ("MMS 英文歌声" if lang == "en" else f"MMS 多语歌声 ({lang})")
         emit(5, f"{stage_lbl} 逐句对齐", f"{len(rough)} 句")
         lrc = jp.align_lines(str(vocals), rough, lang=lang, total=total,
@@ -943,6 +983,7 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
         raise RuntimeError(f"逐字对齐未产出有效歌词行（lang={lang}），已中止以免写入空 LRC")
 
     emit(6, "输出并校验", f"{len(lrc.lines)} 行")
+    note += report_waveform(lrc, vocals)
     tr_cnt = _attach_translations(lrc, trans_map, skipped=skipped, orig_lines=orig_ref_lines)
     if tr_cnt:
         note += f" | 保留译文 {tr_cnt} 行"

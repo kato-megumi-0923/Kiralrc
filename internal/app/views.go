@@ -289,7 +289,24 @@ func (a *app) viewSidebar(c *ui.Context) {
 			}
 		}
 
-		ui.Text(c, "最近校对").FontSize(11).FontWeight(700).TextColor(p.faint).Margin(16, 10, 4, 10)
+		ui.Row(c).FillWidth().PaddingX(10).Margin(16, 0, 4, 0).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "最近校对").FontSize(11).FontWeight(700).TextColor(p.faint).Grow(1)
+			if len(a.recents) > 0 {
+				btn := ui.ButtonBase(c.Key("clear-editor-recents")).Height(22).PaddingX(6).Radius(6).
+					Label("清除最近校对记录").FocusRing(false).Center()
+				if btn.Hovered() {
+					btn.Background(p.hover)
+				}
+				btn.Children(func() {
+					ui.Text(c, "清除记录").FontSize(11).TextColor(p.muted).SingleLine()
+				})
+				if btn.Clicked() {
+					a.recents = nil
+					a.savePrefs()
+					a.toast = "已清除最近校对记录"
+				}
+			}
+		})
 		if len(a.recents) == 0 {
 			ui.Text(c, "暂无校对记录").FontSize(12).TextColor(p.faint).Margin(2, 10, 0, 10)
 		} else {
@@ -733,6 +750,16 @@ func (a *app) viewLibrary(c *ui.Context) {
 						Stops: []ui.GradientStop{{At: 0, Color: ui.Oklch(0.74, 0.16, 25)}, {At: 1, Color: ui.Oklch(0.56, 0.19, 350)}},
 					}, 14)
 				})
+				stack.Children(func() {
+					x := [3]float32{42, 22 - heroOut*3, 4 - heroOut*6}
+					y := [3]float32{12, 16, 20}
+					for i := min(2, len(a.tracks)-1); i >= 0; i-- {
+						if cover := a.tracks[i].Cover; cover != nil {
+							size := float32(116 - 6*i)
+							ui.Image(c, cover).Absolute().Top(y[i]).Left(x[i]).Size(size, size).Radius(14).Fit(ui.Cover).PassThrough()
+						}
+					}
+				})
 			})
 
 			// 4 Stat Cards (hover lift + active border + click switches filter tab!)
@@ -1034,7 +1061,11 @@ func (a *app) viewLibrary(c *ui.Context) {
 							}
 
 							ui.Row(c).Width(250).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
-								artCover(c, tr.Hue, 36, 8, nil)
+								if tr.Cover != nil {
+									ui.Image(c, tr.Cover).Size(36, 36).Radius(8).Fit(ui.Cover).Shrink(0)
+								} else {
+									artCover(c, tr.Hue, 36, 8, nil)
+								}
 								ui.Column(c).MinWidth(0).Grow(1).Gap(1).Children(func() {
 									ui.Text(c, tr.Title).FontSize(13.5).FontWeight(700).TextColor(p.text).SingleLine()
 									ui.Text(c, tr.File).FontSize(11.5).TextColor(p.muted).SingleLine()
@@ -1375,6 +1406,15 @@ func (a *app) viewAlign(c *ui.Context) {
 							})
 							settingSwitch(c.Key("sw-ignore-refts"), &a.alignIgnoreRefTimes, "忽略参考时间戳")
 						})
+						if !a.alignIgnoreRefTimes {
+							ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+								ui.Column(c).Grow(1).Gap(1).Children(func() {
+									ui.Text(c, "仅使用参考句首").FontSize(13).FontWeight(600)
+									ui.Text(c, "沿用参考句首定位，重新对齐逐字时间与句尾").FontSize(11.5).TextColor(p.muted)
+								})
+								settingSwitch(c.Key("sw-ignore-refends"), &a.alignIgnoreRefEnds, "仅使用参考句首")
+							})
+						}
 					})
 
 					// Step 3: Language, Engine, KI-3, KI-5, KI-7
@@ -1858,7 +1898,7 @@ func (a *app) viewEditor(c *ui.Context) {
 		})
 
 		// 2) Main 3-column workspace
-		mid := ui.Row(c.Key("ed-mid")).Grow(1).MinHeight(0).FillWidth().AlignItems(ui.Stretch)
+		mid := ui.Row(c.Key("ed-mid")).Grow(1).Basis(0).MinHeight(0).FillWidth().AlignItems(ui.Stretch).Clip()
 		mid.Children(func() {
 			// Left: Lyric lines list (268px) with Cloudy sliding linePillMatch
 			left := ui.Column(c.Key("ed-lines")).Width(268).Shrink(0).Padding(8, 6, 8, 6).Gap(2)
@@ -2369,7 +2409,7 @@ func (a *app) viewEditor(c *ui.Context) {
 			})
 
 			// Right: Character inspector & validation issues (compact 232px for a wider center stage)
-			right := ui.Column(c.Key("ed-props")).Width(232).Shrink(0).Padding(12, 12, 12, 12).Gap(8)
+			right := ui.Column(c.Key("ed-props")).Width(232).MinHeight(0).Shrink(0).Padding(12, 12, 12, 12).Gap(8).Clip()
 			right.Draw(func(pt *ui.Painter, r ui.Rect) {
 				pt.Fill(ui.Rect{X: r.X, Y: r.Y, W: 1, H: r.H}, p.hairline, 0)
 			})
@@ -2428,12 +2468,30 @@ func (a *app) viewEditor(c *ui.Context) {
 				if len(a.edIssues) == 0 {
 					ui.Text(c, "当前歌词行时间戳格式正常").FontSize(12).TextColor(p.muted)
 				} else {
-					for ii, iss := range a.edIssues {
-						ic := ui.Box(c.Key(fmt.Sprintf("iss-%d", ii))).FillWidth().Padding(8, 10, 8, 10).Radius(10).Background(p.surface)
-						ic.Children(func() {
-							ui.Text(c, iss).FontSize(11.5).TextColor(p.text)
+					scroll := ui.Scroll(c.Key("ed-issue-scroll")).Grow(1).Basis(0).MinHeight(0).FillWidth().Clip()
+					scroll.Children(func() {
+						ui.Column(c).FillWidth().Gap(6).Children(func() {
+								for ii, iss := range a.edIssues {
+									var line int
+									if _, err := fmt.Sscanf(iss, "[人声] 第 %d 行", &line); err == nil && line > 0 && line <= len(a.edLines) {
+										btn := ui.ButtonBase(c.Key(fmt.Sprintf("iss-%d", ii))).Label(iss).FillWidth().Padding(8, 10, 8, 10).
+											Radius(10).Background(p.surface).AlignItems(ui.Center).Justify(ui.Start).FocusRing(false)
+										btn.Children(func() {
+											ui.Text(c, iss).Grow(1).MinWidth(0).FontSize(11.5).TextColor(p.text)
+										})
+										if btn.Clicked() {
+											a.selectEditorLine(line - 1)
+											a.seekPlayback(a.edLines[line-1].Start)
+										}
+										continue
+									}
+									ic := ui.Box(c.Key(fmt.Sprintf("iss-%d", ii))).FillWidth().Padding(8, 10, 8, 10).Radius(10).Background(p.surface)
+									ic.Children(func() {
+										ui.Text(c, iss).FontSize(11.5).TextColor(p.text)
+									})
+								}
 						})
-					}
+					})
 				}
 			})
 		})

@@ -91,3 +91,15 @@ def test_single_char_line_is_enhanced():
     # 真正的译文行（两个字以上）仍判为非逐字
     tr = fmt.parse("[00:01.000]<00:01.000>中文翻译<00:02.000>\n").lines[0]
     assert not tr.enhanced
+def test_wavecheck_flags_squeezed_tail_but_not_spaced_tail(monkeypatch, tmp_path):
+    import numpy as np
+    from kiralrc import format as fmt, wavecheck
+
+    monkeypatch.setattr(wavecheck.au, "decode", lambda *_: np.full(32000, 0.1))
+    vocals = tmp_path / "vocals.wav"
+    squeezed = fmt.Line(0.2, "きしめて", list(zip("きしめて", [0.2, 0.24, 0.30, 0.34])), 1.9)
+    spaced = fmt.Line(0.2, "きしめて", list(zip("きしめて", [0.2, 0.55, 0.9, 1.3])), 1.9)
+
+    issues = wavecheck.check(fmt.Lrc(lines=[squeezed]), vocals)
+    assert len(issues) == 1 and "第 1 行" in issues[0] and "尾字挤压" in issues[0]
+    assert wavecheck.check(fmt.Lrc(lines=[spaced]), vocals) == []
