@@ -23,6 +23,7 @@ from . import sources
 from . import text as tx
 
 BY_RE = re.compile(r"^\[by:([^\]]*)\]", re.M)
+ALIGN_RE = re.compile(r"^\[kiralrc:aligned\]", re.M | re.I)
 OFFICIAL = set(sources.TAGS.values())
 # 纯音乐、伴奏、卡拉 OK 版：没有主唱，下歌词没意义
 INSTRUMENTAL = re.compile(
@@ -59,9 +60,11 @@ def lrc_kind(path: Path) -> str:
         return "missing"
     if not body.strip():
         return "missing"
+    word = "<" in body
+    if ALIGN_RE.search(body):
+        return "aligned"
     m = BY_RE.search(body)
     by = (m.group(1) if m else "").strip()
-    word = "<" in body
     if by in OFFICIAL:
         return "official"
     if any(mark in by for mark in ALIGNED_MARKS):

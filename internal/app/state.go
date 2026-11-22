@@ -57,7 +57,9 @@ type libStats struct {
 	Total      int
 	Vocal      int
 	Enhanced   int
-	Official   int // 其中来自平台（网易云 / QQ / AMLL / 酷狗）的逐字
+	Official   int // 逐字里来自平台（网易云 / QQ / AMLL / 酷狗）的
+	Aligned    int // 逐字里 Kiralrc 自己对齐的
+	Unknown    int // 逐字里没有来源标记的（早先别的工具写的）
 	LineOnly   int
 	Missing    int // 无歌词总数（本地缺词 + 全网无词）
 	NotFound   int // 其中：多源均未搜到的「全网无词」数量
@@ -885,8 +887,13 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		lang := guessLang(norm, stem)
 		if enhCount > 0 {
 			st.Enhanced++
-			if lrcByOfficial(norm) {
+			switch libWordStatus(norm) {
+			case "official":
 				st.Official++
+			case "aligned":
+				st.Aligned++
+			default:
+				st.Unknown++
 			}
 			items = append(items, trackItem{
 				Selected: false,
@@ -1430,12 +1437,38 @@ func (a *app) setLibFilter(f int) {
 	}
 }
 
-// libWordStatus 分「官方逐字」与「对齐逐字」：前者是平台给的，后者是我们算的。
+// libWordStatus tells where a word-timed lyric came from: the platform
+// ("official"), Kiralrc's own alignment ("aligned"), or neither marked
+// ("unknown", which is what older tools left behind).
 func libWordStatus(body string) string {
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "[kiralrc:aligned") {
+		return "aligned"
+	}
 	if lrcByOfficial(body) {
 		return "official"
 	}
-	return "enhanced"
+	// 老文件没有 kiralrc 标记，就按 [by:] 里的引擎名认
+	by := lrcByValue(body)
+	for _, mark := range []string{"SOFA", "MMS", "WhisperX", "听写", "模板迁移", "波包络"} {
+		if strings.Contains(by, mark) {
+			return "aligned"
+		}
+	}
+	return "unknown"
+}
+
+// lrcByValue is what the [by:] line says, if there is one.
+func lrcByValue(body string) string {
+	i := strings.Index(body, "[by:")
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len("[by:"):]
+	if j := strings.Index(rest, "]"); j >= 0 {
+		return strings.TrimSpace(rest[:j])
+	}
+	return strings.TrimSpace(rest)
 }
 
 // lrcByOfficial 看 [by:] 是不是平台的名字。
@@ -1475,7 +1508,7 @@ func (a *app) trackMatchesFilter(tr *trackItem) bool {
 	case 1:
 		return tr.Status == "line_only"
 	case 2:
-		return tr.Status == "enhanced"
+		return tr.Status == "aligned" || tr.Status == "unknown"
 	case 5:
 		return tr.Status == "official"
 	case 3:

@@ -374,10 +374,14 @@ def _jp_wall_collision_ratio(lrc: fmt.Lrc) -> tuple[int, int]:
     return hit, total
 
 
+# Kiralrc 自己算出来的 LRC 都带这个标记，跟平台上直接下载的逐字区分开
+ALIGN_MARK = "[kiralrc:aligned]"
+
+
 def _metas(ti: str, ar: str, al: str, by: str) -> list[str]:
-    """统一的头部：ti / ar / al / by，空字段跳过。"""
+    """统一的头部：ti / ar / al / by，空字段跳过；末尾标明是 Kiralrc 对齐的。"""
     return [x for x in (f"[ti:{ti}]" if ti else "", f"[ar:{ar}]" if ar else "",
-                        f"[al:{al}]" if al else "", f"[by:{by}]") if x]
+                        f"[al:{al}]" if al else "", f"[by:{by}]", ALIGN_MARK) if x]
 
 
 def _detect_lyrics_lang(lines: list[str], fallback: str = "zh") -> str:

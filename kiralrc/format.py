@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 LINE_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{1,3})\](.*)$")
 TAG_RE = re.compile(r"<(\d{2}):(\d{2}\.\d{1,3})>")
-META_RE = re.compile(r"^\[(ti|ar|al|by|tool|offset|length|re|ve):", re.I)
+META_RE = re.compile(r"^\[(ti|ar|al|by|tool|offset|length|re|ve|kiralrc):", re.I)
 STAMP_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{1,3})\]")
 TS2_RE = re.compile(r"([\[<]\d{2}:\d{2}\.\d{2})([\]>])")
 

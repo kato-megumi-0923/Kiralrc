@@ -121,3 +121,30 @@ def test_instrumentals_are_skipped(tmp_path):
         (tmp_path / name).write_bytes(b"")
     counts = download.run(tmp_path)
     assert counts.all == 0
+
+
+def test_our_own_files_are_marked_and_recognised(tmp_path):
+    """自己对齐出来的 LRC 带 [kiralrc:aligned]，一眼就知道不是平台给的。"""
+    from kiralrc import format as fmt
+    from kiralrc import pipeline
+
+    metas = pipeline._metas("歌", "人", "", "SOFA 歌声对齐")
+    assert "[kiralrc:aligned]" in metas
+
+    body = "[00:01.000]<00:01.000>字<00:01.500>幕<00:02.000>"
+    text = "\n".join(metas + [body]) + "\n"
+    parsed = fmt.parse(text)          # 解析器不能把它当歌词行丢掉
+    assert "[kiralrc:aligned]" in parsed.metas
+
+    audio = tmp_path / "e.mp3"
+    audio.write_bytes(b"")
+    (tmp_path / "e.lrc").write_text(text, encoding="utf-8")
+    assert download.lrc_kind(audio) == "aligned"
+
+
+def test_a_file_without_any_mark_is_word_not_aligned(tmp_path):
+    audio = tmp_path / "f.mp3"
+    audio.write_bytes(b"")
+    (tmp_path / "f.lrc").write_text(
+        "[00:01.000]<00:01.000>字<00:01.500>幕<00:02.000>\n", encoding="utf-8")
+    assert download.lrc_kind(audio) == "word"

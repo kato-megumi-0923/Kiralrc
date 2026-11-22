@@ -714,8 +714,8 @@ func (a *app) viewLibrary(c *ui.Context) {
 					if st.NotFound > 0 {
 						nfSub = fmt.Sprintf("（含 %d 首全网未搜到）", st.NotFound)
 					}
-					ui.Text(c, fmt.Sprintf("%d 首逐字（占人声 %.1f%% · 官方 %d / 对齐 %d）· %d 首仅整行 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
-						st.Enhanced, vocalPct, st.Official, st.Enhanced-st.Official,
+					ui.Text(c, fmt.Sprintf("%d 首逐字（占人声 %.1f%% · 官方 %d / 对齐 %d / 来源未知 %d）· %d 首仅整行 · %d 首无歌词%s   |   已排除：纯音乐 %d · OST 原声 %d · 伴奏 %d",
+						st.Enhanced, vocalPct, st.Official, st.Aligned, st.Unknown,
 						st.LineOnly, st.Missing, nfSub,
 						st.InstPure, st.InstOST, st.InstAccomp)).FontSize(12.5).TextColor(white.Alpha(0.88))
 					ui.Row(c).Gap(8).Margin(12, 0, 0, 0).Children(func() {
@@ -780,7 +780,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 					filter           int
 				}{
 					{"official", fmt.Sprintf("%d", st.Official), "", "官方逐字 · 平台下载", iconCheck, p.okBg, p.ok, 5},
-					{"ready", fmt.Sprintf("%d", st.Enhanced-st.Official), "", "对齐逐字 · 本机算出", iconCheck, p.okBg, p.ok, 2},
+					{"ready", fmt.Sprintf("%d", st.Aligned+st.Unknown), "", fmt.Sprintf("对齐逐字 %d · 来源未知 %d", st.Aligned, st.Unknown), iconNote, p.accent.Alpha(0.12), p.accent, 2},
 					{"upgrade", fmt.Sprintf("%d", st.LineOnly), "", "仅整行 LRC · 可直接升级逐字", iconNote, p.accent.Alpha(0.12), p.accent, 1},
 					{"nolyrics", fmt.Sprintf("%d", st.Missing), nfBadge, "无歌词 · 支持 ID / 手填 / ASR", iconWarn, p.warnBg, p.warn, 3},
 					{"inst", fmt.Sprintf("%d", st.InstTotal), "", fmt.Sprintf("已排除：纯音乐 %d · OST %d · 伴奏 %d", st.InstPure, st.InstOST, st.InstAccomp), iconWave, p.surface2, p.muted, 4},
@@ -1085,8 +1085,10 @@ func (a *app) viewLibrary(c *ui.Context) {
 								switch tr.Status {
 								case "official":
 									statusPill(c, "官方逐字", p.okBg, p.ok)
-								case "enhanced":
+								case "aligned":
 									statusPill(c, "对齐逐字", p.okBg, p.ok)
+								case "unknown":
+									statusPill(c, "来源未知", p.surface2, p.muted)
 								case "line_only":
 									statusPill(c, "仅整行", p.accent.Alpha(0.14), p.accent)
 								case "nolyrics_notfound":
