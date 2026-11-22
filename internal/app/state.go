@@ -262,6 +262,7 @@ type app struct {
 	edSrcInitCaret        int    // 进入编辑时初始光标位置（按 rune 偏移定位到当前选中行）
 	edSrcNeedCaret        bool   // 首帧应用初始光标位置
 	edSrcScrollToSelected bool   // 选中行变更时自动滚动 LRC 源码到可视区域
+	edTranslating         bool   // 是否正在执行单曲 AI 歌词翻译
 	edMetas               []string
 	edLines        []lyricLine
 	edIssues       []string
@@ -290,10 +291,19 @@ type app struct {
 	setCleanDays       int // 0:7天前 1:30天前 2:全部
 	setAppleToken         string
 	setAppleStorefront    int // 0:jp 1:cn 2:us
+	setAIBaseURL          string
+	setAIModel            string
+	setAIAPIKey           string
+	setAIKeyEditing       bool
+	setAIKeyDraft         string
+	setAIURLDropOpen      bool
+	setAIModelDropOpen    bool
 	setConfirmDeleteModel string
 	setScroll             ui.ScrollState
 
-	toast string
+	toast     string
+	toastLast string
+	toastSeq  int
 }
 
 type userPrefs struct {
@@ -307,6 +317,9 @@ type userPrefs struct {
 	Volume           *float64 `json:"volume,omitempty"`
 	AppleToken       string   `json:"apple_media_user_token,omitempty"`
 	AppleStorefront  int      `json:"apple_storefront"`
+	AIBaseURL        string   `json:"ai_base_url,omitempty"`
+	AIModel          string   `json:"ai_model,omitempty"`
+	AIAPIKey         string   `json:"ai_api_key,omitempty"`
 }
 
 func prefsPath() string {
@@ -382,6 +395,14 @@ func (a *app) loadPrefs() {
 	if up.AppleStorefront >= 0 && up.AppleStorefront <= 2 {
 		a.setAppleStorefront = up.AppleStorefront
 	}
+	a.setAIBaseURL = strings.TrimSpace(up.AIBaseURL)
+	a.setAIModel = strings.TrimSpace(up.AIModel)
+	if key, migrate, err := unprotectSecret(up.AIAPIKey); err == nil {
+		a.setAIAPIKey = key
+		if migrate && key != "" {
+			a.savePrefs()
+		}
+	}
 }
 
 func normPathKey(p string) string {
@@ -445,6 +466,12 @@ func (a *app) savePrefs() {
 	}
 	sort.Strings(nfPaths)
 	vol := a.volume
+	encAIKey := ""
+	if strings.TrimSpace(a.setAIAPIKey) != "" {
+		if enc, err := protectSecret(a.setAIAPIKey); err == nil {
+			encAIKey = enc
+		}
+	}
 	up := userPrefs{
 		QueueConcurrency: a.queueConcurrency,
 		QueueKeepGoing:   &kg,
@@ -456,6 +483,9 @@ func (a *app) savePrefs() {
 		Volume:           &vol,
 		AppleToken:       strings.TrimSpace(a.setAppleToken),
 		AppleStorefront:  a.setAppleStorefront,
+		AIBaseURL:        strings.TrimSpace(a.setAIBaseURL),
+		AIModel:          strings.TrimSpace(a.setAIModel),
+		AIAPIKey:         encAIKey,
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)

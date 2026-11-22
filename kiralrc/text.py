@@ -76,7 +76,7 @@ def parse_song_id(value: str | int | None) -> int | None:
 
 
 def netease_id_from_file(path: str | Path) -> int | None:
-    """音频标签里的 NETEASE_ID（Cloudy 下载时会写入，别处下载的可能没有）。"""
+    """音频标签里的 NETEASE_ID 或网易云客户端写入的 163 key 加密注释。"""
     try:
         from mutagen import File as MutagenFile
     except Exception:
@@ -91,7 +91,27 @@ def netease_id_from_file(path: str | Path) -> int | None:
                 value = tags[key]
                 if isinstance(value, list):
                     value = value[0] if value else ""
-                return parse_song_id(str(value))
+                nid = parse_song_id(str(value))
+                if nid:
+                    return nid
+        # 兜底解析网易云官方客户端写入的 `163 key(Don't modify):...`
+        for key, value in tags.items():
+            s = str(value)
+            if "163 key(Don't modify):" in s:
+                try:
+                    import base64, json
+                    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                    raw = s.split("163 key(Don't modify):", 1)[1].strip()
+                    enc = base64.b64decode(raw)
+                    dec = Cipher(algorithms.AES(b"#14ljk_!\\]&0U<'("), modes.ECB()).decryptor()
+                    out = dec.update(enc) + dec.finalize()
+                    out = out[:-out[-1]].decode("utf-8")
+                    if out.startswith("music:"):
+                        mid = json.loads(out[6:]).get("musicId")
+                        if mid and int(mid) > 0:
+                            return int(mid)
+                except Exception:
+                    pass
     except Exception:
         return None
     return None
@@ -841,6 +861,45 @@ def detect_polyphones(text: str,
     return out
 
 
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def _script_kind(text: str) -> str:
+    """粗略判断一行歌词的主语种脚本：ja / ko / zh / latin / other。"""
+    if _KANA_RE.search(text):
+        return "ja"
+    if _HANGUL_RE.search(text):
+        return "ko"
+    n_han = len(HAN.findall(text))
+    n_lat = len(_LATIN_RE.findall(text))
+    if n_han > 0 and n_han >= n_lat:
+        return "zh"
+    if n_lat > 0:
+        return "latin"
+    return "other"
+
+
+def _is_translation_pair(prev_text: str, cur_text: str, dt: float) -> bool:
+    """判断紧邻时间（dt < dup_tol）的后一行是否是前一行原词的译文，
+    避免把同语种且间隔仅几十毫秒的两句相邻原词误吞成译文。"""
+    if cur_text.startswith("❤️") or cur_text.endswith("❤️"):
+        return True
+    k1 = _script_kind(prev_text)
+    k2 = _script_kind(cur_text)
+    # 外文原词 + 中文译文（最常见双语 LRC）
+    if k1 in ("ja", "ko", "latin") and k2 == "zh":
+        return True
+    # 日/韩原词 + 罗马音或英译
+    if k1 in ("ja", "ko") and k2 == "latin":
+        return True
+    # 中文原词 + 英文译文仅在严格同时间戳时视为译文
+    if k1 == "zh" and k2 == "latin" and dt <= 0.005:
+        return True
+    return False
+
+
 def lines_with_translations(
     text: str, dup_tol: float = 0.06
 ) -> tuple[list[tuple[float, str]], list[list[str]]]:
@@ -858,9 +917,11 @@ def lines_with_translations(
         t = ln.text.strip()
         if not t or CREDIT_RE.match(t):
             continue
-        if orig and abs(ln.start - orig[-1][0]) < dup_tol:
-            trans[-1].append(t)
-            continue
+        if orig:
+            dt = abs(ln.start - orig[-1][0])
+            if dt < dup_tol and _is_translation_pair(orig[-1][1], t, dt):
+                trans[-1].append(t)
+                continue
         orig.append((ln.start, t))
         trans.append([])
     return orig, trans

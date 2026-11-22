@@ -274,3 +274,114 @@ def test_best_match_dynamic_order_and_amll_reuses_netease_id(monkeypatch):
     tx.best_match("ヨルシカ 晴る", duration=270, name="晴る", artist="ヨルシカ")
     assert cand_calls == 1, "netease_candidates 只能搜索一次并复用于 netease_match 与 AMLL"
     assert ja_calls == ["netease:654321", "amll:654321", "apple", "qq", "lrclib", "kugou"]
+
+
+def test_partial_translation_detection_and_merge():
+    from kiralrc import pipeline as pl
+
+    local_lrc = "[00:01.00]Line one\n[00:01.00]第一句\n[00:02.00]Line two\n"
+    local_map = pl._build_trans_map_from_text(local_lrc)
+    lines = ["Line one", "Line two"]
+    assert pl._has_missing_trans(lines, local_map) is True
+    assert pl._missing_trans_lines(lines, local_map) == ["Line two"]
+
+    fetched_lrc = (
+        "[00:01.00]Line one\n[00:01.00]远端第一句\n"
+        "[00:02.00]Line two\n[00:02.00]远端第二句\n"
+    )
+    fetched_map = pl._build_trans_map_from_text(fetched_lrc)
+    merged = pl._merge_trans_maps(local_map, fetched_map)
+    assert merged[pl._norm_lyric_key("Line one")] == [["第一句"]]
+    assert merged[pl._norm_lyric_key("Line two")] == [["远端第二句"]]
+    assert pl._has_missing_trans(lines, merged) is False
+
+
+def test_fetch_missing_translations_fallback_on_mismatch_timeout_and_explicit_id(monkeypatch, tmp_path):
+    from kiralrc import pipeline as pl
+
+    dummy = tmp_path / "Artist - Song.mp3"
+    dummy.write_bytes(b"")
+    monkeypatch.setattr(tx, "netease_id_from_file", lambda p: 99999)
+
+    # 1) 显式 netease_id 优先于音频标签 ID
+    seen_ids = []
+
+    def fake_by_id(sid):
+        seen_ids.append(sid)
+        return {"lrc": "[00:01.00]Hello world\n", "tlyric": "[00:01.00]你好世界\n"}
+
+    monkeypatch.setattr(tx, "netease_by_id", fake_by_id)
+    got = pl._fetch_missing_translations(
+        dummy, 200.0, netease_id=12345, target_lines=["Hello world"],
+    )
+    assert seen_ids == [12345]
+    assert got == {pl._norm_lyric_key("Hello world"): [["你好世界"]]}
+
+    # 2) 网易云返回完全不匹配的译文时，继续回退到 QQ 音乐
+    monkeypatch.setattr(tx, "netease_id_from_file", lambda p: None)
+    monkeypatch.setattr(tx, "netease_match", lambda *a, **kw: {
+        "lrc": "[00:01.00]Unrelated lyric\n",
+        "tlyric": "[00:01.00]无关译文\n",
+    })
+    qq_called = []
+
+    def fake_qq(*a, **kw):
+        qq_called.append(True)
+        return {
+            "lrc": "[00:01.00]Hello world\n",
+            "tlyric": "[00:01.00]来自QQ的译文\n",
+        }
+
+    monkeypatch.setattr(tx, "qq_match", fake_qq)
+    got2 = pl._fetch_missing_translations(dummy, 200.0, target_lines=["Hello world"])
+    assert qq_called == [True]
+    assert got2 == {pl._norm_lyric_key("Hello world"): [["来自QQ的译文"]]}
+
+    # 3) 网易云抛出超时异常时，不中断，继续回退到 QQ 音乐
+    def boom(*a, **kw):
+        raise TimeoutError("netease timeout")
+
+    monkeypatch.setattr(tx, "netease_match", boom)
+    qq_called.clear()
+    got3 = pl._fetch_missing_translations(dummy, 200.0, target_lines=["Hello world"])
+    assert qq_called == [True]
+    assert got3 == {pl._norm_lyric_key("Hello world"): [["来自QQ的译文"]]}
+
+
+def test_attach_translations_skips_dropped_duplicate_occurrence():
+    from kiralrc import format as fmt
+    from kiralrc import pipeline as pl
+
+    ref_body = (
+        "[00:01.00]Repeat line\n[00:01.00]第一次译文\n"
+        "[00:05.00]Middle\n[00:05.00]中间\n"
+        "[00:10.00]Repeat line\n[00:10.00]第二次译文\n"
+    )
+    orig_lines = ["Repeat line", "Middle", "Repeat line"]
+    tmap = pl._build_trans_map_from_text(ref_body)
+    aligned_lrc = fmt.Lrc(lines=[
+        fmt.Line(5.0, "Middle"),
+        fmt.Line(10.0, "Repeat line"),
+    ])
+    added = pl._attach_translations(
+        aligned_lrc, tmap, skipped=[{"index": 1, "text": "Repeat line"}], orig_lines=orig_lines,
+    )
+    assert added == 2
+    texts = [ln.text for ln in aligned_lrc.lines]
+    assert texts == ["Middle", "中间", "Repeat line", "第二次译文"]
+
+
+def test_lines_with_translations_keeps_close_same_language_lines():
+    # 相隔 40ms 的两句英文原词不应把第二句吞成译文
+    lrc_en = "[00:10.000]First English line\n[00:10.040]Second English line\n"
+    orig_en, trans_en = tx.lines_with_translations(lrc_en)
+    assert len(orig_en) == 2
+    assert [t for _, t in orig_en] == ["First English line", "Second English line"]
+    assert trans_en == [[], []]
+
+    # 真正的双语（日文 + 中文，相隔 40ms）仍正常拆分
+    lrc_bi = "[00:10.000]君のことが好き\n[00:10.040]我喜欢你\n"
+    orig_bi, trans_bi = tx.lines_with_translations(lrc_bi)
+    assert len(orig_bi) == 1
+    assert orig_bi[0][1] == "君のことが好き"
+    assert trans_bi == [["我喜欢你"]]

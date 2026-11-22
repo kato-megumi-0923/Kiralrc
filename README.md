@@ -90,7 +90,8 @@ python scripts/fetch_models.py
 
 除命令行外，项目还提供基于 Go 编写的桌面端 GUI（`kiralrc-gui.exe`），包含**曲库**、**新建对齐**、**任务队列**、**编辑与校对**、**工具箱**五个面板，支持音频试听、批量任务队列、逐字时间轴校对以及 `polyphone.toml` 多音字词表编辑。
 
-**从源码编译运行**（需要 Go 1.27+，且本地已配置好 Python 对齐环境与模型）：
+- **直接运行**：从 [Releases](https://github.com/kato-megumi-0923/Kiralrc/releases) 下载 `kiralrc-gui-v0.2.0-windows-amd64.zip` 解压后运行 `kiralrc-gui.exe`（需本地已配置好 Python 对齐环境与模型）。
+- **从源码编译运行**（需要 Go 1.27+）：
 
 ```bash
 go build -ldflags="-H windowsgui" -o kiralrc-gui.exe .
@@ -129,7 +130,12 @@ python -m kiralrc convert "歌曲.lrc"
 
 ## 版本更新内容
 
-以下按项目演进阶段汇总自仓库创建以来的全部主要更新（历史坑点与设计背景另见 [`docs/known-issues.md`](docs/known-issues.md)）：
+以下按版本与演进阶段汇总自仓库创建以来的全部主要更新（历史坑点与设计背景另见 [`docs/known-issues.md`](docs/known-issues.md)）：
+
+### v0.2.0（2026-11-23）
+- **AI 歌词翻译与安全存储**：GUI 新增 OpenAI 兼容 AI 翻译功能（内置 DeepSeek / OpenAI / Gemini / 硅基流动 / 智谱 GLM / 通义千问 / OpenRouter / 本地 Ollama 预设），API Key 在 Windows 上通过 DPAPI 加密存储。
+- **双语译文识别与补全增强**：按语种文字体系精准识别双语译文对，支持逐行检测缺失译文、合并多源译文与自动补全回填。
+- **逐字参考迁移与多源搜索增强**：支持逐字参考 LRC 时间迁移与日语碰撞检测；新增可选 Apple Music 官方歌词源与 AMLL 复用网易云候选搜索；HuggingFace / Torch 模型缓存统一收拢至项目 `models/` 目录；Windows 播放器增强音频格式兼容。
 
 ### 阶段四：全面切换 MMS 歌声/歌词模型 & 内嵌 SOFA（2026-11-22）
 - **内嵌 SOFA 推理**：将 SOFA 推理直接整合进 `kiralrc/sofa.py`，移除独立的 `.venv-sofa` 环境与 `tools/run_sofa.py` 老依赖。

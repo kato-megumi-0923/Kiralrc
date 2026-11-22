@@ -389,10 +389,13 @@ def _detect_lyrics_lang(lines: list[str], fallback: str = "zh") -> str:
     return fallback
 
 
+_KEY_PUNCT_RE = re.compile(r"[\s,，.。、!！?？:：;；'’\"”“`~～\-—_·•…()（）\[\]【】「」『』]+")
+
+
 def _norm_lyric_key(s: str) -> str:
-    """归一化歌词键：去掉【合】/【歌手】标签与空白，提升译文匹配率。"""
+    """归一化歌词键：去掉【合】/【歌手】标签、空白与标点差异，提升译文匹配率。"""
     s = re.sub(r"【[^】]*】", "", s)
-    return re.sub(r"\s+", "", s).strip().lower()
+    return _KEY_PUNCT_RE.sub("", s).strip().lower()
 
 
 def _build_trans_map_from_text(body: str) -> dict[str, list[list[str]]]:
@@ -409,6 +412,73 @@ def _has_any_trans(trans_map: dict[str, list[list[str]]]) -> bool:
     return any(bool(trs) for q in trans_map.values() for trs in q)
 
 
+def _missing_trans_lines(lines: list[str], trans_map: dict[str, list[list[str]]]) -> list[str]:
+    """返回 lines 中在 trans_map 里尚未匹配到非空译文的原词行（按出现顺序检查）。"""
+    seen: dict[str, int] = {}
+    missing: list[str] = []
+    for txt in lines:
+        key = _norm_lyric_key(txt)
+        if not key:
+            continue
+        occ = seen.get(key, 0)
+        seen[key] = occ + 1
+        q = trans_map.get(key) or []
+        trs = q[occ] if occ < len(q) else []
+        if not any(t.strip() for t in trs):
+            missing.append(txt)
+    return missing
+
+
+def _has_missing_trans(lines: list[str], trans_map: dict[str, list[list[str]]]) -> bool:
+    return bool(_missing_trans_lines(lines, trans_map))
+
+
+def _count_trans_matches(lines: list[str], trans_map: dict[str, list[list[str]]]) -> int:
+    """统计 trans_map 能为 lines 提供非空译文的行数（不修改原 map）。"""
+    if not trans_map or not lines:
+        return 0
+    seen: dict[str, int] = {}
+    hits = 0
+    for txt in lines:
+        key = _norm_lyric_key(txt)
+        if not key:
+            continue
+        occ = seen.get(key, 0)
+        seen[key] = occ + 1
+        q = trans_map.get(key) or []
+        if occ < len(q) and any(t.strip() for t in q[occ]):
+            hits += 1
+        elif q and any(t.strip() for t in q[-1]):
+            hits += 1
+    return hits
+
+
+def _merge_trans_maps(
+    base: dict[str, list[list[str]]],
+    fallback: dict[str, list[list[str]]],
+) -> dict[str, list[list[str]]]:
+    """用 fallback 补齐 base 中缺失或为空的译文槽位，保留 base 已有译文不被覆盖。"""
+    merged: dict[str, list[list[str]]] = {
+        k: [list(trs) for trs in q] for k, q in base.items()
+    }
+    for k, fq in fallback.items():
+        if not any(any(t.strip() for t in trs) for trs in fq):
+            continue
+        bq = merged.setdefault(k, [])
+        max_len = max(len(bq), len(fq))
+        while len(bq) < max_len:
+            bq.append([])
+        for i in range(max_len):
+            if any(t.strip() for t in bq[i]):
+                continue
+            cand = fq[i] if i < len(fq) else []
+            if not any(t.strip() for t in cand):
+                cand = next((x for x in fq if any(t.strip() for t in x)), [])
+            if cand:
+                bq[i] = list(cand)
+    return merged
+
+
 def _extract_trans_map(ref_path: Path | None) -> dict[str, list[list[str]]]:
     """从参考 LRC 中提取「原词 -> 译文列表」映射（按出现顺序队列化，支持副歌重复行）。"""
     if not ref_path or not Path(ref_path).exists():
@@ -417,36 +487,105 @@ def _extract_trans_map(ref_path: Path | None) -> dict[str, list[list[str]]]:
     return _build_trans_map_from_text(body)
 
 
-def _fetch_missing_translations(audio_path: Path, total: float, query: str | None = None) -> dict[str, list[list[str]]]:
-    """外语歌曲本地 LRC 缺少中文译文时，按顺序从网易云 → QQ音乐拉取中文译文补全。"""
-    try:
-        kw = query or tx.query_from_filename(audio_path.stem)
-        dur = round(total)
-        for fn in (
-            lambda: tx.netease_match(kw, dur, interval=1.0),
-            lambda: tx.qq_match(kw, dur),
-        ):
-            hit = fn()
-            if hit and (hit.get("tlyric") or "").strip():
-                merged = tx.merge_tlyric(hit["lrc"], hit["tlyric"])
-                tmap = _build_trans_map_from_text(merged)
-                if _has_any_trans(tmap):
-                    return tmap
-        return {}
-    except Exception:
-        return {}
+def _fetch_missing_translations(
+    audio_path: Path,
+    total: float,
+    query: str | None = None,
+    netease_id: int | None = None,
+    target_lines: list[str] | None = None,
+) -> dict[str, list[list[str]]]:
+    """外语歌曲本地 LRC 缺少（或部分缺少）中文译文时，优先显式 --netease-id / 音频标签 ID，
+    再依次从网易云 → QQ音乐拉取中文译文补全。
+
+    每个来源独立容错；若提供了 target_lines，仅当译文能实际匹配至少 1 行才采纳，
+    避免网易云返回不匹配译文或超时时阻止回退到 QQ 音乐。
+    """
+    kw = query or tx.query_from_filename(audio_path.stem)
+    artist_hint, title_hint = tx.artist_title_from_filename(audio_path.stem)
+    if query:
+        title_hint, artist_hint = query, ""
+    dur = round(total)
+
+    def _try_hit(hit: dict | None) -> dict[str, list[list[str]]] | None:
+        if not hit or not (hit.get("tlyric") or "").strip():
+            return None
+        merged = tx.merge_tlyric(hit.get("lrc") or "", hit["tlyric"])
+        tmap = _build_trans_map_from_text(merged)
+        if not _has_any_trans(tmap):
+            return None
+        if target_lines is not None and _count_trans_matches(target_lines, tmap) == 0:
+            return None
+        return tmap
+
+    sources = []
+    used_id = netease_id
+    if not used_id and audio_path.exists():
+        try:
+            used_id = tx.netease_id_from_file(audio_path)
+        except Exception:
+            used_id = None
+    if used_id:
+        sources.append(lambda sid=used_id: tx.netease_by_id(sid))
+    sources.extend([
+        lambda: tx.netease_match(kw, dur, interval=1.0, name=title_hint or kw, artist=artist_hint),
+        lambda: tx.qq_match(kw, dur, name=title_hint or kw, artist=artist_hint),
+    ])
+
+    for fn in sources:
+        try:
+            tmap = _try_hit(fn())
+            if tmap is not None:
+                return tmap
+        except Exception:
+            continue
+    return {}
 
 
-def _attach_translations(lrc: fmt.Lrc, trans_map: dict[str, list[list[str]]]) -> int:
-    """把原双语 LRC 的译文行按对齐后的行首时间戳贴回逐字 LRC，返回贴回的译文行数。"""
+def _attach_translations(
+    lrc: fmt.Lrc,
+    trans_map: dict[str, list[list[str]]],
+    skipped: list[dict] | None = None,
+    orig_lines: list[str] | None = None,
+) -> int:
+    """把原双语 LRC 的译文行按对齐后的行首时间戳贴回逐字 LRC，返回贴回的译文行数。
+
+    若 Live / 剪辑版剔除了部分参考行（skipped），先从对应 key 队列中移除被剔除出现次序的译文，
+    防止同一句重复出现且译法不同时，保留下来的那次错拿被剔除那次的译文。
+    """
     if not trans_map:
         return 0
+    work_map: dict[str, list[list[str]]] = {
+        k: [list(trs) for trs in q] for k, q in trans_map.items()
+    }
+
+    if skipped and orig_lines:
+        skipped_idxs = {int(s["index"]) - 1 for s in skipped if "index" in s}
+        occ_counter: dict[str, int] = {}
+        drop_occs: dict[str, list[int]] = {}
+        for idx, txt in enumerate(orig_lines):
+            if tx.CREDIT_RE.match(txt.strip()):
+                continue
+            key = _norm_lyric_key(txt)
+            if not key:
+                continue
+            occ = occ_counter.get(key, 0)
+            occ_counter[key] = occ + 1
+            if idx in skipped_idxs:
+                drop_occs.setdefault(key, []).append(occ)
+        for key, occs in drop_occs.items():
+            q = work_map.get(key)
+            if not q:
+                continue
+            for occ in sorted(occs, reverse=True):
+                if 0 <= occ < len(q):
+                    q.pop(occ)
+
     out: list[fmt.Line] = []
     added = 0
     for ln in lrc.lines:
         out.append(ln)
         key = _norm_lyric_key(ln.text)
-        q = trans_map.get(key)
+        q = work_map.get(key)
         if q:
             trs = q.pop(0)
             for tr in trs:
@@ -560,12 +699,21 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     used_asr_fallback = False
     used_ref_times = False
     vocals: Path | None = None
-    trans_map: dict[str, list[str]] = {}
+    trans_map: dict[str, list[list[str]]] = {}
+    skipped: list[dict] = []
+    orig_ref_lines: list[str] = []
 
     # 若用户显式传入的是「原唱逐字 LRC」（含 <mm:ss.xxx>），且未强制忽略参考时间戳，
     # 直接走「原唱逐字模板节奏迁移」（适用 Live 版 / 翻唱版，秒级精准对齐全语种）
     if explicit_ref and not ignore_ref_times and _is_enhanced_ref(explicit_ref):
         trans_map = _extract_trans_map(explicit_ref)
+        sibling = audio_path.with_suffix(".lrc")
+        sibling_bak = sibling.with_name(sibling.name + ".bak")
+        for cand in (sibling_bak, sibling):
+            if cand.exists() and cand.resolve() != explicit_ref.resolve():
+                cand_map = _extract_trans_map(cand)
+                if _has_any_trans(cand_map):
+                    trans_map = _merge_trans_maps(trans_map, cand_map)
         emit(3, "demucs 人声分离", "htdemucs")
         vocals = _vocals(audio_path, cache)
         emit(4, "主唱检测", vocals.name)
@@ -577,6 +725,16 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
         lrc, tr_note = _transfer_enhanced_lrc(explicit_ref, vocals, total)
         note = f"{note} | {tr_note}"
         by = "原唱逐字模板迁移"
+        lrc_texts = [ln.text for ln in lrc.lines]
+        detected = _detect_lyrics_lang(lrc_texts, lang)
+        if detected in ("ja", "en") and _has_missing_trans(lrc_texts, trans_map):
+            missing_txts = _missing_trans_lines(lrc_texts, trans_map)
+            fetched = _fetch_missing_translations(
+                audio_path, total, query, netease_id=netease_id, target_lines=missing_txts
+            )
+            if _has_any_trans(fetched):
+                trans_map = _merge_trans_maps(trans_map, fetched)
+                note += " | 自动补全中文译文"
         emit(6, "输出并校验", f"{len(lrc.lines)} 行")
         tr_cnt = _attach_translations(lrc, trans_map)
         if tr_cnt:
@@ -632,17 +790,21 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
             note += f" | 歌词语言自动识别为 {detected}"
             lang = detected
     else:
+        orig_ref_lines = list(lines)
         trans_map = _extract_trans_map(ref_path)
         detected = _detect_lyrics_lang(lines, lang)
         if detected != lang:
             note += f" | 歌词语言自动识别为 {detected}"
             lang = detected
-        # 外语歌曲（日文/英文）如果本地参考 LRC 没有中文译文，自动去网易云拉取 tlyric 补全
-        if lang in ("ja", "en") and not _has_any_trans(trans_map):
-            fetched = _fetch_missing_translations(audio_path, total, query)
+        # 外语歌曲（日文/英文）如果本地参考 LRC 缺失（或部分缺失）中文译文，自动拉取补全缺失行
+        if lang in ("ja", "en") and _has_missing_trans(lines, trans_map):
+            missing_txts = _missing_trans_lines(lines, trans_map)
+            fetched = _fetch_missing_translations(
+                audio_path, total, query, netease_id=netease_id, target_lines=missing_txts
+            )
             if _has_any_trans(fetched):
-                trans_map = fetched
-                note += " | 自动补全网易云中文译文"
+                trans_map = _merge_trans_maps(trans_map, fetched)
+                note += " | 自动补全中文译文"
 
         emit(2, "确定每句位置", f"{len(lines)} 行" + (" · 强制 ASR 重定位" if ignore_ref_times else ""))
         if ref_path and not ignore_ref_times:
@@ -771,7 +933,7 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
         raise RuntimeError(f"逐字对齐未产出有效歌词行（lang={lang}），已中止以免写入空 LRC")
 
     emit(6, "输出并校验", f"{len(lrc.lines)} 行")
-    tr_cnt = _attach_translations(lrc, trans_map)
+    tr_cnt = _attach_translations(lrc, trans_map, skipped=skipped, orig_lines=orig_ref_lines)
     if tr_cnt:
         note += f" | 保留译文 {tr_cnt} 行"
     # 顺手提取/补全专辑封面到缓存，供校对页背景展示

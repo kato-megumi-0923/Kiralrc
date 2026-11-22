@@ -1,9 +1,13 @@
 package app
 
 import (
+	"encoding/json"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,6 +275,146 @@ func TestPythonSubprocessEnvPassesAppleMusicToken(t *testing.T) {
 	}
 	if gotTok != "test-token-xyz" || gotSf != "us" {
 		t.Fatalf("expected token=test-token-xyz sf=us, got token=%q sf=%q", gotTok, gotSf)
+	}
+}
+
+func TestParseAITranslations(t *testing.T) {
+	// 1) 纯 JSON 数组
+	got, err := parseAITranslations(`["你在微笑", "晴空万里"]`, 2)
+	if err != nil || len(got) != 2 || got[0] != "你在微笑" || got[1] != "晴空万里" {
+		t.Fatalf("plain json array failed: got=%v err=%v", got, err)
+	}
+
+	// 2) 带 Markdown 代码块
+	md := "```json\n[\"第一句\", \"第二句\"]\n```"
+	got, err = parseAITranslations(md, 2)
+	if err != nil || got[0] != "第一句" || got[1] != "第二句" {
+		t.Fatalf("markdown fenced json failed: got=%v err=%v", got, err)
+	}
+
+	// 3) 对象包裹格式（translations / lines）
+	got, err = parseAITranslations(`{"translations": ["A", "B"]}`, 2)
+	if err != nil || got[0] != "A" || got[1] != "B" {
+		t.Fatalf("wrapped translations failed: got=%v err=%v", got, err)
+	}
+	got, err = parseAITranslations(`{"lines": ["C", "D"]}`, 2)
+	if err != nil || got[0] != "C" || got[1] != "D" {
+		t.Fatalf("wrapped lines failed: got=%v err=%v", got, err)
+	}
+
+	// 4) 行数不匹配必须报错拦截
+	if _, err := parseAITranslations(`["只有一行"]`, 2); err == nil {
+		t.Fatalf("expected error on line count mismatch, got nil")
+	}
+}
+
+func TestTranslateCurrentLyricsMockServer(t *testing.T) {
+	if got := aiChatCompletionsURL("https://api.deepseek.com/v1/"); got != "https://api.deepseek.com/v1/chat/completions" {
+		t.Fatalf("unexpected url: %s", got)
+	}
+	if got := aiChatCompletionsURL("https://api.deepseek.com/v1/chat/completions"); got != "https://api.deepseek.com/v1/chat/completions" {
+		t.Fatalf("unexpected url: %s", got)
+	}
+
+	var gotAuth, gotPath string
+	var gotReq aiChatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Errorf("decode request failed: %v", err)
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "```json\n[\"你露出微笑\", \"今天天气放晴了\"]\n```"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := newApp()
+	a.edFile = "晴る.lrc"
+	a.edMetas = []string{"[ti:晴る]", "[ar:ヨルシカ]"}
+	a.edLines = []lyricLine{
+		{Index: 1, Start: 1.0, End: 3.0, Text: "君は笑う"},
+		{Index: 2, Start: 3.5, End: 6.0, Text: "空が晴れる"},
+	}
+
+	if !a.editorNeedsTranslation() {
+		t.Fatalf("expected Japanese lyrics to need translation")
+	}
+
+	// 未配置时拦截并提示
+	if err := a.translateCurrentLyricsSync(srv.Client()); err == nil {
+		t.Fatalf("expected error when AI config is empty")
+	}
+	if !strings.Contains(a.toast, "设置") {
+		t.Fatalf("expected settings toast, got %q", a.toast)
+	}
+
+	a.setAIBaseURL = srv.URL + "/v1"
+	a.setAIModel = "deepseek-chat"
+	a.setAIAPIKey = "sk-test-123"
+	a.edModified = false
+
+	if err := a.translateCurrentLyricsSync(srv.Client()); err != nil {
+		t.Fatalf("translateCurrentLyricsSync failed: %v", err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("expected path /v1/chat/completions, got %q", gotPath)
+	}
+	if gotAuth != "Bearer sk-test-123" {
+		t.Fatalf("expected Bearer auth header, got %q", gotAuth)
+	}
+	if gotReq.Model != "deepseek-chat" || gotReq.Temperature != 0.3 || len(gotReq.Messages) != 2 {
+		t.Fatalf("unexpected request payload: %+v", gotReq)
+	}
+	userMsg := gotReq.Messages[1].Content
+	if !strings.Contains(userMsg, "晴る") || !strings.Contains(userMsg, "ヨルシカ") ||
+		!strings.Contains(userMsg, "1. 君は笑う") || !strings.Contains(userMsg, "2. 空が晴れる") {
+		t.Fatalf("user prompt missing song meta or full lyrics: %q", userMsg)
+	}
+	if a.edLines[0].Translation != "你露出微笑" || a.edLines[1].Translation != "今天天气放晴了" {
+		t.Fatalf("translations not filled back: %+v", a.edLines)
+	}
+	if !a.edModified {
+		t.Fatalf("expected edModified=true after translation")
+	}
+
+	// 中文歌应隐藏翻译按钮
+	a.edLines = []lyricLine{{Index: 1, Text: "故事的小黄花"}, {Index: 2, Text: "从出生那年就飘着"}}
+	if a.editorNeedsTranslation() {
+		t.Fatalf("expected Chinese lyrics to hide translation button")
+	}
+}
+
+func TestProtectUnprotectSecret(t *testing.T) {
+	plain := "sk-live-super-secret-key-987654321"
+	enc, err := protectSecret(plain)
+	if err != nil {
+		t.Fatalf("protectSecret failed: %v", err)
+	}
+	if !strings.HasPrefix(enc, "dpapi:") {
+		t.Fatalf("expected dpapi: prefix, got %q", enc)
+	}
+	if strings.Contains(enc, plain) || strings.Contains(enc, "super-secret") {
+		t.Fatalf("encrypted output leaked plaintext: %q", enc)
+	}
+	got, migrate, err := unprotectSecret(enc)
+	if err != nil {
+		t.Fatalf("unprotectSecret failed: %v", err)
+	}
+	if migrate || got != plain {
+		t.Fatalf("expected (%q, false), got (%q, %v)", plain, got, migrate)
+	}
+	if _, _, err := unprotectSecret("dpapi:not-valid-cipher!!!"); err == nil {
+		t.Fatalf("expected error on tampered ciphertext")
+	}
+	if got := maskAPIKey("sk-81a94999999999ac49"); got != "sk-81a94****ac49" {
+		t.Fatalf("unexpected maskAPIKey: %q", got)
 	}
 }
 

@@ -113,6 +113,63 @@ func (a *app) view(c *ui.Context) {
 					}
 				}
 			})
+
+			// Global floating toast banner (renders any a.toast across all pages, auto-dismisses after 4s)
+			if a.toast != a.toastLast {
+				a.toastLast = a.toast
+				a.toastSeq++
+				if a.toast != "" && a.win != nil {
+					seq := a.toastSeq
+					time.AfterFunc(4500*time.Millisecond, func() {
+						a.post(func() {
+							if a.toastSeq == seq {
+								a.toast = ""
+								a.toastLast = ""
+							}
+						})
+					})
+				}
+			}
+			if a.toast != "" {
+				wrap := ui.Row(c.Key("global-toast-wrap")).Absolute().Top(54).Left(0).Right(0).AlignItems(ui.Center).PassThrough()
+				wrap.Children(func() {
+					ui.Box(c).Grow(1).PassThrough()
+					pill := ui.Row(c.Key("global-toast")).Padding(9, 14, 9, 14).Gap(10).Radius(12).AlignItems(ui.Center).Background(p.raised)
+					pill.Draw(func(pt *ui.Painter, r ui.Rect) {
+						pt.Shadow(r, 12, 0, 6, 18, 0, p.cardShade)
+						pt.Stroke(r, p.accent.Alpha(0.35), 12, 1)
+					})
+					pill.Children(func() {
+						ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Shrink(0)
+						ui.Text(c, a.toast).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine()
+						if a.page != pageSettings && strings.Contains(a.toast, "设置") {
+							goBtn := ui.ButtonBase(c.Key("toast-go-settings")).Height(24).PaddingX(10).Radius(999).Center().
+								Background(p.accent).Label("去设置").FocusRing(false)
+							goBtn.Children(func() {
+								ui.Text(c, "去设置").FontSize(11.5).FontWeight(700).TextColor(p.onAccent).SingleLine()
+							})
+							if goBtn.Clicked() {
+								a.toast = ""
+								a.toastLast = ""
+								a.navigate(pageSettings, 1)
+							}
+						}
+						closeBtn := ui.ButtonBase(c.Key("toast-close")).Size(20, 20).Radius(999).Center().
+							Label("关闭提示").FocusRing(false)
+						if closeBtn.Hovered() {
+							closeBtn.Background(p.hover)
+						}
+						closeBtn.Children(func() {
+							ui.Icon(c, iconX).Size(12, 12).TextColor(p.muted)
+						})
+						if closeBtn.Clicked() {
+							a.toast = ""
+							a.toastLast = ""
+						}
+					})
+					ui.Box(c).Grow(1).PassThrough()
+				})
+			}
 		})
 	})
 }
@@ -1787,8 +1844,41 @@ func (a *app) viewEditor(c *ui.Context) {
 				pt.Fill(ui.Rect{X: r.X + r.W - 1, Y: r.Y, W: 1, H: r.H}, p.hairline, 0)
 			})
 			left.Children(func() {
-				ui.Row(c).Padding(4, 8, 8, 8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Padding(4, 8, 8, 8).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "歌词行").FontSize(13).FontWeight(700).Grow(1)
+					if a.editorNeedsTranslation() {
+						if a.edTranslating {
+							statusPill(c, "翻译中…", p.accent.Alpha(0.14), p.accent)
+						} else {
+							bg, fg := p.accent.Alpha(0.14), p.accent
+							if a.editorHasTranslation() {
+								bg, fg = p.surface2, p.muted
+							}
+							aiBtn := ui.ButtonBase(c.Key("ed-ai-translate")).Height(22).PaddingX(9).Radius(999).Center().
+								Label("AI 翻译歌词").FocusRing(false)
+							fill := bg
+							if aiBtn.Hovered() {
+								if a.editorHasTranslation() {
+									fill = p.hover
+									fg = p.text
+								} else {
+									fill = p.accent.Alpha(0.22)
+								}
+							}
+							aiBtn.Background(aiBtn.AnimateColor("bg", fill, ui.Animation{Duration: 120 * time.Millisecond}))
+							pose := ui.Pose{}
+							if aiBtn.Pressed() {
+								pose.Scale = 0.94
+							}
+							aiBtn.AnimatePose(pose, ui.Snappy)
+							aiBtn.Children(func() {
+								ui.Text(c, "翻译").FontSize(11.5).FontWeight(700).TextColor(fg).SingleLine()
+							})
+							if aiBtn.Clicked() {
+								a.translateCurrentLyrics()
+							}
+						}
+					}
 					ui.Text(c, fmt.Sprintf("%d 行", len(a.edLines))).FontSize(11.5).TextColor(p.muted)
 				})
 				lsc := ui.Scroll(c.Key("ed-line-scroll")).TrackScroll(&a.edLineScroll).Grow(1).FillWidth()
@@ -2897,6 +2987,242 @@ func (a *app) viewSettings(c *ui.Context) {
 								a.setAppleToken = ""
 								a.savePrefs()
 								a.toast = "已清空 Apple Music Token"
+							}
+						}
+					})
+				})
+				ui.Column(c.Key("set-ai-row")).FillWidth().Padding(10, 0, 10, 0).Gap(8).Children(func() {
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Column(c).Grow(1).Gap(1).Children(func() {
+							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "AI 歌词翻译（OpenAI 兼容）").FontSize(13.5).FontWeight(600)
+								if a.aiTranslateConfigured() {
+									statusPill(c, "已启用", p.okBg, p.ok)
+								} else {
+									statusPill(c, "未配置", p.surface2, p.muted)
+								}
+							})
+							ui.Text(c, "在编辑页一键整首翻译日/英/韩等外语歌词，支持 DeepSeek、OpenAI 及各类兼容中转接口").FontSize(12).TextColor(p.muted)
+						})
+					})
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
+						// Left column: Base URL input + aligned dropdown
+						ui.Column(c.Key("set-ai-url-col")).Grow(3).MinWidth(0).Gap(4).Children(func() {
+							prevURL := a.setAIBaseURL
+							urlBox := ui.Row(c).FillWidth().Padding(5, 6, 5, 10).Gap(6).Radius(10).AlignItems(ui.Center).Background(p.bg)
+							urlBox.Draw(func(pt *ui.Painter, r ui.Rect) {
+								col := p.hairline
+								if a.setAIURLDropOpen {
+									col = p.accent.Alpha(0.55)
+								}
+								pt.Stroke(r, col, 10, 1)
+							})
+							urlBox.Children(func() {
+								ui.TextInputBase(c.Key("set-ai-url"), &a.setAIBaseURL).Grow(1).MinWidth(0).Height(24).
+									FontSize(12).TextColor(p.text).Background(ui.Transparent).
+									Placeholder("Base URL，可下拉选择预设或自定义").FocusRing(false)
+								urlLbl := "预设 ▾"
+								if mp := matchAIProviderPreset(a.setAIBaseURL); mp != nil {
+									urlLbl = mp.Name + " ▾"
+								}
+								if a.setAIURLDropOpen {
+									urlLbl = strings.TrimSuffix(urlLbl, "▾") + "▴"
+								}
+								dropBtn := ui.ButtonBase(c.Key("set-ai-url-drop")).Height(24).PaddingX(8).Radius(7).Center().
+									Background(p.surface2).Label("选择服务商预设").FocusRing(false)
+								dropBtn.Children(func() {
+									ui.Text(c, urlLbl).FontSize(11.5).FontWeight(600).TextColor(p.text).SingleLine()
+								})
+								if dropBtn.Clicked() {
+									a.setAIURLDropOpen = !a.setAIURLDropOpen
+									if a.setAIURLDropOpen {
+										a.setAIModelDropOpen = false
+									}
+								}
+							})
+							if a.setAIBaseURL != prevURL {
+								a.savePrefs()
+							}
+							if a.setAIURLDropOpen {
+								dropCard := ui.Column(c.Key("set-ai-url-menu")).FillWidth().Padding(5, 5, 5, 5).Gap(2).Radius(10).Background(p.bg)
+								dropCard.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.accent.Alpha(0.35), 10, 1) })
+								dropCard.Children(func() {
+									curNorm := strings.TrimRight(strings.ToLower(strings.TrimSpace(a.setAIBaseURL)), "/")
+									for pi, preset := range aiProviderPresets {
+										pr := preset
+										selected := strings.TrimRight(strings.ToLower(pr.BaseURL), "/") == curNorm
+										item := ui.ButtonBase(c.Key(fmt.Sprintf("ai-pr-%d", pi))).FillWidth().Height(30).PaddingX(9).Gap(8).Radius(7).
+											AlignItems(ui.Center).Label(pr.Name).FocusRing(false)
+										if selected {
+											item.Background(p.accent.Alpha(0.12))
+										} else if item.Hovered() {
+											item.Background(p.hover)
+										}
+										item.Children(func() {
+											fg := p.text
+											if selected {
+												fg = p.accent
+											}
+											ui.Text(c, pr.Name).Width(116).FontSize(12).FontWeight(700).TextColor(fg).SingleLine()
+											ui.Text(c, pr.BaseURL).Grow(1).MinWidth(0).FontSize(11).TextColor(p.muted).SingleLine()
+											if selected {
+												ui.Icon(c, iconCheck).Size(13, 13).TextColor(p.accent)
+											}
+										})
+										if item.Clicked() {
+											a.setAIBaseURL = pr.BaseURL
+											if len(pr.Models) > 0 {
+												a.setAIModel = pr.Models[0]
+											}
+											a.setAIURLDropOpen = false
+											a.savePrefs()
+										}
+									}
+								})
+							}
+						})
+
+						// Right column: Model input + aligned dropdown
+						ui.Column(c.Key("set-ai-model-col")).Grow(2).MinWidth(0).Gap(4).Children(func() {
+							prevModel := a.setAIModel
+							modelBox := ui.Row(c).FillWidth().Padding(5, 6, 5, 10).Gap(6).Radius(10).AlignItems(ui.Center).Background(p.bg)
+							modelBox.Draw(func(pt *ui.Painter, r ui.Rect) {
+								col := p.hairline
+								if a.setAIModelDropOpen {
+									col = p.accent.Alpha(0.55)
+								}
+								pt.Stroke(r, col, 10, 1)
+							})
+							modelBox.Children(func() {
+								ui.TextInputBase(c.Key("set-ai-model"), &a.setAIModel).Grow(1).MinWidth(0).Height(24).
+									FontSize(12).TextColor(p.text).Background(ui.Transparent).
+									Placeholder("模型，可下拉选择或自定义").FocusRing(false)
+								mLbl := "模型 ▾"
+								if a.setAIModelDropOpen {
+									mLbl = "模型 ▴"
+								}
+								mDropBtn := ui.ButtonBase(c.Key("set-ai-model-drop")).Height(24).PaddingX(8).Radius(7).Center().
+									Background(p.surface2).Label("选择推荐模型").FocusRing(false)
+								mDropBtn.Children(func() {
+									ui.Text(c, mLbl).FontSize(11.5).FontWeight(600).TextColor(p.text).SingleLine()
+								})
+								if mDropBtn.Clicked() {
+									a.setAIModelDropOpen = !a.setAIModelDropOpen
+									if a.setAIModelDropOpen {
+										a.setAIURLDropOpen = false
+									}
+								}
+							})
+							if a.setAIModel != prevModel {
+								a.savePrefs()
+							}
+							if a.setAIModelDropOpen {
+								models := aiModelSuggestions(a.setAIBaseURL)
+								dropCard := ui.Column(c.Key("set-ai-model-menu")).FillWidth().Padding(5, 5, 5, 5).Gap(2).Radius(10).Background(p.bg)
+								dropCard.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.accent.Alpha(0.35), 10, 1) })
+								dropCard.Children(func() {
+									curM := strings.TrimSpace(a.setAIModel)
+									for mi, modelName := range models {
+										mn := modelName
+										selected := mn == curM
+										item := ui.ButtonBase(c.Key(fmt.Sprintf("ai-md-%d", mi))).FillWidth().Height(28).PaddingX(9).Gap(8).Radius(7).
+											AlignItems(ui.Center).Label(mn).FocusRing(false)
+										if selected {
+											item.Background(p.accent.Alpha(0.12))
+										} else if item.Hovered() {
+											item.Background(p.hover)
+										}
+										item.Children(func() {
+											fg := p.text
+											if selected {
+												fg = p.accent
+											}
+											ui.Text(c, mn).Grow(1).MinWidth(0).FontSize(12).FontWeight(600).TextColor(fg).SingleLine()
+											if selected {
+												ui.Icon(c, iconCheck).Size(13, 13).TextColor(p.accent)
+											}
+										})
+										if item.Clicked() {
+											a.setAIModel = mn
+											a.setAIModelDropOpen = false
+											a.savePrefs()
+										}
+									}
+								})
+							}
+						})
+					})
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						hasKey := strings.TrimSpace(a.setAIAPIKey) != ""
+						if hasKey && !a.setAIKeyEditing {
+							keyBox := ui.Row(c).Grow(1).MinWidth(0).Height(36).Padding(0, 10, 0, 12).Gap(8).Radius(10).AlignItems(ui.Center).Background(p.bg)
+							keyBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 10, 1) })
+							keyBox.Children(func() {
+								ui.Text(c, maskAPIKey(a.setAIAPIKey)).Grow(1).MinWidth(0).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine()
+								statusPill(c, "已加密", p.okBg, p.ok)
+							})
+							if pillButton(c.Key("set-ai-edit"), nil, "更换", p.surface2, p.text).Clicked() {
+								a.setAIKeyDraft = ""
+								a.setAIKeyEditing = true
+							}
+							if pillButton(c.Key("set-ai-paste"), nil, "从剪贴板粘贴", p.surface2, p.text).Clicked() {
+								if txt := strings.TrimSpace(readClipboardText()); txt != "" {
+									a.setAIAPIKey = txt
+									a.setAIKeyEditing = false
+									a.setAIKeyDraft = ""
+									a.savePrefs()
+									a.toast = "已加密保存 AI API Key（" + maskAPIKey(txt) + "）"
+								} else {
+									a.toast = "剪贴板为空"
+								}
+							}
+							if pillButton(c.Key("set-ai-clear"), nil, "清空", p.surface2, p.muted).Clicked() {
+								a.setAIAPIKey = ""
+								a.setAIKeyEditing = false
+								a.setAIKeyDraft = ""
+								a.savePrefs()
+								a.toast = "已清空 AI API Key"
+							}
+						} else {
+							keyBox := ui.Row(c).Grow(1).MinWidth(0).Padding(7, 10, 7, 10).Radius(10).AlignItems(ui.Center).Background(p.bg)
+							keyBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 10, 1) })
+							keyBox.Children(func() {
+								in := ui.TextInputBase(c.Key("set-ai-key"), &a.setAIKeyDraft).Grow(1).MinWidth(0).Height(22).
+									FontSize(12).TextColor(p.text).Background(ui.Transparent).Password().
+									Placeholder("输入或粘贴 API Key（保存后脱敏显示并经 Windows DPAPI 全加密）").FocusRing(false)
+								if in.Submitted() && strings.TrimSpace(a.setAIKeyDraft) != "" {
+									a.setAIAPIKey = strings.TrimSpace(a.setAIKeyDraft)
+									a.setAIKeyDraft = ""
+									a.setAIKeyEditing = false
+									a.savePrefs()
+									a.toast = "已加密保存 AI API Key（" + maskAPIKey(a.setAIAPIKey) + "）"
+								}
+							})
+							if strings.TrimSpace(a.setAIKeyDraft) != "" {
+								if pillButton(c.Key("set-ai-save"), nil, "保存", p.accent, p.onAccent).Clicked() {
+									a.setAIAPIKey = strings.TrimSpace(a.setAIKeyDraft)
+									a.setAIKeyDraft = ""
+									a.setAIKeyEditing = false
+									a.savePrefs()
+									a.toast = "已加密保存 AI API Key（" + maskAPIKey(a.setAIAPIKey) + "）"
+								}
+							}
+							if pillButton(c.Key("set-ai-paste"), nil, "从剪贴板粘贴", p.surface2, p.text).Clicked() {
+								if txt := strings.TrimSpace(readClipboardText()); txt != "" {
+									a.setAIAPIKey = txt
+									a.setAIKeyDraft = ""
+									a.setAIKeyEditing = false
+									a.savePrefs()
+									a.toast = "已加密保存 AI API Key（" + maskAPIKey(txt) + "）"
+								} else {
+									a.toast = "剪贴板为空"
+								}
+							}
+							if a.setAIKeyEditing {
+								if pillButton(c.Key("set-ai-cancel"), nil, "取消", p.surface2, p.muted).Clicked() {
+									a.setAIKeyDraft = ""
+									a.setAIKeyEditing = false
+								}
 							}
 						}
 					})
