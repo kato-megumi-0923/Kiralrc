@@ -74,3 +74,55 @@ def test_a_placeholder_is_not_lyrics():
     assert sources.PLACEHOLDER.search("纯音乐，请欣赏")
     assert sources.PLACEHOLDER.search("此歌曲为没有填词的纯音乐，请您欣赏")
     assert not sources.PLACEHOLDER.search("好想好想和你在一起")
+
+
+def test_a_line_only_source_does_not_stop_the_search(monkeypatch):
+    """网易云只给逐行时，QQ 的逐字还有机会。"""
+    calls = []
+    monkeypatch.setattr(sources, "from_netease", lambda sid, timeout=20: calls.append("netease") or
+                        sources.WordLyric(source="网易云", tag="NeteaseCloud",
+                                          lines=[sources.WordLine(1.0, "整行", [], 2.0)], timed=False))
+    monkeypatch.setattr(sources, "from_qq", lambda name, artist="", duration=None: calls.append("qq") or
+                        sources.WordLyric(source="QQ音乐", tag="QQMusic",
+                                          lines=[sources.WordLine(1.0, "逐字", [("逐", 1.0), ("字", 1.2)], 1.4)],
+                                          timed=True))
+    hit = sources.fetch(1, name="歌", pause=0)
+    assert hit.source == "QQ音乐" and hit.timed
+    assert calls == ["netease", "qq"]
+
+
+def test_a_line_only_hit_is_kept_when_nothing_better(monkeypatch):
+    monkeypatch.setattr(sources, "from_netease", lambda sid, timeout=20:
+                        sources.WordLyric(source="网易云", tag="NeteaseCloud",
+                                          lines=[sources.WordLine(1.0, "整行", [], 2.0)], timed=False))
+    monkeypatch.setattr(sources, "from_qq", lambda *a, **k: None)
+    monkeypatch.setattr(sources, "from_amll", lambda *a, **k: None)
+    monkeypatch.setattr(sources, "from_kugou", lambda *a, **k: None)
+    hit = sources.fetch(1, name="歌", pause=0)
+    assert hit and not hit.timed
+
+
+def test_a_line_only_source_does_not_stop_the_search(monkeypatch):
+    """网易云只给逐行时，QQ 的逐字还有机会。"""
+    calls = []
+    monkeypatch.setattr(sources, "from_netease", lambda sid, timeout=20: calls.append("netease") or
+                        sources.WordLyric(source="网易云", tag="NeteaseCloud",
+                                          lines=[sources.WordLine(1.0, "整行", [], 2.0)], timed=False))
+    monkeypatch.setattr(sources, "from_qq", lambda name, artist="", duration=None: calls.append("qq") or
+                        sources.WordLyric(source="QQ音乐", tag="QQMusic",
+                                          lines=[sources.WordLine(1.0, "逐字", [("逐", 1.0), ("字", 1.2)], 1.4)],
+                                          timed=True))
+    hit = sources.fetch(1, name="歌", pause=0)
+    assert hit.source == "QQ音乐" and hit.timed
+    assert calls == ["netease", "qq"]
+
+
+def test_a_line_only_hit_is_kept_when_nothing_better(monkeypatch):
+    monkeypatch.setattr(sources, "from_netease", lambda sid, timeout=20:
+                        sources.WordLyric(source="网易云", tag="NeteaseCloud",
+                                          lines=[sources.WordLine(1.0, "整行", [], 2.0)], timed=False))
+    monkeypatch.setattr(sources, "from_qq", lambda *a, **k: None)
+    monkeypatch.setattr(sources, "from_amll", lambda *a, **k: None)
+    monkeypatch.setattr(sources, "from_kugou", lambda *a, **k: None)
+    hit = sources.fetch(1, name="歌", pause=0)
+    assert hit and not hit.timed

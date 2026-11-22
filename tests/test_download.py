@@ -148,3 +148,53 @@ def test_a_file_without_any_mark_is_word_not_aligned(tmp_path):
     (tmp_path / "f.lrc").write_text(
         "[00:01.000]<00:01.000>字<00:01.500>幕<00:02.000>\n", encoding="utf-8")
     assert download.lrc_kind(audio) == "word"
+
+
+def test_an_empty_path_list_does_nothing(tmp_path, monkeypatch):
+    """空清单是一首都不做，不能退回扫当前目录。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "近处的歌.mp3").write_bytes(b"")
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: None)
+    counts = download.run("", paths=[])
+    assert counts.all == 0 and counts.done == 0
+
+
+def test_platform_name_alone_does_not_make_it_official(tmp_path, monkeypatch):
+    """带 [by:NeteaseCloud] 但只有整行时间戳的，还是逐行，能继续升级。"""
+    audio = tmp_path / "g.mp3"
+    audio.write_bytes(b"")
+    (tmp_path / "g.lrc").write_text(
+        "[by:NeteaseCloud]\n[00:01.00]第一句\n[00:05.00]第二句\n", encoding="utf-8")
+    assert download.lrc_kind(audio) == "line"
+
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 123)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="网易云", tag="NeteaseCloud",
+        lines=[sources.WordLine(1.0, "第一句", [("第", 1.0), ("一", 1.2), ("句", 1.4)], 1.8)],
+        timed=True))
+    assert download.download_one(audio).status == "upgraded"
+
+
+def test_an_empty_path_list_does_nothing(tmp_path, monkeypatch):
+    """空清单是一首都不做，不能退回扫当前目录。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "近处的歌.mp3").write_bytes(b"")
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: None)
+    counts = download.run("", paths=[])
+    assert counts.all == 0 and counts.done == 0
+
+
+def test_platform_name_alone_does_not_make_it_official(tmp_path, monkeypatch):
+    """带 [by:NeteaseCloud] 但只有整行时间戳的，还是逐行，能继续升级。"""
+    audio = tmp_path / "g.mp3"
+    audio.write_bytes(b"")
+    (tmp_path / "g.lrc").write_text(
+        "[by:NeteaseCloud]\n[00:01.00]第一句\n[00:05.00]第二句\n", encoding="utf-8")
+    assert download.lrc_kind(audio) == "line"
+
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 123)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="网易云", tag="NeteaseCloud",
+        lines=[sources.WordLine(1.0, "第一句", [("第", 1.0), ("一", 1.2), ("句", 1.4)], 1.8)],
+        timed=True))
+    assert download.download_one(audio).status == "upgraded"

@@ -66,7 +66,8 @@ def lrc_kind(path: Path) -> str:
     m = BY_RE.search(body)
     by = (m.group(1) if m else "").strip()
     if by in OFFICIAL:
-        return "official"
+        # 平台名只说明来自哪儿；没有字级标签就还是逐行，别当成已完成的逐字
+        return "official" if word else "line"
     if any(mark in by for mark in ALIGNED_MARKS):
         return "aligned"
     return "word" if word else "line"
@@ -154,7 +155,8 @@ def run(folder: str | Path, force: bool = False, jobs: int = 2,
         paths: list[str] | None = None) -> Counts:
     """批量下载歌词：一个目录（含子目录），或者给一份文件清单。"""
     root = Path(folder) if folder else Path(".")
-    if paths:
+    if paths is not None:
+        # 给了清单就只做清单里的；空清单是一首都不做，不能退回扫当前目录
         files = [Path(p) for p in paths if Path(p).suffix.lower() in
                  (".mp3", ".flac", ".wav", ".m4a", ".aac", ".dsf", ".dff")]
     elif root.is_file():

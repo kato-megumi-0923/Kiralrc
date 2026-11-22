@@ -182,6 +182,8 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
     网易云只认 ID（它搜索不可靠，ID 我们已经能从标签里拿到）。
     """
     order = sources or ("netease", "qq", "amll", "kugou")
+    # 逐行只是兜底：别的平台也许有逐字，别被排在前面的一档挡住
+    fallback: WordLyric | None = None
     for which in order:
         try:
             hit = None
@@ -194,7 +196,9 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
             elif which == "kugou" and name:
                 hit = from_kugou(name, artist, duration)
             if hit and len(hit):
-                return hit
+                if hit.timed:
+                    return hit
+                fallback = fallback or hit
         except RateLimited:
             raise
         except Exception:
@@ -202,7 +206,7 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
         finally:
             if pause:
                 time.sleep(pause)
-    return None
+    return fallback
 
 
 PLACEHOLDER = re.compile(r"纯音乐|請欣賞|请欣赏|暂无歌词|没有歌词|此歌曲为没有填词的纯音乐", re.I)

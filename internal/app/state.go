@@ -1000,12 +1000,11 @@ func (a *app) pythonSubprocessEnv(extra ...string) []string {
 
 // pythonCmd builds `python -m kiralrc <args>` with the interpreter this app found.
 func (a *app) pythonCmd(args ...string) *exec.Cmd {
-	py := "python"
-	wb := `C://Users//yxljs//AppData//Local//Programs//WorkBuddy//resources//vendor//python//python.exe`
-	if _, err := os.Stat(wb); err == nil {
-		py = wb
+	cmd := newHiddenCmd(getActivePythonPath(), append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)...)
+	// 工作目录定在程序根目录，`-m kiralrc` 才找得到包
+	if root := appRootDir(); root != "" {
+		cmd.Dir = root
 	}
-	cmd := newHiddenCmd(py, append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)...)
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 	return cmd
 }
