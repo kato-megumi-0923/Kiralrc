@@ -219,15 +219,14 @@ func (a *app) viewSidebar(c *ui.Context) {
 			})
 			ui.Text(c, "Kiralrc").FontSize(15.5).FontWeight(800).SingleLine()
 			ui.Box(c).Grow(1)
-			// BETA 胶囊，右上角挂个上标样的版本号
-			holder := ui.Box(c)
-			holder.Children(func() {
+			// BETA 胶囊，版本号在右边略高一点
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
 				beta := ui.Row(c).Padding(7, 7, 6, 7).Radius(999).Background(p.surface2)
 				beta.Children(func() {
 					ui.Text(c, "BETA").FontSize(9.5).FontWeight(800).TextColor(p.muted).SingleLine()
 				})
-				ui.Text(c, "v"+appVersion).Absolute().Right(1).Top(-7).FontSize(8).
-					FontWeight(700).TextColor(p.faint).SingleLine()
+				ui.Text(c, "v"+appVersion).FontSize(8).FontWeight(700).TextColor(p.faint).
+					Margin(-9, 0, 0, 2).SingleLine()
 			})
 		})
 
