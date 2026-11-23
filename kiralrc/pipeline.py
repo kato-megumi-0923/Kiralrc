@@ -104,18 +104,9 @@ def resolve_reference(audio_path: Path, ref: Path | None,
         return Path(ref), lines, f"参考文件 {Path(ref).name}"
 
     # 同目录已有 lrc（多半是整行时间）→ 直接当参考，省一次搜索
-    # 若当前 .lrc 已经是逐字 LRC 且存在最初原版 .lrc.bak，则优先回读 .lrc.bak，
-    # 避免多次重跑时因切片缓冲导致行首时间戳滚雪球漂移。
     sibling = audio_path.with_suffix(".lrc")
-    sibling_bak = sibling.with_name(sibling.name + ".bak")
     if sibling.exists():
         body = sibling.read_text(encoding="utf-8-sig")
-        if sibling_bak.exists() and re.search(r"<\d{2}:\d{2}\.\d{2,3}>", body):
-            bak_body = sibling_bak.read_text(encoding="utf-8-sig")
-            bak_stamped = tx.lines_with_times(bak_body)
-            bak_lines = [t for _, t in bak_stamped] if len(bak_stamped) >= 6 else tx.ref_lines(sibling_bak)
-            if len(bak_lines) >= 4:
-                return sibling_bak, bak_lines, f"原始备份 {sibling_bak.name}"
         stamped = tx.lines_with_times(body)
         lines = [t for _, t in stamped] if len(stamped) >= 6 else tx.ref_lines(sibling)
         if len(lines) >= 4:          # 少于 4 行多半是「纯音乐，请欣赏」这类占位
@@ -730,12 +721,10 @@ def make_lrc(audio_path: str | Path, ref: str | Path | None = None, lang: str = 
     if explicit_ref and not (ignore_ref_times or ignore_ref_ends) and _is_enhanced_ref(explicit_ref):
         trans_map = _extract_trans_map(explicit_ref)
         sibling = audio_path.with_suffix(".lrc")
-        sibling_bak = sibling.with_name(sibling.name + ".bak")
-        for cand in (sibling_bak, sibling):
-            if cand.exists() and cand.resolve() != explicit_ref.resolve():
-                cand_map = _extract_trans_map(cand)
-                if _has_any_trans(cand_map):
-                    trans_map = _merge_trans_maps(trans_map, cand_map)
+        if sibling.exists() and sibling.resolve() != explicit_ref.resolve():
+            cand_map = _extract_trans_map(sibling)
+            if _has_any_trans(cand_map):
+                trans_map = _merge_trans_maps(trans_map, cand_map)
         emit(3, "demucs 人声分离", "htdemucs")
         vocals = _vocals(audio_path, cache)
         emit(4, "主唱检测", vocals.name)
@@ -1068,16 +1057,6 @@ def scan_library(folder: str | Path) -> list[dict]:
     return items
 
 
-def backup_lrc_once(path: str | Path) -> Path | None:
-    """首次覆盖已有 .lrc 前自动备份为 .lrc.bak（若已存在则不覆盖，永远保留最初原版）。"""
-    p = Path(path)
-    bak = p.with_name(p.name + ".bak")
-    if p.exists() and not bak.exists():
-        shutil.copy2(p, bak)
-        return bak
-    return None
-
-
 def batch_align(folder: str | Path, lang: str = "zh", jobs: int = 1,
                 skip_existing: bool = True, force_vocal: bool = False,
                 en_granularity: str | None = None,
@@ -1117,7 +1096,6 @@ def batch_align(folder: str | Path, lang: str = "zh", jobs: int = 1,
                 audio, ref=ref, lang=lang, ti=audio.stem,
                 force_vocal=force_vocal, en_granularity=en_granularity,
             )
-            backup_lrc_once(out)
             fmt.write(out, lrc)
             if on_song:
                 on_song(idx, total, audio, "done", note)

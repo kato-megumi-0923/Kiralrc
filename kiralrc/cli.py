@@ -48,7 +48,6 @@ def cmd_align(a) -> int:
         print(lrc.render())
         print(f"\n[来源] {note}\n[dry-run] 未写入 {out}")
         return 0
-    pipeline.backup_lrc_once(out)
     fmt.write(out, lrc)
     probs = fmt.validate_enhanced(out)
     print(f"[ok] {out}  {len(lrc.lines)} 行  | {note}")

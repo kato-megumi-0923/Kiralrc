@@ -74,7 +74,7 @@ def test_lrc_kind_tells_official_from_aligned(tmp_path):
     assert download.lrc_kind(audio) == "word"
 
 
-def test_official_replaces_aligned_but_keeps_a_backup(tmp_path, monkeypatch):
+def test_official_replaces_aligned_without_leaving_backup(tmp_path, monkeypatch):
     audio = tmp_path / "b.mp3"
     audio.write_bytes(b"")
     old = "[by:SOFA 歌声对齐]\n[00:01.000]<00:01.000>旧<00:01.500>的<00:02.000>\n"
@@ -90,8 +90,9 @@ def test_official_replaces_aligned_but_keeps_a_backup(tmp_path, monkeypatch):
     body = (tmp_path / "b.lrc").read_text(encoding="utf-8")
     assert "[by:NeteaseCloud]" in body
     assert "<00:01.000>新<00:01.400>的" in body
-    # 旧文件退到 .bak，没有真的丢
-    assert "SOFA" in (tmp_path / "b.lrc.bak").read_text(encoding="utf-8")
+    # 按约定不留备份：目录里只有 .lrc，没有 .bak
+    assert not (tmp_path / "b.lrc.bak").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["b.lrc", "b.mp3"]
 
 
 def test_an_official_file_is_left_alone(tmp_path, monkeypatch):

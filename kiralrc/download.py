@@ -2,7 +2,7 @@
 
 规则（跟 Cloudy 一致，官方优先）：
 - 已有官方逐字：跳过（同源不重下），除非 force；
-- 已有对齐逐字、下载到官方逐字：覆盖（旧文件留 .lrc.bak）；
+- 已有对齐逐字、下载到官方逐字：直接覆盖，不留备份；
 - 已有逐行、下载到逐字：升级；
 - 只有逐行可下：缺失时才写，不拿逐行盖逐行；
 - 一个源都没给：不写文件。
@@ -142,12 +142,8 @@ class Counts:
 
 
 def _write(path: Path, lrc: fmt.Lrc) -> None:
-    """写盘：先备份一次原文件，再用 LF 与三位小数写出。"""
-    from . import pipeline
-
+    """写盘：LF + 三位小数，直接覆盖（按约定不留备份）。"""
     target = path.with_suffix(".lrc")
-    if target.exists():
-        pipeline.backup_lrc_once(target)
     tmp = target.with_suffix(".lrc.tmp")
     fmt.write(tmp, lrc)
     os.replace(tmp, target)
