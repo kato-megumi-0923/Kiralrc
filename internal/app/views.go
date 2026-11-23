@@ -219,7 +219,11 @@ func (a *app) viewSidebar(c *ui.Context) {
 			})
 			ui.Text(c, "Kiralrc").FontSize(15.5).FontWeight(800).SingleLine()
 			ui.Box(c).Grow(1)
-			ui.Text(c, "逐字对齐").FontSize(11).FontWeight(600).TextColor(p.faint).SingleLine()
+			// BETA 用小胶囊标一下，别像版本号似的跟在名字后面
+			beta := ui.Row(c).Padding(7, 7, 6, 7).Radius(999).Background(p.surface2)
+			beta.Children(func() {
+				ui.Text(c, "BETA").FontSize(9.5).FontWeight(800).TextColor(p.muted).SingleLine()
+			})
 		})
 
 		// Real live search input (filters tracks in 曲库)
