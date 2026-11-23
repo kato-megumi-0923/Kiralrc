@@ -338,39 +338,91 @@ func (a *app) viewSeparate(c *ui.Context) {
 							a.exportStem(stemRow)
 						}
 					})
-					// 进度条：浅底 + 已播放段，竖线标出第一次出声的位置
+					// 进度条：可点可拖；竖线标出第一次出声的位置
 					ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-						bar := ui.Box(c).Grow(1).MinWidth(0).Height(4).Radius(999).Background(p.surface2)
-						bar.Draw(func(pt *ui.Painter, r ui.Rect) {
-							dur := stemRow.Dur
-							if dur <= 0 {
+						track := ui.Box(c).Grow(1).MinWidth(0).Height(14)
+						track.Draw(func(pt *ui.Painter, r ui.Rect) {
+							if stemRow.Dur <= 0 {
 								return
 							}
+							line := ui.Rect{X: r.X, Y: r.Y + (r.H-4)/2, W: r.W, H: 4}
+							pt.Fill(line, p.surface2, 999)
 							if playing {
 								pos, _ := a.player.Position()
 								if pos > 0 {
-									w := r.W * float32(pos/dur)
-									if w > r.W {
-										w = r.W
+									w := line.W * float32(pos/stemRow.Dur)
+									if w > line.W {
+										w = line.W
 									}
-									pt.Fill(ui.Rect{X: r.X, Y: r.Y, W: w, H: r.H}, p.accent, 999)
+									pt.Fill(ui.Rect{X: line.X, Y: line.Y, W: w, H: line.H}, p.accent, 999)
 								}
 							}
-							if !stemRow.Silent && stemRow.First < dur {
-								x := r.X + r.W*float32(stemRow.First/dur)
-								pt.Fill(ui.Rect{X: x - 1, Y: r.Y - 4, W: 2, H: r.H + 8}, p.warn, 1)
+							if !stemRow.Silent && stemRow.First < stemRow.Dur {
+								x := line.X + line.W*float32(stemRow.First/stemRow.Dur)
+								pt.Fill(ui.Rect{X: x - 1, Y: line.Y - 4, W: 2, H: line.H + 8}, p.warn, 1)
 							}
 						})
+						if x, _, over := track.PointerPosition(); over && track.Pressed() {
+							if w := track.Bounds().W; w > 0 {
+								a.seekStem(stemRow, float64(x/w))
+							}
+						}
 						label := "起声 " + clockOf(stemRow.First)
 						if stemRow.Silent {
 							label = "全程无声"
 						}
-						ui.Text(c, label).Shrink(0).FontSize(11).TextColor(p.muted)
+						jump := pillButton(c.Key("sep-first-"+stemRow.Name), nil, label, p.surface2, p.muted)
+						if !stemRow.Silent && jump.Clicked() {
+							// 略微提前一点，能听见第一个音起头
+							at := stemRow.First - 0.3
+							if at < 0 {
+								at = 0
+							}
+							a.seekStem(stemRow, at/stemRow.Dur)
+						}
 					})
 				})
 			}
 		})
 	})
+}
+
+// seekStem 按比例跳转：没加载就先加载，跳过去直接播。
+func (a *app) seekStem(stem sepStem, ratio float64) {
+	if a.player == nil || a.win == nil || stem.Dur <= 0 {
+		return
+	}
+	if ratio < 0 {
+		ratio = 0
+	} else if ratio > 1 {
+		ratio = 1
+	}
+	sec := ratio * stem.Dur
+	if a.sepPlaying != stem.Name {
+		a.sepPlaying = stem.Name
+		a.sepPaused = false
+		name := stem.Name
+		go func() {
+			if _, err := a.player.Load(stem.Path); err != nil {
+				a.post(func() {
+					a.sepPlaying = ""
+					a.toast = "加载失败：" + err.Error()
+				})
+				return
+			}
+			_ = a.player.Seek(sec)
+			_ = a.player.Play()
+			a.pollStem(name)
+		}()
+		return
+	}
+	_ = a.player.Seek(sec)
+	if a.sepPaused {
+		a.sepPaused = false
+		_ = a.player.Play()
+		a.pollStem(stem.Name)
+	}
+	a.win.Invalidate()
 }
 
 // previewStem 试听：同一行再点一次暂停，再点一次继续。
