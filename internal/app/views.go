@@ -689,15 +689,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 					AlignItems(ui.Center).Background(p.surface)
 				card.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 20, 1) })
 				card.Children(func() {
-					if a.libScanPhase == "covers" {
-						ui.Text(c, "正在读取专辑封面…").FontSize(17).FontWeight(700)
-						ui.Text(c, fmt.Sprintf("已解码 %d / %d 张封面（首次扫描会慢一些，之后走缓存）", a.libCoversDone, a.libScanAll)).
-							FontSize(13).TextColor(p.muted)
-					} else {
-						ui.Text(c, "正在读取本地音乐文件夹…").FontSize(17).FontWeight(700)
-						ui.Text(c, fmt.Sprintf("已扫描 %d / %d 首音频，正在分析 LRC 逐字标签并排除纯音乐 / OST / 伴奏", a.libScanDone, a.libScanAll)).
-							FontSize(13).TextColor(p.muted)
-					}
+					ui.Text(c, "正在读取本地音乐文件夹…").FontSize(17).FontWeight(700)
+					ui.Text(c, fmt.Sprintf("已扫描 %d / %d 首音频，正在分析 LRC 逐字标签并排除纯音乐 / OST / 伴奏", a.libScanDone, a.libScanAll)).
+						FontSize(13).TextColor(p.muted)
 				})
 				return
 			}
@@ -711,17 +705,20 @@ func (a *app) viewLibrary(c *ui.Context) {
 
 			ui.Row(c).AlignItems(ui.End).Gap(8).Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
-					trail := "上次扫描 " + a.libScanTime
-					if a.libScanning {
-						if a.libScanPhase == "covers" {
-							trail = fmt.Sprintf("正在读取封面… %d/%d", a.libCoversDone, a.libScanAll)
-						} else {
-							trail = fmt.Sprintf("正在刷新… %d/%d", a.libScanDone, a.libScanAll)
-						}
+					libTrail := strings.Join(a.libFolders, " · ")
+					if a.libScanTime != "" {
+						libTrail += " · 上次扫描 " + a.libScanTime
 					}
-					ui.Text(c, strings.Join(a.libFolders, " · ")+" · "+trail).FontSize(11.5).FontWeight(600).TextColor(p.muted)
+					ui.Text(c, libTrail).FontSize(11.5).FontWeight(600).TextColor(p.muted)
 					ui.Text(c, "曲库").FontSize(28).FontWeight(800)
 				})
+				if a.libScanning {
+					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+						winFiveDots(c, p.accent)
+						ui.Text(c, fmt.Sprintf("统计中 · 已加载 %d / %d", a.libScanDone, a.libScanAll)).
+							FontSize(11.5).FontWeight(600).TextColor(p.muted)
+					})
+				}
 				if pillButton(c.Key("lib-refresh-top"), iconRefresh, "刷新", p.surface2, p.text).Clicked() {
 					a.refreshLibrary()
 				}
@@ -776,7 +773,11 @@ func (a *app) viewLibrary(c *ui.Context) {
 						if pillButton(c.Key("hero-download"), iconDownload, dlLabel, white, ui.Hex("#1d1d1f")).Clicked() {
 							a.startDownloadLyrics()
 						}
-						if pillButton(c.Key("hero-batch"), iconPlay, fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly), ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
+						batchLabel := fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly)
+						if a.libScanning {
+							batchLabel = fmt.Sprintf("批量升级整行歌词（已加载 %d）", len(a.tracks))
+						}
+						if pillButton(c.Key("hero-batch"), iconPlay, batchLabel, ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
 							a.enqueueLineOnlyTracks()
 						}
 						if pillButton(c.Key("hero-folder"), iconFolder, "添加文件夹", ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
@@ -813,7 +814,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 					x := [3]float32{42, 22 - heroOut*3, 4 - heroOut*6}
 					y := [3]float32{12, 16, 20}
 					for i := min(2, len(a.tracks)-1); i >= 0; i-- {
-						if cover := a.tracks[i].Cover; cover != nil {
+						if cover, _ := a.lookupCover(a.tracks[i].FullPath); cover != nil {
 							size := float32(116 - 6*i)
 							ui.Image(c, cover).Absolute().Top(y[i]).Left(x[i]).Size(size, size).Radius(14).Fit(ui.Cover).PassThrough()
 						}
@@ -838,6 +839,11 @@ func (a *app) viewLibrary(c *ui.Context) {
 					{"upgrade", fmt.Sprintf("%d", st.LineOnly), "", "仅整行 LRC · 可直接升级逐字", iconNote, p.accent.Alpha(0.12), p.accent, 1},
 					{"nolyrics", fmt.Sprintf("%d", st.Missing), nfBadge, "无歌词 · 支持 ID / 手填 / ASR", iconWarn, p.warnBg, p.warn, 3},
 					{"inst", fmt.Sprintf("%d", st.InstTotal), "", fmt.Sprintf("已排除：纯音乐 %d · OST %d · 伴奏 %d", st.InstPure, st.InstOST, st.InstAccomp), iconWave, p.surface2, p.muted, 4},
+				}
+				if a.libScanning { // 数字还在长，标个「约」免得看着像在抽风
+					for i := range stats {
+						stats[i].n = "约 " + stats[i].n
+					}
 				}
 				for _, sItem := range stats {
 					s := sItem
@@ -1110,18 +1116,19 @@ func (a *app) viewLibrary(c *ui.Context) {
 				end := min(start+size, len(visible))
 				for _, idx := range visible[start:end] {
 					tr := &a.tracks[idx]
+					sel := a.isTrackSelected(tr.FullPath)
 
 					row := ui.Row(c.Key(fmt.Sprintf("tr-%d", idx))).FillWidth().Height(54).PaddingX(12).Gap(12).Radius(12).
 						AlignItems(ui.Center)
 					targetBg := ui.Transparent
-					if tr.Selected {
+					if sel {
 						targetBg = p.accent.Alpha(0.11)
 					} else if row.Hovered() {
 						targetBg = p.hover
 					}
 					row.Background(row.AnimateColor("bg", targetBg, ui.Animation{Duration: 150 * time.Millisecond}))
 					row.Draw(func(pt *ui.Painter, r ui.Rect) {
-						if tr.Selected {
+						if sel {
 							bar := ui.Rect{X: r.X + 3, Y: r.Y + (r.H-20)/2, W: 3.5, H: 20}
 							pt.Fill(bar, p.accent, 2)
 						}
@@ -1132,20 +1139,20 @@ func (a *app) viewLibrary(c *ui.Context) {
 							AlignItems(ui.Center).Background(ui.Transparent).Label(tr.Title).FocusRing(false)
 						mainBtn.Children(func() {
 							cb := ui.Box(c).Size(18, 18).Radius(6).Shrink(0).Center()
-							cbFill := cb.AnimateColor("cbf", map[bool]ui.Color{true: p.accent, false: ui.Transparent}[tr.Selected], ui.Animation{Duration: 140 * time.Millisecond})
+							cbFill := cb.AnimateColor("cbf", map[bool]ui.Color{true: p.accent, false: ui.Transparent}[sel], ui.Animation{Duration: 140 * time.Millisecond})
 							cb.Background(cbFill)
 							cb.Draw(func(pt *ui.Painter, r ui.Rect) {
-								if !tr.Selected {
+								if !sel {
 									pt.Stroke(r, p.faint, 6, 1.5)
 								}
 							})
-							if tr.Selected {
+							if sel {
 								cb.Children(func() { ui.Icon(c, iconCheck).Size(12, 12).TextColor(p.onAccent) })
 							}
 
 							ui.Row(c).Width(250).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
-								if tr.Cover != nil {
-									ui.Image(c, tr.Cover).Size(36, 36).Radius(8).Fit(ui.Cover).Shrink(0)
+								if cover, _ := a.lookupCover(tr.FullPath); cover != nil {
+									ui.Image(c, cover).Size(36, 36).Radius(8).Fit(ui.Cover).Shrink(0)
 								} else {
 									artCover(c, tr.Hue, 36, 8, nil)
 								}
@@ -1187,7 +1194,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 						// 只切换勾选：整行是一个按钮，连点两下会被当成双击，
 						// 于是勾选没做成，人却跳进了校对页。进校对走铅笔按钮或底部按钮。
 						if mainBtn.Clicked() {
-							tr.Selected = !tr.Selected
+							a.toggleTrackSelected(tr.FullPath)
 						}
 
 						if isNlTab {
@@ -1330,6 +1337,20 @@ func (a *app) viewLibrary(c *ui.Context) {
 						}
 					}
 				}
+
+				// 封面按需加载：Hero 前 3 首 + 当前页 + 下一页预取。
+				// 一帧只提交一次，worker 解完再合并重绘。
+				want := make([]string, 0, size+3)
+				for i := 0; i < min(3, len(a.tracks)); i++ {
+					want = append(want, a.tracks[i].FullPath)
+				}
+				for _, idx := range visible[start:end] {
+					want = append(want, a.tracks[idx].FullPath)
+				}
+				for _, idx := range visible[end:min(end+size, len(visible))] {
+					want = append(want, a.tracks[idx].FullPath)
+				}
+				a.requestCovers(want)
 
 				// 分页：页码按钮 + 每页条数下拉
 				ui.Row(c.Key("lib-pager")).FillWidth().AlignItems(ui.Center).Gap(6).

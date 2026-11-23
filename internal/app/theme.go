@@ -494,3 +494,72 @@ func statusPill(c *ui.Context, label string, bg, fg ui.Color) ui.Element {
 	})
 	return b
 }
+
+// ---------- 微软五点加载指示器 ----------
+//
+// 微软那套不是匀速转：一圈 720°，分五段走、有快有慢，
+// 所以点会挤在慢的一侧、在急扫阶段滑散。
+
+const (
+	winDotsPeriod = 4800 * time.Millisecond
+	winDotsLead   = 240 * time.Millisecond // 相邻点错开
+)
+
+func easeOut(x float64) float64 { return 1 - (1-x)*(1-x) }
+
+func easeInOut(x float64) float64 {
+	if x < 0.5 {
+		return 2 * x * x
+	}
+	return 1 - 2*(1-x)*(1-x)
+}
+
+func angleLerp(a, b, t float64) float64 { return a + (b-a)*t }
+
+// winDotPose 相位（0–1）→ 角度（度）与透明度，按微软原版时序分段。
+func winDotPose(at float64) (float64, float64) {
+	switch {
+	case at < 0.07: // 快起步
+		return angleLerp(225, 345, easeOut(at/0.07)), 1
+	case at < 0.30: // 慢飘
+		return angleLerp(345, 455, (at-0.07)/0.23), 1
+	case at < 0.39: // 急扫（最快）
+		return angleLerp(455, 690, easeInOut((at-0.30)/0.09)), 1
+	case at < 0.70: // 再慢飘
+		return angleLerp(690, 815, (at-0.39)/0.31), 1
+	case at < 0.75: // 收尾
+		return angleLerp(815, 945, (at-0.70)/0.05), 1
+	default: // 淡出后停住，等下一轮
+		return 945, max(0.0, 1-(at-0.75)/0.25)
+	}
+}
+
+// winFiveDots 画 16px 的五点加载圈（点径 3px）。
+// 相位由 pt.Now() 现算、用 pt.After 排下一帧：控件不渲染了动画就停，
+// 不额外开 ticker/goroutine。
+func winFiveDots(c *ui.Context, color ui.Color) {
+	box := ui.Box(c).Size(16, 16).Shrink(0)
+	box.Draw(func(pt *ui.Painter, r ui.Rect) {
+		base := float64(pt.Now().UnixNano()%int64(winDotsPeriod)) / float64(winDotsPeriod)
+		cx, cy := r.X+r.W/2, r.Y+r.H/2
+		radius := min(r.W, r.H)/2 - 2
+		step := float64(winDotsLead) / float64(winDotsPeriod)
+		for i := 0; i < 5; i++ {
+			at := base - float64(i)*step
+			if at < 0 {
+				at += 1
+			}
+			deg, alpha := winDotPose(at)
+			deg += float64(i) * 72 // 五个点固定相隔 72°，错时推进才有快慢感
+			if alpha <= 0.01 {
+				continue
+			}
+			rad := deg * math.Pi / 180
+			dx := float32(math.Cos(rad)) * radius
+			dy := float32(math.Sin(rad)) * radius
+			pt.Fill(ui.Rect{X: cx + dx - 1.5, Y: cy + dy - 1.5, W: 3, H: 3},
+				color.Alpha(float32(alpha)), 1.5)
+		}
+		pt.After(33 * time.Millisecond)
+	})
+}

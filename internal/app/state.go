@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"image"
 	"io/fs"
 	"math"
 	"os"
@@ -44,7 +43,6 @@ const (
 )
 
 type trackItem struct {
-	Selected bool
 	Title    string
 	Artist   string
 	File     string
@@ -56,7 +54,6 @@ type trackItem struct {
 	Note     string
 	Lines    int
 	Hue      float32
-	Cover    *ui.Bitmap
 }
 
 type libStats struct {
@@ -191,8 +188,7 @@ type app struct {
 	downloadAll       int
 	downloadNote      string
 	libScanning       bool
-	libCoversDone     int    // 封面解码进度
-	libScanPhase      string // files / covers
+	scanToken         uint64 // 每次扫描自增，旧扫描据此自行退出（原子访问）
 	libPage           int    // 当前页码（0 起）
 	libPageSize       int  // 每页条数：50 / 100
 	pageMenuOpen      bool // 每页数下拉是否展开
@@ -203,6 +199,13 @@ type app struct {
 	libFilter         int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏 5:官方逐字
 	libQuery          string
 	tracks            []trackItem
+	libSelected       map[string]bool // 勾选状态按路径存：切片重建也不会丢
+
+	// 封面按需加载（见 cover.go）
+	coverMu       sync.Mutex
+	coverInFlight map[string]bool
+	coverSem      chan struct{}
+	coverPending  bool
 	libScroll         ui.ScrollState
 	notFoundPaths     map[string]bool   // 持久化：多源均未搜到的「全网无词」音频路径（小写归一化）
 	libBatchIdOpen    bool              // 无歌词 Tab：顶部「批量填网易云 ID」抽屉是否展开
@@ -688,6 +691,7 @@ func (a *app) addLibraryFolder(dir string) {
 func (a *app) clearLibraryFolders() {
 	a.libFolders = nil
 	a.tracks = nil
+	a.libSelected = nil
 	a.libStats = libStats{}
 	a.libScanning = false
 	a.savePrefs()
@@ -789,48 +793,68 @@ func guessLang(text, stem string) string {
 	return "英文"
 }
 
-// scanLibrarySync scans a.libFolders synchronously (used in tests and by scanLibraryAsync).
-func (a *app) scanLibrarySync() ([]trackItem, libStats) {
-	audioExts := map[string]bool{
-		".mp3": true, ".flac": true, ".wav": true, ".m4a": true,
-		".aac": true, ".ogg": true, ".opus": true,
-	}
-	var audioFiles []struct{ full, rel string }
-	seenFiles := map[string]bool{}
-	for _, root := range a.libFolders {
+// ---------- 曲库扫描 ----------
+//
+// 分三段：walk 出清单（快）→ 分批读标签（慢，可中断）→ 由状态重算统计。
+// 几万首也能先出前 60 条让用户操作，剩下的在后台一批批补。
+
+// audioEntry 是 walk 出来的一条待读记录。
+type audioEntry struct {
+	full string // 绝对路径
+	rel  string // 相对路径，排序键
+}
+
+var audioExts = map[string]bool{
+	".mp3": true, ".flac": true, ".wav": true, ".m4a": true,
+	".aac": true, ".ogg": true, ".opus": true,
+}
+
+const (
+	scanFirstBatch = 60  // 冷启动第一批：先让首屏能点
+	scanBatchSize  = 200 // 之后每批条数
+)
+
+// walkAudioFiles 只做遍历：找音频、去重、按相对路径排序。
+// 不读标签、不碰 App 状态，几万首也就几百毫秒。
+func walkAudioFiles(folders []string) []audioEntry {
+	var files []audioEntry
+	seen := map[string]bool{}
+	for _, root := range folders {
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
-			if audioExts[strings.ToLower(filepath.Ext(p))] {
-				key := strings.ToLower(filepath.Clean(p))
-				if seenFiles[key] {
-					return nil
-				}
-				seenFiles[key] = true
-				rel, err := filepath.Rel(root, p)
-				if err != nil {
-					rel = p
-				}
-				audioFiles = append(audioFiles, struct{ full, rel string }{p, rel})
+			if !audioExts[strings.ToLower(filepath.Ext(p))] {
+				return nil
 			}
+			key := normPathKey(p)
+			if seen[key] {
+				return nil
+			}
+			seen[key] = true
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				rel = p
+			}
+			files = append(files, audioEntry{full: p, rel: rel})
 			return nil
 		})
 	}
-	sort.Slice(audioFiles, func(i, j int) bool { return audioFiles[i].rel < audioFiles[j].rel })
-
-	var st libStats
-	st.Total = len(audioFiles)
-	items := make([]trackItem, 0, len(audioFiles))
-
-	for i, f := range audioFiles {
-		if i%25 == 0 && a.win != nil {
-			done, all := i, len(audioFiles)
-			a.post(func() {
-				a.libScanDone = done
-				a.libScanAll = all
-			})
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].rel == files[j].rel {
+			return files[i].full < files[j].full
 		}
+		return files[i].rel < files[j].rel
+	})
+	return files
+}
+
+// readTrackBatch 读一批音频的标签与同名 .lrc，判定状态。
+// 只读 notFoundSnap 这份只读快照，不写任何 App 状态（后台可直接调用）；
+// 返回的第二项是「重新有词、该从持久化列表里摘掉」的路径。
+func readTrackBatch(entries []audioEntry, notFoundSnap map[string]bool) (items []trackItem, clearedNotFound []string) {
+	items = make([]trackItem, 0, len(entries))
+	for _, f := range entries {
 		ext := filepath.Ext(f.full)
 		stem := strings.TrimSuffix(filepath.Base(f.full), ext)
 		lrcPath := strings.TrimSuffix(f.full, ext) + ".lrc"
@@ -849,17 +873,12 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 
 		instKind := classifyAudioTrack(f.full, f.rel, lrcRaw)
 		if instKind != "" {
-			st.InstTotal++
 			note := "纯音乐 · 已从待处理中排除"
 			switch instKind {
 			case "inst_accomp":
-				st.InstAccomp++
 				note = "伴奏 / Off Vocal · 已从待处理中排除"
 			case "inst_ost":
-				st.InstOST++
 				note = "OST 原声配乐 · 已从待处理中排除"
-			default:
-				st.InstPure++
 			}
 			items = append(items, trackItem{
 				Title:    title,
@@ -876,19 +895,15 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 			continue
 		}
 
-		st.Vocal++
 		if lrcRaw == "" {
-			st.Missing++
 			lang := guessLang("", stem)
 			status := "missing"
 			note := "尚未搜索过全网歌词"
-			if a.notFoundPaths != nil && a.notFoundPaths[normPathKey(f.full)] {
+			if notFoundSnap[normPathKey(f.full)] {
 				status = "nolyrics_notfound"
 				note = "多源均未搜到 · 批量跑库已自动跳过"
-				st.NotFound++
 			}
 			items = append(items, trackItem{
-				Selected: false,
 				Title:    title,
 				Artist:   artist,
 				File:     fileInfo,
@@ -903,14 +918,11 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 			continue
 		}
 
-		// Count lines and check whether any line has >2 word tags (<mm:ss.SSS>)
-		// 若该音频已有本地 .lrc，自动清理旧的「全网无词」残留记录
-		if a.notFoundPaths != nil {
-			if normKey := normPathKey(f.full); a.notFoundPaths[normKey] {
-				delete(a.notFoundPaths, normKey)
-				a.savePrefs()
-			}
+		// 已经有词了：把之前的「全网无词」残留记下来，交给 UI 线程去删
+		if key := normPathKey(f.full); notFoundSnap[key] {
+			clearedNotFound = append(clearedNotFound, key)
 		}
+
 		norm := strings.ReplaceAll(lrcRaw, "\r\n", "\n")
 		lineCount := 0
 		enhCount := 0
@@ -928,17 +940,7 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 		}
 		lang := guessLang(norm, stem)
 		if enhCount > 0 {
-			st.Enhanced++
-			switch libWordStatus(norm) {
-			case "official":
-				st.Official++
-			case "aligned":
-				st.Aligned++
-			default:
-				st.Unknown++
-			}
 			items = append(items, trackItem{
-				Selected: false,
 				Title:    title,
 				Artist:   artist,
 				File:     fileInfo,
@@ -952,7 +954,6 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 				Hue:      hue,
 			})
 		} else {
-			st.LineOnly++
 			engine := "HubertFA 逐字"
 			if lang == "日文" {
 				engine = "MMS 日语逐字"
@@ -962,7 +963,6 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 				engine = "MMS 多语逐字"
 			}
 			items = append(items, trackItem{
-				Selected: st.LineOnly <= 12,
 				Title:    title,
 				Artist:   artist,
 				File:     fileInfo,
@@ -977,71 +977,168 @@ func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 			})
 		}
 	}
-	// 无歌词曲目里让「全网无词 (nolyrics_notfound)」严格排在「本地缺词 (missing)」前面
-	noLyricsRank := func(s string) int {
-		switch s {
-		case "nolyrics_notfound":
-			return 0
-		case "missing":
-			return 1
-		default:
-			return 2
-		}
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return noLyricsRank(items[i].Status) < noLyricsRank(items[j].Status)
-	})
-	return items, st
+	return items, clearedNotFound
 }
 
-func (a *app) scanLibraryAsync() {
-	if a.libScanning || len(a.libFolders) == 0 {
+// recomputeLibStats 完全由切片推出来，分段追加时每批重算一次即可。
+func recomputeLibStats(items []trackItem) libStats {
+	st := libStats{Total: len(items)}
+	for i := range items {
+		switch items[i].Status {
+		case "inst_pure":
+			st.InstTotal++
+			st.InstPure++
+		case "inst_ost":
+			st.InstTotal++
+			st.InstOST++
+		case "inst_accomp":
+			st.InstTotal++
+			st.InstAccomp++
+		case "missing":
+			st.Vocal++
+			st.Missing++
+		case "nolyrics_notfound":
+			st.Vocal++
+			st.Missing++
+			st.NotFound++
+		case "line_only":
+			st.Vocal++
+			st.LineOnly++
+		case "official":
+			st.Vocal++
+			st.Enhanced++
+			st.Official++
+		case "aligned":
+			st.Vocal++
+			st.Enhanced++
+			st.Aligned++
+		case "unknown":
+			st.Vocal++
+			st.Enhanced++
+			st.Unknown++
+		default:
+			st.Vocal++
+		}
+	}
+	return st
+}
+
+// scanLibrarySync 一次性扫完（单测与需要同步结果的地方用）。
+func (a *app) scanLibrarySync() ([]trackItem, libStats) {
+	items, cleared := readTrackBatch(walkAudioFiles(a.libFolders), a.notFoundPaths)
+	a.applyClearedNotFound(cleared)
+	return items, recomputeLibStats(items)
+}
+
+// nextScanToken 每次扫描拿一个新编号；旧扫描发现编号变了就自己退出。
+func (a *app) nextScanToken() uint64 { return atomic.AddUint64(&a.scanToken, 1) }
+
+func (a *app) scanTokenCurrent(token uint64) bool { return atomic.LoadUint64(&a.scanToken) == token }
+
+// applyClearedNotFound 在 UI 线程把「又有词了」的路径从持久化列表里摘掉。
+func (a *app) applyClearedNotFound(paths []string) {
+	if len(paths) == 0 || a.notFoundPaths == nil {
 		return
 	}
+	changed := false
+	for _, key := range paths {
+		if a.notFoundPaths[key] {
+			delete(a.notFoundPaths, key)
+			changed = true
+		}
+	}
+	if changed {
+		a.savePrefs()
+	}
+}
+
+// scanLibraryAsync 分段扫描曲库。
+//
+//	冷启动（还没有列表）：首批 60 条一读完就上屏，之后每批追加；
+//	刷新（已有列表）：中途只报进度，扫完整体替换，避免正在看的那页跳走。
+//
+// 封面不在这里解 —— 交给按页惰性加载，扫描只管「有哪些歌、什么状态」。
+func (a *app) scanLibraryAsync() {
+	if len(a.libFolders) == 0 {
+		return
+	}
+	token := a.nextScanToken() // 每次调用都作废上一次
 	a.libScanning = true
 	a.libScanDone = 0
 	a.libScanAll = 0
-	go func() {
-		items, st := a.scanLibrarySync()
 
-		// 封面单独一个阶段：872 首解一遍要好十几秒，不说明白就像卡死在 850
-		covers := indexCovers()
-		a.post(func() {
-			a.libScanPhase = "covers"
-			a.libCoversDone = 0
-			a.libScanDone = len(items)
-			a.libScanAll = len(items)
-		})
-		thumbs := make([]image.Image, len(items))
-		const workers = 4
-		sem := make(chan struct{}, workers)
-		var wg sync.WaitGroup
-		var done int32
-		for i := range items {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				thumbs[i] = covers.thumbImage(items[i].FullPath)
-				n := int(atomic.AddInt32(&done, 1))
-				if n%20 == 0 {
-					a.post(func() { a.libCoversDone = n })
-				}
-			}(i)
+	folders := append([]string{}, a.libFolders...)
+	nfSnap := make(map[string]bool, len(a.notFoundPaths))
+	for k, v := range a.notFoundPaths {
+		if v {
+			nfSnap[k] = true
 		}
-		wg.Wait()
-		for i := range thumbs {
-			if thumbs[i] != nil {
-				items[i].Cover = ui.NewBitmap(thumbs[i])
+	}
+	refresh := len(a.tracks) > 0
+
+	go func() {
+		files := walkAudioFiles(folders)
+		a.post(func() {
+			if a.scanTokenCurrent(token) {
+				a.libScanAll = len(files)
+			}
+		})
+
+		items := make([]trackItem, 0, len(files))
+		cleared := make([]string, 0, 8)
+		for start := 0; start < len(files); {
+			if !a.scanTokenCurrent(token) {
+				return // 有更新的扫描接手了，别再往结果里塞东西
+			}
+			size := scanBatchSize
+			if start == 0 {
+				size = scanFirstBatch
+			}
+			end := min(start+size, len(files))
+			batch, gone := readTrackBatch(files[start:end], nfSnap)
+			items = append(items, batch...)
+			cleared = append(cleared, gone...)
+			start = end
+
+			if refresh {
+				done := len(items)
+				a.post(func() {
+					if a.scanTokenCurrent(token) {
+						a.libScanDone = done
+					}
+				})
+			} else {
+				snap := append([]trackItem(nil), items...)
+				st := recomputeLibStats(snap)
+				justCleared := append([]string(nil), gone...)
+				a.post(func() {
+					if !a.scanTokenCurrent(token) {
+						return
+					}
+					a.tracks = snap
+					a.libStats = st
+					a.libScanDone = len(snap)
+					a.applyClearedNotFound(justCleared)
+				})
+			}
+			if start < len(files) {
+				time.Sleep(10 * time.Millisecond) // 让出调度，别把 UI 线程饿着
 			}
 		}
+
+		st := recomputeLibStats(items)
 		nowStr := time.Now().Format("15:04")
 		a.post(func() {
-			a.tracks = items
-			a.libStats = st
+			if !a.scanTokenCurrent(token) {
+				return
+			}
+			if refresh {
+				a.tracks = items
+				a.libStats = st
+				a.libScanDone = len(items)
+			}
+			a.applyClearedNotFound(cleared)
 			a.libScanning = false
-			a.libScanPhase = ""
 			a.libScanTime = "今天 " + nowStr
 		})
 	}()
@@ -1674,10 +1771,35 @@ func (a *app) filterCounts() [6]int {
 	return counts
 }
 
+// isTrackSelected / setTrackSelected / toggleTrackSelected 统一走路径键，
+// 扫描时分批追加、整片替换都不影响已勾选的行。
+func (a *app) isTrackSelected(path string) bool {
+	return a.libSelected[normPathKey(path)]
+}
+
+func (a *app) setTrackSelected(path string, sel bool) {
+	key := normPathKey(path)
+	if key == "" {
+		return
+	}
+	if !sel {
+		delete(a.libSelected, key)
+		return
+	}
+	if a.libSelected == nil {
+		a.libSelected = map[string]bool{}
+	}
+	a.libSelected[key] = true
+}
+
+func (a *app) toggleTrackSelected(path string) {
+	a.setTrackSelected(path, !a.isTrackSelected(path))
+}
+
 func (a *app) selectedLibraryTracks() []trackItem {
 	var batch []trackItem
 	for i := range a.tracks {
-		if a.tracks[i].Selected && a.trackMatchesFilter(&a.tracks[i]) {
+		if a.isTrackSelected(a.tracks[i].FullPath) && a.trackMatchesFilter(&a.tracks[i]) {
 			batch = append(batch, a.tracks[i])
 		}
 	}
@@ -1714,7 +1836,7 @@ func (a *app) setPageSelected(sel bool) {
 			continue
 		}
 		if page/size == a.libPage {
-			a.tracks[i].Selected = sel
+			a.setTrackSelected(a.tracks[i].FullPath, sel)
 		}
 		page++
 	}
@@ -1723,7 +1845,7 @@ func (a *app) setPageSelected(sel bool) {
 func (a *app) setVisibleTracksSelected(sel bool) {
 	for i := range a.tracks {
 		if a.trackMatchesFilter(&a.tracks[i]) {
-			a.tracks[i].Selected = sel
+			a.setTrackSelected(a.tracks[i].FullPath, sel)
 		}
 	}
 }
@@ -1767,7 +1889,7 @@ func (a *app) batchIdTargetTracks() []trackItem {
 	for i := range a.tracks {
 		if isNoLyricsStatus(a.tracks[i].Status) {
 			all = append(all, a.tracks[i])
-			if a.tracks[i].Selected {
+			if a.isTrackSelected(a.tracks[i].FullPath) {
 				sel = append(sel, a.tracks[i])
 			}
 		}

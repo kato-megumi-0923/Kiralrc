@@ -3,6 +3,8 @@ package app
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"image"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -96,12 +98,12 @@ func TestNavigationAndAccentSwitching(t *testing.T) {
 	if tIdx < 0 {
 		t.Fatal("track 突然的自我 not found in scanned tracks")
 	}
-	wasSel := a.tracks[tIdx].Selected
+	wasSel := a.isTrackSelected(a.tracks[tIdx].FullPath)
 	if err := tt.Click("突然的自我"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if a.tracks[tIdx].Selected == wasSel {
+	if a.isTrackSelected(a.tracks[tIdx].FullPath) == wasSel {
 		t.Fatalf("clicking track row should toggle selection")
 	}
 
@@ -203,12 +205,24 @@ func TestNoLyricsWorkflowAndNeteaseIDParsing(t *testing.T) {
 		t.Fatalf("expected libBatchIdOpen=true")
 	}
 
-	// Verify nolyrics_notfound sorts ahead of missing, and creating .lrc auto-clears notFoundPaths
+	// 列表固定按相对路径排（不再让「全网无词」抢到前面），状态本身照旧区分
 	a3 := filepath.Join(tmp, "新歌 - 本地缺词.flac")
 	_ = os.WriteFile(a3, []byte("RIFF"), 0o644)
 	a.tracks, a.libStats = a.scanLibrarySync()
-	if len(a.tracks) < 2 || a.tracks[0].Status != "nolyrics_notfound" || a.tracks[1].Status != "missing" {
-		t.Fatalf("expected nolyrics_notfound before missing, got %+v", a.tracks)
+	if len(a.tracks) < 3 {
+		t.Fatalf("expected 3 tracks, got %+v", a.tracks)
+	}
+	byName := map[string]string{}
+	for _, tr := range a.tracks {
+		byName[tr.Title] = tr.Status
+	}
+	if byName["ずっと見ていたい"] != "nolyrics_notfound" || byName["本地缺词"] != "missing" {
+		t.Fatalf("unexpected statuses: %+v", byName)
+	}
+	for i := 1; i < len(a.tracks); i++ {
+		if a.tracks[i-1].FullPath > a.tracks[i].FullPath && filepath.Dir(a.tracks[i-1].FullPath) == filepath.Dir(a.tracks[i].FullPath) {
+			t.Fatalf("列表应按路径排，第 %d 条乱了: %s / %s", i, a.tracks[i-1].FullPath, a.tracks[i].FullPath)
+		}
 	}
 	_ = os.WriteFile(filepath.Join(tmp, "芹澤優 - ずっと見ていたい.lrc"), []byte("[00:01.000]ずっと見ていたい\n"), 0o644)
 	a.tracks, a.libStats = a.scanLibrarySync()
@@ -586,5 +600,267 @@ func TestTabCountsMatchTheFilteredList(t *testing.T) {
 	c := a.filterCounts()
 	if c[0] != 6 || c[5] != 1 || c[2] != 2 || c[1] != 1 || c[3] != 2 || c[4] != 3 {
 		t.Errorf("分类条数不对: %v", c)
+	}
+}
+
+// 分批读出来的结果必须和一次读完完全一致：不重复、不丢、顺序不变。
+func TestBatchedScanMatchesOneShotScan(t *testing.T) {
+	a := newApp()
+	tmp := t.TempDir()
+	for i := 0; i < 260; i++ {
+		stem := fmt.Sprintf("%03d - 歌%d", i, i)
+		audio := filepath.Join(tmp, stem+".flac")
+		if err := os.WriteFile(audio, []byte("RIFF"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if i%3 == 0 {
+			_ = os.WriteFile(filepath.Join(tmp, stem+".lrc"),
+				[]byte("[00:01.000]第一句\n"), 0o644)
+		}
+	}
+	a.libFolders = []string{tmp}
+	entries := walkAudioFiles(a.libFolders)
+	if len(entries) != 260 {
+		t.Fatalf("walk 出 %d 条，期望 260", len(entries))
+	}
+	for i := 1; i < len(entries); i++ {
+		if entries[i-1].rel > entries[i].rel {
+			t.Fatalf("walk 结果没按相对路径排: %q > %q", entries[i-1].rel, entries[i].rel)
+		}
+	}
+
+	var batched []trackItem
+	for start := 0; start < len(entries); {
+		size := scanBatchSize
+		if start == 0 {
+			size = scanFirstBatch
+		}
+		end := min(start+size, len(entries))
+		items, _ := readTrackBatch(entries[start:end], nil)
+		batched = append(batched, items...)
+		start = end
+	}
+	oneShot, _ := readTrackBatch(entries, nil)
+
+	if len(batched) != len(oneShot) {
+		t.Fatalf("分批 %d 条，一次读完 %d 条", len(batched), len(oneShot))
+	}
+	for i := range batched {
+		if batched[i].FullPath != oneShot[i].FullPath || batched[i].Status != oneShot[i].Status {
+			t.Fatalf("第 %d 条不一致: %+v vs %+v", i, batched[i], oneShot[i])
+		}
+	}
+	if s := recomputeLibStats(oneShot); s.Total != 260 || s.LineOnly != 87 || s.Missing != 173 {
+		t.Fatalf("统计不对: %+v", s)
+	}
+}
+
+// 统计必须能从切片重算出来，且与逐条累加的结果一致。
+func TestRecomputeLibStatsCoversEveryStatus(t *testing.T) {
+	items := []trackItem{
+		{Status: "official"}, {Status: "aligned"}, {Status: "unknown"},
+		{Status: "line_only"}, {Status: "missing"}, {Status: "nolyrics_notfound"},
+		{Status: "inst_pure"}, {Status: "inst_ost"}, {Status: "inst_accomp"},
+	}
+	st := recomputeLibStats(items)
+	if st.Total != 9 || st.Vocal != 6 || st.Enhanced != 3 || st.Official != 1 ||
+		st.Aligned != 1 || st.Unknown != 1 || st.LineOnly != 1 || st.Missing != 2 ||
+		st.NotFound != 1 || st.InstTotal != 3 || st.InstPure != 1 || st.InstOST != 1 || st.InstAccomp != 1 {
+		t.Fatalf("unexpected stats: %+v", st)
+	}
+}
+
+// 连续两次扫描：旧的那次必须作废，不能把两批结果混在一起。
+func TestASecondScanCancelsTheFirst(t *testing.T) {
+	a := newApp()
+	tmp := t.TempDir()
+	for i := 0; i < 240; i++ {
+		stem := fmt.Sprintf("%03d - 歌%d", i, i)
+		_ = os.WriteFile(filepath.Join(tmp, stem+".flac"), []byte("RIFF"), 0o644)
+	}
+	a.libFolders = []string{tmp}
+
+	a.scanLibraryAsync()
+	a.scanLibraryAsync() // 立刻再开一次，第一次的 token 就此作废
+
+	deadline := time.Now().Add(15 * time.Second)
+	for a.libScanning && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if a.libScanning {
+		t.Fatal("扫描超时未结束")
+	}
+	if len(a.tracks) != 240 {
+		t.Fatalf("最终 %d 条，期望 240（旧扫描不该往里追加）", len(a.tracks))
+	}
+	seen := map[string]bool{}
+	for _, tr := range a.tracks {
+		if seen[tr.FullPath] {
+			t.Fatalf("重复条目: %s", tr.FullPath)
+		}
+		seen[tr.FullPath] = true
+	}
+	if a.libStats.Total != 240 || a.libStats.Missing != 240 {
+		t.Fatalf("统计不对: %+v", a.libStats)
+	}
+}
+
+// 勾选状态按路径存：扫描重建切片不该丢，清空曲库才跟着清。
+func TestSelectionSurvivesRescan(t *testing.T) {
+	a := newApp()
+	tmp := t.TempDir()
+	audio := filepath.Join(tmp, "某歌 - 某人.flac")
+	if err := os.WriteFile(audio, []byte("RIFF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(tmp, "另一首 - 某人.flac")
+	if err := os.WriteFile(other, []byte("RIFF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.libFolders = []string{tmp}
+	a.tracks, a.libStats = a.scanLibrarySync()
+
+	a.setTrackSelected(audio, true)
+	if !a.isTrackSelected(audio) || a.isTrackSelected(other) {
+		t.Fatalf("勾选没记上")
+	}
+
+	// 重扫一次：切片整片重建，勾选必须还在
+	a.tracks, a.libStats = a.scanLibrarySync()
+	if !a.isTrackSelected(audio) {
+		t.Fatalf("重扫后勾选丢了")
+	}
+	if got := a.selectedLibraryTracks(); len(got) != 1 || got[0].FullPath != audio {
+		t.Fatalf("selectedLibraryTracks 不对: %+v", got)
+	}
+
+	// 大小写 / 反斜杠差异不该算成另一首
+	if !a.isTrackSelected(strings.ToUpper(audio)) {
+		t.Fatalf("同一路径换个大小写就认不出来了")
+	}
+
+	a.toggleTrackSelected(audio)
+	if a.isTrackSelected(audio) {
+		t.Fatalf("再点一下应该取消")
+	}
+
+	a.setTrackSelected(other, true)
+	a.clearLibraryFolders()
+	if a.isTrackSelected(other) || len(a.libSelected) != 0 {
+		t.Fatalf("清空曲库后勾选该一起清掉")
+	}
+}
+
+// 页码越界要自动夹回有效范围（筛选变小、重建切片都会发生）。
+func TestPageClampsAfterTrackListShrinks(t *testing.T) {
+	a := newApp()
+	a.libPageSize = 50
+	a.libFolders = []string{`C://lib`} // 有文件夹才渲染列表（不真去扫）
+	for i := 0; i < 150; i++ {
+		a.tracks = append(a.tracks, trackItem{
+			Title:    fmt.Sprintf("歌 %03d", i),
+			FullPath: fmt.Sprintf("C://lib//%03d - 歌.flac", i),
+			File:     "lib · flac",
+			Status:   "missing",
+			Lang:     "中文",
+		})
+	}
+	tt := ui.NewTester(a.view, 1360, 860)
+
+	a.libPage = 2 // 150 首 = 3 页，第 3 页合法
+	tt.Frame()
+	if a.libPage != 2 {
+		t.Fatalf("第 3 页合法，不该被改，got %d", a.libPage)
+	}
+
+	a.tracks = a.tracks[:60] // 剩 2 页
+	tt.Frame()
+	if a.libPage != 1 {
+		t.Fatalf("列表变短后应夹到最后一页 1，got %d", a.libPage)
+	}
+
+	a.tracks = nil
+	a.libPage = 7
+	tt.Frame()
+	if a.libPage != 0 {
+		t.Fatalf("空列表应该回到第 1 页，got %d", a.libPage)
+	}
+}
+
+// 封面 LRU：超过容量淘汰最久未用的，且容量严格不超过上限。
+func TestCoverLRUEvictsLeastRecentlyUsed(t *testing.T) {
+	bmp := func() *ui.Bitmap {
+		return ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 4, 4)))
+	}
+
+	s := newCoverStore(3)
+	for _, k := range []string{"a", "b", "c"} {
+		s.put(k, bmp())
+	}
+	if s.size() != 3 {
+		t.Fatalf("应有 3 条，got %d", s.size())
+	}
+	// 用一下 a，让它变成「最近用过」，接着写入 d 应该淘汰 b
+	if _, ok := s.get("a"); !ok {
+		t.Fatal("a 应在缓存里")
+	}
+	s.put("d", bmp())
+	if _, ok := s.get("b"); ok {
+		t.Fatal("b 是最久没用的，应该被淘汰")
+	}
+	if _, ok := s.get("a"); !ok {
+		t.Fatal("a 刚用过，不该被淘汰")
+	}
+
+	big := newCoverStore(400)
+	for i := 0; i < 450; i++ {
+		big.put(fmt.Sprintf("k%d", i), bmp())
+	}
+	if big.size() != 400 {
+		t.Fatalf("容量应封顶 400，got %d", big.size())
+	}
+	if _, ok := big.get("k0"); ok {
+		t.Fatal("最早的 k0 应该被淘汰")
+	}
+	if _, ok := big.get("k449"); !ok {
+		t.Fatal("最新的 k449 应该还在")
+	}
+}
+
+// 无封面的音频要记负结果，别在每次重绘时反复去开文件。
+func TestMissingCoverIsRememberedAndNotRetried(t *testing.T) {
+	a := newApp()
+	audio := filepath.Join(t.TempDir(), "没有封面 - 某人.flac")
+	if err := os.WriteFile(audio, []byte("not a real flac"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := coverCacheKey(audio)
+
+	a.requestCovers([]string{audio})
+	deadline := time.Now().Add(5 * time.Second)
+	for !coverMem.isMiss(key) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !coverMem.isMiss(key) {
+		t.Fatal("解析不出封面时应该记下负结果")
+	}
+	if bmp, known := a.lookupCover(audio); bmp != nil || !known {
+		t.Fatalf("lookupCover 应为 (nil, true)，got (%v, %v)", bmp, known)
+	}
+
+	a.coverMu.Lock()
+	left := len(a.coverInFlight)
+	a.coverMu.Unlock()
+	if left != 0 {
+		t.Fatalf("解码完应清掉 inFlight，还剩 %d", left)
+	}
+
+	// 再来一次：已经知道没封面，不该再提交
+	a.requestCovers([]string{audio})
+	a.coverMu.Lock()
+	again := len(a.coverInFlight)
+	a.coverMu.Unlock()
+	if again != 0 {
+		t.Fatalf("已知无封面却重复提交了 %d 个", again)
 	}
 }

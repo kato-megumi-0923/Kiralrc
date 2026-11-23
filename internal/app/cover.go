@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/image/draw"
@@ -101,19 +102,17 @@ func (index coverIndex) thumbImage(audioPath string) image.Image {
 	return thumb
 }
 
+// thumbnail 同步取一张缩略图（少见的同步场景用；界面上走 lookupCover）。
 func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 	if audioPath == "" {
 		return nil
 	}
-	if cached := cachedCover(audioPath); cached != nil {
-		return cached
+	key := coverCacheKey(audioPath)
+	if bmp, known := coverMem.get(key); known {
+		return bmp
 	}
-	img := index.thumbImage(audioPath)
-	if img == nil {
-		return nil
-	}
-	bmp := ui.NewBitmap(img)
-	coverCache.Store(coverCacheKey(audioPath), bmp)
+	bmp := ui.NewBitmap(index.thumbImage(audioPath))
+	coverMem.put(key, bmp)
 	return bmp
 }
 
@@ -179,8 +178,7 @@ func thumbnailOf(imageData image.Image) *ui.Bitmap {
 	return ui.NewBitmap(thumb)
 }
 
-var coverCache sync.Map // 路径+修改时间 → *ui.Bitmap
-
+// coverCacheKey 把「路径 + 修改时间」压成一个键：换了封面或重解过音频就自然失效。
 func coverCacheKey(audioPath string) string {
 	mt := int64(0)
 	if info, err := os.Stat(audioPath); err == nil {
@@ -189,9 +187,167 @@ func coverCacheKey(audioPath string) string {
 	return fmt.Sprintf("%s|%d", audioPath, mt)
 }
 
-func cachedCover(audioPath string) *ui.Bitmap {
-	if v, ok := coverCache.Load(coverCacheKey(audioPath)); ok {
-		return v.(*ui.Bitmap)
+// coverStore 是容量固定的封面 LRU。
+//
+// 曲库翻几百页时，永久缓存会把位图全囤在内存里（128px 约 65KB 一张）；
+// 这里限 400 张（约 26MB），淘汰最久没用的。
+// 同时记「确认没有封面」的键，免得同一首在每次重绘时反复去开音频文件。
+type coverStore struct {
+	mu    sync.Mutex
+	limit int
+	order []string // 最旧 → 最新
+	items map[string]*ui.Bitmap
+	miss  map[string]bool
+}
+
+func newCoverStore(limit int) *coverStore {
+	return &coverStore{limit: limit, items: map[string]*ui.Bitmap{}, miss: map[string]bool{}}
+}
+
+// get 返回位图与「是否已知」：已知但无封面时返回 nil, true。
+func (s *coverStore) get(key string) (*ui.Bitmap, bool) {
+	if key == "" {
+		return nil, true
 	}
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if bmp, ok := s.items[key]; ok {
+		s.moveToEnd(key)
+		return bmp, true
+	}
+	if s.miss[key] {
+		return nil, true
+	}
+	return nil, false
+}
+
+// put 写入位图；bmp 为 nil 表示这首确实没有封面，记负结果。
+func (s *coverStore) put(key string, bmp *ui.Bitmap) {
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if bmp == nil {
+		s.miss[key] = true
+		return
+	}
+	delete(s.miss, key)
+	if _, ok := s.items[key]; ok {
+		s.items[key] = bmp
+		s.moveToEnd(key)
+		return
+	}
+	s.items[key] = bmp
+	s.order = append(s.order, key)
+	for len(s.order) > s.limit {
+		oldest := s.order[0]
+		s.order = s.order[1:]
+		delete(s.items, oldest)
+	}
+}
+
+// moveToEnd 把键挪到「最新用过」的位置（调用方需持锁）。
+func (s *coverStore) moveToEnd(key string) {
+	for i, k := range s.order {
+		if k == key {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			break
+		}
+	}
+	s.order = append(s.order, key)
+}
+
+func (s *coverStore) size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.items)
+}
+
+func (s *coverStore) isMiss(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.miss[key]
+}
+
+var coverMem = newCoverStore(400)
+
+// ---------- 按需加载 ----------
+
+// work/ 下的对齐封面目录进程内只扫一次。
+var (
+	coverIndexOnce sync.Once
+	coverIndexVal  coverIndex
+)
+
+func coverIndexCached() coverIndex {
+	coverIndexOnce.Do(func() { coverIndexVal = indexCovers() })
+	return coverIndexVal
+}
+
+// lookupCover 命中返回位图与 true；已确认没有封面返回 nil, true；没加载过返回 nil, false。
+func (a *app) lookupCover(audioPath string) (*ui.Bitmap, bool) {
+	return coverMem.get(coverCacheKey(audioPath))
+}
+
+// requestCovers 把还没加载的路径丢给后台解（4 个 worker），解完合并成一次重绘。
+// 同一路径并发调用只会解一次：inFlight 去重。
+func (a *app) requestCovers(paths []string) {
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		key := coverCacheKey(p)
+		if _, known := coverMem.get(key); known {
+			continue
+		}
+		a.coverMu.Lock()
+		if a.coverInFlight == nil {
+			a.coverInFlight = map[string]bool{}
+			a.coverSem = make(chan struct{}, 4)
+		}
+		if a.coverInFlight[key] {
+			a.coverMu.Unlock()
+			continue
+		}
+		a.coverInFlight[key] = true
+		sem := a.coverSem
+		a.coverMu.Unlock()
+
+		go func(path, key string) {
+			sem <- struct{}{}
+			img := coverIndexCached().thumbImage(path)
+			<-sem
+			a.post(func() {
+				if img == nil {
+					coverMem.put(key, nil) // 负结果也记下，不重复开文件
+				} else {
+					coverMem.put(key, ui.NewBitmap(img)) // 位图在 UI 线程建
+				}
+				a.coverMu.Lock()
+				delete(a.coverInFlight, key)
+				a.coverMu.Unlock()
+				a.coverRepaint()
+			})
+		}(p, key)
+	}
+}
+
+// coverRepaint 把 50ms 内解完的封面合并成一次重绘：
+// 一页 50 张若各自重绘一次，整页要画 50 遍。
+func (a *app) coverRepaint() {
+	a.coverMu.Lock()
+	if a.coverPending {
+		a.coverMu.Unlock()
+		return
+	}
+	a.coverPending = true
+	a.coverMu.Unlock()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		a.coverMu.Lock()
+		a.coverPending = false
+		a.coverMu.Unlock()
+		a.post(func() {}) // post 自带 Invalidate
+	}()
 }
