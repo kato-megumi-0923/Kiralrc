@@ -40,7 +40,8 @@ func indexCovers() coverIndex {
 	return index
 }
 
-func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
+// thumbImage 取 128px 缩略图（纯 CPU，可在后台并发跑）。
+func (index coverIndex) thumbImage(audioPath string) image.Image {
 	if audioPath == "" {
 		return nil
 	}
@@ -67,29 +68,24 @@ func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 			if file, err := os.Open(path); err == nil {
 				defer file.Close()
 				if imageData, _, err := image.Decode(file); err == nil {
-					return thumbnailOf(imageData)
+					return thumbnailImage(imageData)
 				}
 			}
 		}
 	}
-	// 2) 音频自带的内嵌封面：没跑过对齐的歌只有这一张
-	if cached := cachedCover(audioPath); cached != nil {
-		return cached
-	}
-	// 3) 上次解码过的小图：直接读，省下解 600KB 大图的时间
+	// 2) 上次解码过的小图：直接读，省下解 600KB 大图的时间
 	if thumbPath := coverThumbPath(audioPath); thumbPath != "" {
 		if file, err := os.Open(thumbPath); err == nil {
 			imageData, _, err := image.Decode(file)
 			file.Close()
 			if err == nil {
-				if bmp := thumbnailOf(imageData); bmp != nil {
-					coverCache.Store(coverCacheKey(audioPath), bmp)
-					return bmp
+				if thumb := thumbnailImage(imageData); thumb != nil {
+					return thumb
 				}
 			}
 		}
 	}
-	// 4) 都没有才去解音频里的内嵌封面，解完顺手存一份 JPEG
+	// 3) 都没有才去解音频里的内嵌封面，解完顺手存一份 JPEG
 	data := readEmbeddedCover(audioPath)
 	if data == nil {
 		return nil
@@ -98,9 +94,26 @@ func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 	if err != nil {
 		return nil
 	}
-	bmp := thumbnailOf(imageData)
+	thumb := thumbnailImage(imageData)
+	if thumb != nil {
+		saveCoverThumb(audioPath, imageData)
+	}
+	return thumb
+}
+
+func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
+	if audioPath == "" {
+		return nil
+	}
+	if cached := cachedCover(audioPath); cached != nil {
+		return cached
+	}
+	img := index.thumbImage(audioPath)
+	if img == nil {
+		return nil
+	}
+	bmp := ui.NewBitmap(img)
 	coverCache.Store(coverCacheKey(audioPath), bmp)
-	saveCoverThumb(audioPath, imageData)
 	return bmp
 }
 

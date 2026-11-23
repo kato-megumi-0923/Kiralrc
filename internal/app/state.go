@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"image"
 	"io/fs"
 	"math"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -188,7 +191,9 @@ type app struct {
 	downloadAll       int
 	downloadNote      string
 	libScanning       bool
-	libPage           int  // 当前页码（0 起）
+	libCoversDone     int    // 封面解码进度
+	libScanPhase      string // files / covers
+	libPage           int    // 当前页码（0 起）
 	libPageSize       int  // 每页条数：50 / 100
 	pageMenuOpen      bool // 每页数下拉是否展开
 	libScanDone       int
@@ -998,15 +1003,45 @@ func (a *app) scanLibraryAsync() {
 	a.libScanAll = 0
 	go func() {
 		items, st := a.scanLibrarySync()
+
+		// 封面单独一个阶段：872 首解一遍要好十几秒，不说明白就像卡死在 850
 		covers := indexCovers()
+		a.post(func() {
+			a.libScanPhase = "covers"
+			a.libCoversDone = 0
+			a.libScanDone = len(items)
+			a.libScanAll = len(items)
+		})
+		thumbs := make([]image.Image, len(items))
+		const workers = 4
+		sem := make(chan struct{}, workers)
+		var wg sync.WaitGroup
+		var done int32
 		for i := range items {
-			items[i].Cover = covers.thumbnail(items[i].FullPath)
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				thumbs[i] = covers.thumbImage(items[i].FullPath)
+				n := int(atomic.AddInt32(&done, 1))
+				if n%20 == 0 {
+					a.post(func() { a.libCoversDone = n })
+				}
+			}(i)
+		}
+		wg.Wait()
+		for i := range thumbs {
+			if thumbs[i] != nil {
+				items[i].Cover = ui.NewBitmap(thumbs[i])
+			}
 		}
 		nowStr := time.Now().Format("15:04")
 		a.post(func() {
 			a.tracks = items
 			a.libStats = st
 			a.libScanning = false
+			a.libScanPhase = ""
 			a.libScanTime = "今天 " + nowStr
 		})
 	}()

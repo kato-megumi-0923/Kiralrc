@@ -689,9 +689,15 @@ func (a *app) viewLibrary(c *ui.Context) {
 					AlignItems(ui.Center).Background(p.surface)
 				card.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 20, 1) })
 				card.Children(func() {
-					ui.Text(c, "正在读取本地音乐文件夹…").FontSize(17).FontWeight(700)
-					ui.Text(c, fmt.Sprintf("已扫描 %d / %d 首音频，正在分析 LRC 逐字标签并排除纯音乐 / OST / 伴奏", a.libScanDone, a.libScanAll)).
-						FontSize(13).TextColor(p.muted)
+					if a.libScanPhase == "covers" {
+						ui.Text(c, "正在读取专辑封面…").FontSize(17).FontWeight(700)
+						ui.Text(c, fmt.Sprintf("已解码 %d / %d 张封面（首次扫描会慢一些，之后走缓存）", a.libCoversDone, a.libScanAll)).
+							FontSize(13).TextColor(p.muted)
+					} else {
+						ui.Text(c, "正在读取本地音乐文件夹…").FontSize(17).FontWeight(700)
+						ui.Text(c, fmt.Sprintf("已扫描 %d / %d 首音频，正在分析 LRC 逐字标签并排除纯音乐 / OST / 伴奏", a.libScanDone, a.libScanAll)).
+							FontSize(13).TextColor(p.muted)
+					}
 				})
 				return
 			}
@@ -707,7 +713,11 @@ func (a *app) viewLibrary(c *ui.Context) {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					trail := "上次扫描 " + a.libScanTime
 					if a.libScanning {
-						trail = fmt.Sprintf("正在刷新… %d/%d", a.libScanDone, a.libScanAll)
+						if a.libScanPhase == "covers" {
+							trail = fmt.Sprintf("正在读取封面… %d/%d", a.libCoversDone, a.libScanAll)
+						} else {
+							trail = fmt.Sprintf("正在刷新… %d/%d", a.libScanDone, a.libScanAll)
+						}
 					}
 					ui.Text(c, strings.Join(a.libFolders, " · ")+" · "+trail).FontSize(11.5).FontWeight(600).TextColor(p.muted)
 					ui.Text(c, "曲库").FontSize(28).FontWeight(800)
