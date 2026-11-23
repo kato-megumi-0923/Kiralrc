@@ -3402,6 +3402,23 @@ func (a *app) viewSettings(c *ui.Context) {
 						}
 					})
 				})
+				ui.Row(c).Height(56).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).Grow(1).Gap(1).Children(func() {
+						ui.Text(c, "网易云登录态（借用 Cloudy 的登录）").FontSize(13.5).FontWeight(600)
+						ui.Text(c, "打开后读 Cloudy 存在 Windows 凭据管理器里的 MUSIC_U，走登录态配额；Cookie 只发给 music.163.com").
+							FontSize(12).TextColor(p.muted).SingleLine()
+					})
+					prevCloudy := a.setCloudyAuth
+					settingSwitch(c.Key("set-cloudy-auth"), &a.setCloudyAuth, "借用 Cloudy 登录态")
+					if a.setCloudyAuth != prevCloudy {
+						a.savePrefs()
+						if a.setCloudyAuth {
+							a.toast = "已允许借用 Cloudy 登录态，重新搜索即可生效"
+						} else {
+							a.toast = "已关闭：网易云请求改回匿名"
+						}
+					}
+				})
 				ui.Column(c.Key("set-ai-row")).FillWidth().Padding(10, 0, 10, 0).Gap(8).Children(func() {
 					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 						ui.Column(c).Grow(1).Gap(1).Children(func() {

@@ -173,35 +173,37 @@ type app struct {
 	recents     []recentItem
 
 	// 1. 曲库（默认未添加文件夹，用户点击添加后再扫描）
-	libFolders     []string
-	downloading    bool // 正在批量下载歌词
-	sepAudio       string
-	sepRunning     bool
-	sepStage       string
-	sepPct         int
-	sepStems       []sepStem
-	sepPlaying     string // 正在试听哪条轨
-	cleanupDir     string
-	cleanupItems   []cleanupGroup
-	cleanupConfirm bool
-	cleanupScanned bool
-	sepPaused      bool
-	downloadDone   int
-	downloadAll    int
-	downloadNote   string
-	libScanning    bool
-	scanToken      uint64 // 每次扫描自增，旧扫描据此自行退出（原子访问）
-	libPage        int    // 当前页码（0 起）
-	libPageSize    int    // 每页条数：50 / 100
-	pageMenuOpen   bool   // 每页数下拉是否展开
-	libScanDone    int
-	libScanAll     int
-	libScanTime    string
-	libStats       libStats
-	libFilter      int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏 5:官方逐字
-	libQuery       string
-	tracks         []trackItem
-	libSelected    map[string]bool // 勾选状态按路径存：切片重建也不会丢
+	libFolders         []string
+	downloading        bool // 正在批量下载歌词
+	sepAudio           string
+	sepRunning         bool
+	sepStage           string
+	sepPct             int
+	sepStems           []sepStem
+	sepPlaying         string // 正在试听哪条轨
+	cleanupDir         string
+	cleanupItems       []cleanupGroup
+	cleanupConfirm     bool
+	cleanupHardConfirm bool   // 「永久删除」的二次确认
+	cleanupResult      string // 上一次删除的真实结果（成了几个、剩几个、为什么）
+	cleanupScanned     bool
+	sepPaused          bool
+	downloadDone       int
+	downloadAll        int
+	downloadNote       string
+	libScanning        bool
+	scanToken          uint64 // 每次扫描自增，旧扫描据此自行退出（原子访问）
+	libPage            int    // 当前页码（0 起）
+	libPageSize        int    // 每页条数：50 / 100
+	pageMenuOpen       bool   // 每页数下拉是否展开
+	libScanDone        int
+	libScanAll         int
+	libScanTime        string
+	libStats           libStats
+	libFilter          int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏 5:官方逐字
+	libQuery           string
+	tracks             []trackItem
+	libSelected        map[string]bool // 勾选状态按路径存：切片重建也不会丢
 
 	// 封面按需加载（见 cover.go）
 	coverMu           sync.Mutex
@@ -344,12 +346,15 @@ type app struct {
 	scrapeFollowPos  int                   // 它在当时列表里的位置
 	scrapeSizes      map[string][2]int     // 候选封面 URL → 实测像素
 	scrapeSizeBusy   map[string]bool
+	scrapePending    []scrapePlanItem // 限速暂停后没跑完的计划，冷却结束自动续跑
+	scrapeGen        int              // 每次发起写入自增，用来作废旧定时器
 	scrapeListScroll ui.ScrollState
 	scrapeCandScroll ui.ScrollState
 
 	// 7. 设置
 	modelOK               [3]bool
 	setAutoSkipNoVocal    bool
+	setCloudyAuth         bool
 	setVocalRatio         string
 	setEnMode             int
 	setFetchInterval      string
@@ -397,6 +402,7 @@ type userPrefs struct {
 	AIAPIKey         string   `json:"ai_api_key,omitempty"`
 	CustomPython     string   `json:"custom_python,omitempty"`
 	LibPageSize      int      `json:"lib_page_size,omitempty"`
+	CloudyAuth       bool     `json:"cloudy_auth,omitempty"` // 借用 Cloudy 的网易云登录态（默认关）
 }
 
 func prefsPath() string {
@@ -483,6 +489,7 @@ func (a *app) loadPrefs() {
 	a.setAIBaseURL = strings.TrimSpace(up.AIBaseURL)
 	a.setAIModel = strings.TrimSpace(up.AIModel)
 	a.setCustomPython = strings.TrimSpace(up.CustomPython)
+	a.setCloudyAuth = up.CloudyAuth
 	if key, migrate, err := unprotectSecret(up.AIAPIKey); err == nil {
 		a.setAIAPIKey = key
 		if migrate && key != "" {
@@ -574,6 +581,7 @@ func (a *app) savePrefs() {
 		AIAPIKey:         encAIKey,
 		CustomPython:     strings.TrimSpace(a.setCustomPython),
 		LibPageSize:      a.pageSize(),
+		CloudyAuth:       a.setCloudyAuth,
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)
@@ -1217,7 +1225,12 @@ func (a *app) pythonCmd(args ...string) *exec.Cmd {
 	if root := appRootDir(); root != "" {
 		cmd.Dir = root
 	}
-	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+	env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+	if a.setCloudyAuth {
+		// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
+		env = append(env, "KIRALRC_CLOUDY_AUTH=1")
+	}
+	cmd.Env = env
 	return cmd
 }
 
@@ -1458,7 +1471,12 @@ func (a *app) checkEditorLrc(path, audioPath string) {
 		}
 		cmd := newHiddenCmd(py, args...)
 		cmd.Dir = appRootDir()
-		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		if a.setCloudyAuth {
+			// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
+			env = append(env, "KIRALRC_CLOUDY_AUTH=1")
+		}
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		var issues []string
 		for _, ln := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
@@ -1487,7 +1505,12 @@ func (a *app) heartsCurrentLrc() {
 	go func() {
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "hearts", path)
 		cmd.Dir = appRootDir()
-		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		if a.setCloudyAuth {
+			// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
+			env = append(env, "KIRALRC_CLOUDY_AUTH=1")
+		}
+		cmd.Env = env
 		out, _ := cmd.CombinedOutput()
 		msg := strings.TrimSpace(string(out))
 		a.post(func() {
@@ -1568,7 +1591,12 @@ func (a *app) refreshBackendInfo() {
 		}
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "info", "--json")
 		cmd.Dir = appRootDir()
-		cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+		if a.setCloudyAuth {
+			// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
+			env = append(env, "KIRALRC_CLOUDY_AUTH=1")
+		}
+		cmd.Env = env
 		out, err := cmd.Output()
 		if err != nil {
 			return
@@ -2784,7 +2812,12 @@ func (a *app) loadEditorCoverAsync(audioPath string) {
 			py := getActivePythonPath()
 			cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "cover", ap)
 			cmd.Dir = appRootDir()
-			cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+			env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+			if a.setCloudyAuth {
+				// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
+				env = append(env, "KIRALRC_CLOUDY_AUTH=1")
+			}
+			cmd.Env = env
 			if out, err := cmd.Output(); err == nil {
 				p := strings.TrimSpace(string(out))
 				if p != "" {

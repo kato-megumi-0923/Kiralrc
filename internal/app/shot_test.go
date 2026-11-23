@@ -95,6 +95,7 @@ func TestShots(t *testing.T) {
 		{"工具箱", "tools", nil},
 		{"设置", "settings", nil},
 		{"", "scrape", seedScrapeDemo},
+		{"", "cleanup", seedCleanupDemo},
 	}
 	made := 0
 	for _, p := range pages {
@@ -247,4 +248,30 @@ func hsvToRGB(h, s, v float64) (float64, float64, float64) {
 		r, g, b = c, 0, x
 	}
 	return (r + m) * 255, (g + m) * 255, (b + m) * 255
+}
+
+// seedCleanupDemo 给「清理歌词文件」页摆一桌演示数据：
+// 三组已选 / 未选的歌词，外加一条上一次操作的真实结果。
+func seedCleanupDemo(a *app) {
+	dir := `E://cloudy music\WHITE ALBUM 2`
+	a.page = pageCleanup
+	a.cleanupDir = dir
+	a.cleanupScanned = true
+	a.cleanupResult = "已移入回收站 12 个，3 个没动（操作被取消）。"
+	a.cleanupItems = []cleanupGroup{
+		{Ext: ".lrc", Files: []string{
+			filepath.Join(dir, "届かない恋.lrc"),
+			filepath.Join(dir, "幸せな記憶.lrc"),
+			filepath.Join(dir, "Twinkle Snow.lrc"),
+		}, Sel: true},
+		{Ext: ".vtt", Files: []string{filepath.Join(dir, "answer.vtt")}},
+		{Ext: ".ttml", Files: []string{
+			filepath.Join(dir, "POWDER SNOW.ttml"),
+			filepath.Join(dir, "After All.ttml"),
+		}},
+		{Ext: ".txt", Files: []string{
+			filepath.Join(dir, "歌词txt", "说明.txt"),
+			filepath.Join(dir, "歌词txt", "备份.txt"),
+		}, Sel: true},
+	}
 }

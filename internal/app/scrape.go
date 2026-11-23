@@ -689,14 +689,21 @@ func (a *app) scrapeNeteaseTargets() []scrapeTrack {
 	return out
 }
 
+// scrapeBlockedByCooldown 冷却期内不再发新计划（单曲搜索、按 ID、按网易云共用一套冷却）。
+// 返回 true 时提示已经写好。
+func (a *app) scrapeBlockedByCooldown() bool {
+	wait := time.Until(a.scrapeCoolUntil)
+	if wait <= 0 {
+		return false
+	}
+	a.toast = fmt.Sprintf("网易云还在限速冷却，约 %d 秒后再试", int(wait.Seconds())+1)
+	return true
+}
+
 // applyScrapeByNetease 没有 ID 的那些：拿本地歌名/歌手去网易云搜，后端只认
 // 「歌名、歌手、专辑全对得上」的那条，对上了就按勾选的字段一次写完。
 func (a *app) applyScrapeByNetease() {
-	if a.scrapeApplying {
-		return
-	}
-	if wait := time.Until(a.scrapeCoolUntil); wait > 0 {
-		a.toast = fmt.Sprintf("网易云还在限速冷却，约 %d 秒后再试", int(wait.Seconds())+1)
+	if a.scrapeApplying || a.scrapeBlockedByCooldown() {
 		return
 	}
 	targets := a.scrapeNeteaseTargets()
@@ -716,7 +723,7 @@ func (a *app) applyScrapeByNetease() {
 // applyScrapeByID 不再逐首挑候选：文件里已经有网易云 ID，就按 ID 取那首歌的
 // 封面/年份/专辑，直接套用当前勾选的字段与策略写进去。
 func (a *app) applyScrapeByID() {
-	if a.scrapeApplying {
+	if a.scrapeApplying || a.scrapeBlockedByCooldown() {
 		return
 	}
 	targets := a.scrapeByIDTargets()
@@ -768,6 +775,8 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 	if a.scrapeCur >= 0 && a.scrapeCur < len(a.scrapeItems) {
 		a.scrapeFollowPath = a.scrapeItems[a.scrapeCur].Path
 	}
+	a.scrapeGen++ // 旧定时器作废
+	a.scrapePending = nil
 	a.scrapeApplying = true
 	a.scrapeDone, a.scrapeTotal = 0, len(plan)
 
@@ -784,7 +793,9 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			return
 		}
 		results := map[string]string{}
-		var ok, skipped, failed, upgraded, kept int
+		var ok, skipped, failed, upgraded, kept, picks int
+		var paused bool
+		var retryAfter, resumeFrom int
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
@@ -792,27 +803,18 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			if !strings.HasPrefix(line, "{") {
 				continue
 			}
-			var msg struct {
-				I         int      `json:"i"`
-				Total     int      `json:"total"`
-				Path      string   `json:"path"`
-				Written   bool     `json:"written"`
-				Changed   []string `json:"changed"`
-				Note      string   `json:"note"`
-				Readonly  bool     `json:"readonly"`
-				CoverPX   string   `json:"cover_px"`
-				CoverKept bool     `json:"cover_kept"`
-				Summary   bool     `json:"summary"`
-				OK        int      `json:"ok"`
-				Failed    int      `json:"failed"`
-				Skipped   int      `json:"skipped"`
-			}
+			var msg scrapeProgress
 			if json.Unmarshal([]byte(line), &msg) != nil {
 				continue
 			}
 			if msg.Summary {
 				ok, skipped, failed = msg.OK, msg.Skipped, msg.Failed
+				paused, retryAfter, resumeFrom = msg.Paused, msg.RetryAfter, msg.ResumeFrom
+				picks += msg.NeedsPickCount
 				continue
+			}
+			if msg.NeedsPick {
+				picks++
 			}
 			if msg.CoverPX != "" {
 				upgraded++
@@ -839,6 +841,10 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			note = "写入进程异常：" + waitErr.Error()
 		}
 		a.finishScrapeApply(note, results)
+		if paused && note == "" {
+			a.scheduleScrapeResume(plan, resumeFrom, retryAfter, skipped, picks)
+			return
+		}
 		a.post(func() {
 			if note != "" {
 				return
@@ -850,9 +856,86 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			if kept > 0 {
 				msg += fmt.Sprintf("；%d 首源图比本地小，保留原图", kept)
 			}
+			if picks > 0 {
+				msg += fmt.Sprintf("；%d 首有多条都对得上，需要手选", picks)
+			}
 			a.toast = msg
 		})
 	}()
+}
+
+// scrapeProgress 是 `scrape apply` 的一行输出：逐首结果，或末尾的汇总。
+//
+// ok / skipped 这类键在两边类型不同（逐首是布尔、汇总是首数），拼在一个
+// struct 里会整行解不动，所以键名分开：written / noop / needs_pick 是逐首的
+// 布尔，汇总用 ok / skipped / failed / needs_pick_count 这些首数。
+type scrapeProgress struct {
+	I         int      `json:"i"`
+	Total     int      `json:"total"`
+	Path      string   `json:"path"`
+	Written   bool     `json:"written"`
+	Changed   []string `json:"changed"`
+	Note      string   `json:"note"`
+	Readonly  bool     `json:"readonly"`
+	CoverPX   string   `json:"cover_px"`
+	CoverKept bool     `json:"cover_kept"`
+	NeedsPick bool     `json:"needs_pick"`
+
+	Summary        bool `json:"summary"`
+	OK             int  `json:"ok"`
+	Failed         int  `json:"failed"`
+	Skipped        int  `json:"skipped"`
+	NeedsPickCount int  `json:"needs_pick_count"`
+	Paused         bool `json:"paused"`
+	RetryAfter     int  `json:"retry_after"`
+	ResumeFrom     int  `json:"resume_from"`
+}
+
+// scheduleScrapeResume 被限速打断后，把没跑完的计划存起来，冷却结束自动续跑。
+func (a *app) scheduleScrapeResume(plan []scrapePlanItem, resumeFrom, retryAfter, skipped, picks int) {
+	if resumeFrom < 1 || resumeFrom > len(plan) {
+		return
+	}
+	wait := retryAfter
+	if wait <= 0 {
+		wait = 120
+	}
+	rest := append([]scrapePlanItem(nil), plan[resumeFrom-1:]...)
+	gen := a.scrapeGen
+	a.post(func() {
+		a.scrapeCoolUntil = time.Now().Add(time.Duration(wait) * time.Second)
+		a.scrapePending = rest
+		a.scrapeWarn = fmt.Sprintf("网易云限速，暂停在第 %d/%d 首；约 %d 秒后自动续跑（可点「取消续跑」）",
+			resumeFrom-1, len(plan), wait)
+		msg := fmt.Sprintf("网易云限速，暂停了；%d 秒后从第 %d 首继续", wait, resumeFrom)
+		if picks > 0 {
+			msg += fmt.Sprintf("；%d 首有多条候选，需要手选", picks)
+		}
+		a.toast = msg
+	})
+	go func() {
+		time.Sleep(time.Duration(wait) * time.Second)
+		a.post(func() {
+			// 期间又发起过新写入、或者用户取消了，就不要再续
+			if a.scrapeGen != gen || a.scrapeApplying || len(a.scrapePending) == 0 {
+				return
+			}
+			rest := a.scrapePending
+			a.scrapePending = nil
+			a.scrapeWarn = ""
+			a.scrapeCoolUntil = time.Time{}
+			a.toast = fmt.Sprintf("冷却结束，继续写剩下的 %d 首", len(rest))
+			a.runScrapePlan(rest)
+		})
+	}()
+}
+
+// cancelScrapeResume 放弃自动续跑：换一代，等着的定时器就失效了。
+func (a *app) cancelScrapeResume() {
+	a.scrapeGen++
+	a.scrapePending = nil
+	a.scrapeWarn = ""
+	a.toast = "已取消续跑，剩下的可以手动再来一次"
 }
 
 func (a *app) finishScrapeApply(errMsg string, results map[string]string) {
@@ -1441,6 +1524,12 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			}
 			if a.scrapeApplying {
 				hint = fmt.Sprintf("正在写入 %d / %d…", a.scrapeDone, a.scrapeTotal)
+			} else if n := len(a.scrapePending); n > 0 {
+				wait := int(time.Until(a.scrapeCoolUntil).Seconds()) + 1
+				if wait < 0 {
+					wait = 0
+				}
+				hint = fmt.Sprintf("限速暂停：还剩 %d 首，约 %d 秒后自动续跑", n, wait)
 			}
 			ui.Text(c, hint).FontSize(11.5).TextColor(p.muted).Grow(1).MinWidth(0).SingleLine()
 
@@ -1477,6 +1566,13 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			}
 			if scrapeActionPill(c, "scrape-apply", label, applyBg, applyFg).Clicked() && n > 0 && !a.scrapeApplying {
 				a.applyScrape()
+			}
+			if len(a.scrapePending) > 0 && !a.scrapeApplying {
+				if scrapeActionPill(c, "scrape-cancel",
+					fmt.Sprintf("取消续跑（%d 首）", len(a.scrapePending)),
+					p.surface2, p.text).Clicked() {
+					a.cancelScrapeResume()
+				}
 			}
 		})
 	})

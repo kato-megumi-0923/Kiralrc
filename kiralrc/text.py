@@ -33,17 +33,26 @@ DASH_RE = re.compile(r"\s*[-–—]{1,}\s*")
 CREDIT_RE = re.compile(r"^\s*(作词|作曲|编曲|制作|出品|监制|混音|母带|演唱|OP|SP)\s*[:：]")
 
 
+def _retry_after(exc) -> float | None:
+    from . import netauth
+
+    try:
+        return netauth.parse_retry_after(exc.headers.get("Retry-After"))
+    except Exception:
+        return None
+
+
 def _get_json(url: str, tries: int = 3, timeout: int = 20):
     from . import netauth
 
-    netauth.ensure(HEADERS)   # 有 Cloudy 的登录态就带上，配额比匿名高
     for _ in range(tries + 1):
         try:
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            # 每次请求现配 header：Cookie 只在白名单主机上附带
+            with netauth.open_url(url, HEADERS, timeout) as r:
                 data = json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code in (405, 418, 429):
+                netauth.record_rate_limit(_retry_after(e))
                 raise RateLimited(f"网易云 HTTP {e.code}")
             time.sleep(3)
             continue
@@ -52,11 +61,13 @@ def _get_json(url: str, tries: int = 3, timeout: int = 20):
             continue
         # 网易云把"问得太勤"也放在 200 响应的 code 里
         if isinstance(data, dict) and data.get("code") in (405, 418, 429):
+            netauth.record_rate_limit(None)
             raise RateLimited(data.get("message") or data.get("msg") or "网易云限速")
-        # 301 是"需要登录"：多半是 Cookie 过期了，摘掉退回匿名再试一次
-        if isinstance(data, dict) and data.get("code") == 301 and "Cookie" in HEADERS:
-            netauth.forget(HEADERS)
-            continue
+        # 301 是"需要登录"：登录态过期了，摘掉 Cookie 退回匿名再试一次
+        if isinstance(data, dict) and data.get("code") == 301:
+            if netauth.note_rejected():
+                continue
+        netauth.clear_cooldown()   # 这一下通了，说明没在限速
         return data
     return None
 

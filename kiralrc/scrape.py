@@ -18,8 +18,10 @@ import re
 import time
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 
+from . import netauth
 from . import text as tx
 
 # 能稳定写标签的容器。WAV / APE 之类只读出来给人看，标 writable: false。
@@ -77,6 +79,110 @@ def _cover_mime(data: bytes) -> str:
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     return "image/jpeg"
+
+
+# 三种容器都只吃 JPEG / PNG；别的格式（WebP、GIF）宁可不要，也别塞进去冒风险
+SUPPORTED_COVER_MIME = frozenset({"image/png", "image/jpeg"})
+
+
+def _png_intact(data: bytes) -> bool:
+    """按块走一遍 PNG：CRC 对得上、IDAT 能解压、末尾有 IEND。"""
+    i, n = 8, len(data)
+    idat: list[bytes] = []
+    saw_ihdr = saw_idat = False
+    while i + 8 <= n:
+        length = int.from_bytes(data[i:i + 4], "big")
+        ctype = data[i + 4:i + 8]
+        end = i + 8 + length
+        if length < 0 or end + 4 > n:
+            return False
+        body = data[i + 8:end]
+        crc = int.from_bytes(data[end:end + 4], "big")
+        if zlib.crc32(ctype + body) & 0xFFFFFFFF != crc:
+            return False
+        if not saw_ihdr:
+            if ctype != b"IHDR":
+                return False
+            saw_ihdr = True
+        elif ctype == b"IDAT":
+            saw_idat = True
+            idat.append(body)
+        elif ctype == b"IEND":
+            if not (saw_ihdr and saw_idat):
+                return False
+            try:
+                zlib.decompress(b"".join(idat))
+            except Exception:
+                return False
+            return True
+        i = end + 4
+    return False
+
+
+def _jpeg_intact(data: bytes) -> bool:
+    """按标记走一遍 JPEG：结构连得上、有 SOF、最后落在 EOI。"""
+    n = len(data)
+    if data[:2] != b"\xff\xd8":
+        return False
+    i, saw_sof = 2, False
+    while i + 1 < n:
+        if data[i] != 0xFF:
+            return False
+        marker = data[i + 1]
+        if marker == 0xFF:            # 填充字节
+            i += 1
+            continue
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        if marker == 0xD9:
+            return saw_sof
+        if i + 4 > n:
+            return False
+        seg = int.from_bytes(data[i + 2:i + 4], "big")
+        if seg < 2:
+            return False
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            saw_sof = True
+        if marker == 0xDA:
+            # 后面是熵编码数据：跳到下一个真正的标记（跳过 FF00 与 RSTn）
+            j = i + 2 + seg
+            while j + 1 < n:
+                if data[j] != 0xFF:
+                    j += 1
+                    continue
+                nxt = data[j + 1]
+                if nxt == 0x00 or 0xD0 <= nxt <= 0xD7:
+                    j += 2
+                    continue
+                if nxt == 0xFF:
+                    j += 1
+                    continue
+                break
+            i = j
+            continue
+        i += 2 + seg
+    return False
+
+
+def cover_problem(data: bytes) -> str:
+    """检查下载回来的封面能不能用；能用返回空串，否则返回给人看的原因。
+
+    CDN 出错时经常回一张 HTML 错误页（200 + text/html），字节数也不小，
+    光看长度会当成图写进去——那样封面就成了张 0×0 的破图。
+    """
+    if not data:
+        return "封面下载失败（没拿到内容）"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "" if _png_intact(data) else "封面是残缺的 PNG（解不开）"
+    if data[:2] == b"\xff\xd8":
+        return "" if _jpeg_intact(data) else "封面是残缺的 JPEG（解不开）"
+    head = data[:256].lstrip().lower()
+    if head.startswith((b"<!doctype", b"<html", b"<?xml", b"<")):
+        return "下载回来的不是图片（像是 HTML 错误页）"
+    if head.startswith(b"{"):
+        return "下载回来的不是图片（像是接口报错 JSON）"
+    return "下载回来的不是 PNG/JPEG，这个容器放不了"
 
 
 # ---------- 读本地现状 ----------
@@ -410,8 +516,12 @@ def search_with_note(query: str, artist: str = "", title: str = "",
     """给 CLI 用：除了候选，还告诉前端「网易云那边是不是被限速了」。
 
     限速时静默只剩 iTunes 的结果，用户会以为「明明搜得到为什么这里没有」，
-    所以必须把原因带出去。
+    所以必须把原因带出去；冷却期间干脆不发请求。
     """
+    wait = netauth.cooling_for()
+    if wait > 0:
+        return {"items": [], "auth": _auth_name(),
+                "warning": f"网易云限速冷却中，约 {int(wait) + 1} 秒后再搜"}
     state: dict = {}
     cands = search_candidates(query, artist=artist, title=title,
                               netease_id=netease_id, limit=limit,
@@ -453,46 +563,116 @@ def search_candidates(query: str, artist: str = "", title: str = "",
 
 # ---------- 写入 ----------
 
-RESOLVE_GAP = 0.8   # 「按网易云补全」每首之间歇一下，免得被限速
+RESOLVE_GAP = 0.8            # 「按网易云补全」每首之间歇一下，免得被限速
+DURATION_TOLERANCE = 3       # 秒。同一录音不会差太多；长曲子再放宽 2%（编码留白）
+
+# 版本关键词不许当副标题丢掉：不然「晴天 (Live)」会被当成原版写进去。
+# ASCII 词加边界，免得 Deliver 里的 live、Karaoke 之外的东西被误伤。
+_VERSION_WORDS = (
+    ("live", (r"(?<![a-z])live(?![a-z])", "ライブ", "现场")),
+    ("remix", (r"(?<![a-z])remix(?![a-z])", r"(?<![a-z])rmx(?![a-z])",
+               r"(?<![a-z])mix(?![a-z])", "混音")),
+    ("acoustic", (r"(?<![a-z])acoustic(?![a-z])", "アコースティック", "不插电")),
+    ("instrumental", (r"(?<![a-z])instrumental(?![a-z])", r"(?<![a-z])inst\.?(?![a-z])",
+                      r"off\s*vocal", "伴奏", "纯音乐")),
+    ("karaoke", (r"(?<![a-z])karaoke(?![a-z])", "カラオケ")),
+    ("cover", (r"(?<![a-z])cover(?![a-z])", "翻唱")),
+    ("demo", (r"(?<![a-z])demo(?![a-z])",)),
+    ("remaster", (r"(?<![a-z])remaster(?:ed)?(?![a-z])",)),
+    ("edit", (r"(?<![a-z])edit(?![a-z])",)),
+    ("extended", (r"(?<![a-z])extended(?![a-z])",)),
+    ("spedup", (r"sped\s*up", "加速")),
+    ("slowed", (r"slowed", "减速")),
+)
+_VERSION_RES = tuple((name, re.compile("|".join(parts), re.I))
+                     for name, parts in _VERSION_WORDS)
+# 多歌手的写法：歌名里 / , 、 & feat. 都算分隔
+_ARTIST_SPLIT = re.compile(r"[/,，、&＆;；]|(?<![a-z])feat\.?(?![a-z])|(?<![a-z])ft\.?(?![a-z])",
+                           re.I)
+
+
+def version_tags(text: str) -> frozenset[str]:
+    """歌名里带的版本标记：live / remix / acoustic / instrumental / …"""
+    raw = str(text or "")
+    return frozenset(name for name, rx in _VERSION_RES if rx.search(raw))
+
+
+def artist_set(text: str) -> frozenset[str]:
+    """把「A/B」「A feat. B」拆成集合，顺序无所谓，但人数要一样。"""
+    return frozenset(p for p in (tx._fold(x) for x in _ARTIST_SPLIT.split(str(text or ""))) if p)
 
 
 def strict_match(local: dict, cand: dict) -> bool:
-    """歌名、歌手、专辑都对上才算同一首。
+    """歌名、版本、歌手、专辑都对上才算同一首（有时长再对一次时长）。
 
-    折叠（去括号副标题、去标点空白、统一大小写）后再比，所以
-    「愛しよ」与「愛しよ (Ballad Ver.)」的歌名算一致——但专辑也要对得上，
-    真·另一个版本通常专辑不同，会被挡掉。
+    比之前严的地方：
+    - 版本关键词保留，(Live) / (Remix) / 伴奏 这类不会被当成原版；
+    - 歌手按「完整艺人」比，不再允许一方包含另一方；
+    - 本地有专辑而候选没有专辑，也不算对上——信息不全就别猜。
     """
     fold = tx._fold
     t1, t2 = fold(local.get("title", "")), fold(cand.get("title", ""))
     if not t1 or t1 != t2:
         return False
-    a1, a2 = fold(local.get("artist", "")), fold(cand.get("artist", ""))
-    if not a1 or not a2:
+    if version_tags(local.get("title", "")) != version_tags(cand.get("title", "")):
         return False
-    if a1 != a2 and a1 not in a2 and a2 not in a1:
+
+    a1, a2 = artist_set(local.get("artist", "")), artist_set(cand.get("artist", ""))
+    if a1 and a1 != a2:
         return False
+
     alb1, alb2 = fold(local.get("album", "")), fold(cand.get("album", ""))
-    if alb1 and alb2 and alb1 != alb2:
+    if alb1 and alb1 != alb2:
         return False
+
+    d1 = int(local.get("duration") or 0)
+    d2 = int(cand.get("duration") or 0)
+    if d1 > 0 and d2 > 0:
+        tolerance = max(DURATION_TOLERANCE, int(d1 * 0.02))
+        if abs(d1 - d2) > tolerance:
+            return False
     return True
 
 
-def resolve_by_search(local: dict, path: Path) -> dict:
-    """按「歌名 歌手」搜网易云，返回第一条完全对得上的候选；没有就空。"""
+def find_unique_match(local: dict, cands: list[dict]) -> tuple[dict, str]:
+    """在候选里找唯一一条对得上的。
+
+    返回 (候选, 原因)：原因 "" 表示命中，"none" 没对上，"ambiguous" 有多条
+    都对得上（不同录音版本）——这种留给用户手选，绝不替他挑第一条。
+    """
+    hits = [c for c in cands if strict_match(local, c)]
+    if not hits:
+        return {}, "none"
+    if len({int(c.get("song_id") or 0) for c in hits}) > 1:
+        return {}, "ambiguous"
+    return hits[0], ""
+
+
+def resolve_by_search(local: dict, path: Path, cache: dict | None = None) -> tuple[dict, str]:
+    """按「歌名 歌手」搜网易云，返回 (唯一命中, 原因)。
+
+    cache 是同一批里共享的查询结果：同一首歌重复出现时不再问第二遍。
+    """
+    key = (tx._fold(local.get("title", "")), tx._fold(local.get("artist", "")))
+    if cache is not None and key[0] and key in cache:
+        return cache[key]
     query = " ".join(x for x in (local.get("title"), local.get("artist")) if x)
     if not query:
         query = path.stem
+    state: dict = {}
     try:
-        cands = _netease_candidates(query, "", "", None, 6)
+        cands = _netease_candidates(query, "", "", None, 6, state=state)
     except tx.RateLimited:
-        return {}
+        return {}, "rate_limited"
     except Exception:
-        return {}
-    for cand in cands:
-        if strict_match(local, cand):
-            return cand
-    return {}
+        return {}, "error"
+    if state.get("rate_limited"):
+        # 限速时候选是不全的：这时候「没找到」不能当结论，得如实说被限速了
+        return {}, "rate_limited"
+    result = find_unique_match(local, cands)
+    if cache is not None and key[0]:
+        cache[key] = result
+    return result
 
 
 def _download(url: str, timeout: int = 30) -> bytes:
@@ -515,13 +695,20 @@ def _local_meta(path: Path, ext: str) -> dict:
     except Exception:
         audio = None
     if ext == ".flac":
-        return _flac_meta(audio) if audio is not None else _flac_meta(None)
-    if ext == ".mp3":
+        meta = _flac_meta(audio) if audio is not None else _flac_meta(None)
+    elif ext == ".mp3":
         tags = getattr(audio, "tags", None) if audio is not None else None
-        return _id3_meta(tags if tags is not None else _id3_tags(path))
-    if ext == ".m4a":
-        return _m4a_meta(audio) if audio is not None else _m4a_meta(None)
-    return {"title": "", "artist": "", "album": "", "year": "", "cover": b""}
+        meta = _id3_meta(tags if tags is not None else _id3_tags(path))
+    elif ext == ".m4a":
+        meta = _m4a_meta(audio) if audio is not None else _m4a_meta(None)
+    else:
+        meta = {"title": "", "artist": "", "album": "", "year": "", "cover": b""}
+    # 时长用来核对「是不是同一段录音」，读不出来就 0（不参与比较）
+    try:
+        meta["duration"] = int(round(getattr(getattr(audio, "info", None), "length", 0) or 0))
+    except Exception:
+        meta["duration"] = 0
+    return meta
 
 
 def _want(local: dict, cand: dict, fields: dict, mode: str) -> dict:
@@ -644,7 +831,19 @@ WRITERS = {".flac": _write_flac, ".mp3": _write_mp3, ".m4a": _write_m4a,
            ".mp4": _write_m4a}
 
 
-def apply_one(item: dict, by_id: dict | None = None) -> dict:
+_RESOLVE_NOTES = {
+    "rate_limited": "网易云限速，先暂停",
+    "ambiguous": "网易云有多条都对得上（可能是不同录音版本），请手动挑一条",
+    "error": "网易云搜索失败，稍后再试",
+}
+
+
+def _resolve_note(reason: str) -> str:
+    return _RESOLVE_NOTES.get(reason, "网易云没搜到歌名/歌手/专辑全对得上的")
+
+
+def apply_one(item: dict, by_id: dict | None = None,
+              search_cache: dict | None = None) -> dict:
     """写一首。返回 {path, ok, changed, note, readonly}。
 
     计划里没带 candidate、只带了 netease_id 时，用 by_id 里预取到的那条
@@ -655,7 +854,8 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
     fields = item.get("fields") or {}
     mode = "overwrite" if str(item.get("mode") or "") == "overwrite" else "fill"
     res = {"path": str(path), "ok": False, "changed": [], "note": "",
-           "readonly": False, "skipped": False, "cover_px": "", "cover_kept": False}
+           "readonly": False, "skipped": False, "cover_px": "", "cover_kept": False,
+           "needs_pick": False}
 
     if not path.is_file():
         res["note"] = "文件不存在"
@@ -676,11 +876,12 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
 
     if not cand:
         if str(item.get("resolve") or "") == "netease":
-            # 「按网易云补全」：拿本地歌名/歌手去搜，只认完全对得上的那条
-            cand = resolve_by_search(local, path)
+            # 「按网易云补全」：拿本地歌名/歌手去搜，只认唯一一条全对得上的
+            cand, reason = resolve_by_search(local, path, search_cache)
             if not cand:
-                res["note"] = "网易云没搜到歌名/歌手/专辑全对得上的"
+                res["note"] = _resolve_note(reason)
                 res["skipped"] = True
+                res["needs_pick"] = reason == "ambiguous"
                 return res
         else:
             # 计划里没带候选（Go 侧「按 ID 补全」发来的就是这样）：按 ID 取那首歌
@@ -704,19 +905,33 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
         cover_url = resize_cover_url(str(want.pop("cover_url")),
                                     int(item.get("cover_size") or 0))
         data = _download(cover_url)
-        new_w, new_h = image_size(data)
-        old_w, old_h = image_size(local.get("cover") or b"")
-        if not data:
-            res["note"] = "高清封面下载失败"
-        elif old_w and old_h and min(new_w, new_h) < min(old_w, old_h):
-            # 网易云的 ?param=1200 只是请求尺寸，服务端不会放大：源图本来就 390px 时
-            # 硬写进去就是把大图换成小图，宁可保留原图并把实情说出来。
-            kept_note = f"源图 {new_w}×{new_h}，比本地 {old_w}×{old_h} 小，保留原图"
-            res["cover_kept"] = True
+        problem = cover_problem(data)
+        if problem:
+            # CDN 出错常回一张 HTML（200 + text/html，字节数还不小）：
+            # 不校验就会把错误页当封面写进音频，还报「更新成功」。
+            res["note"] = problem
         else:
-            cover = data
-            cover_px = f"{new_w}×{new_h}"
-            want["cover"] = True
+            new_w, new_h = image_size(data)
+            old_w, old_h = image_size(local.get("cover") or b"")
+            if old_w and old_h and min(new_w, new_h) < min(old_w, old_h):
+                # 网易云的 ?param=1200 只是请求尺寸，服务端不会放大：源图本来就 390px 时
+                # 硬写进去就是把大图换成小图，宁可保留原图并把实情说出来。
+                kept_note = f"源图 {new_w}×{new_h}，比本地 {old_w}×{old_h} 小，保留原图"
+                res["cover_kept"] = True
+            elif new_w <= 0 or new_h <= 0:
+                res["note"] = "封面尺寸读不出来，没写"
+            else:
+                cover = data
+                cover_px = f"{new_w}×{new_h}"
+                want["cover"] = True
+
+    if not want and not cover:
+        if kept_note and not res["note"]:
+            res["note"] = kept_note
+        if not res["note"]:
+            res["note"] = "没有需要改动的字段"
+            res["skipped"] = True
+        return res
 
     try:
         writer(path, want, cover)
@@ -736,43 +951,88 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
     return res
 
 
+def _skip_result(item: dict, note: str) -> dict:
+    return {"path": str(item.get("path") or ""), "ok": False, "changed": [],
+            "note": note, "readonly": False, "skipped": True,
+            "cover_px": "", "cover_kept": False, "needs_pick": False}
+
+
 def apply_plan(plan, on_item=None) -> dict:
     """按计划逐首写。on_item(i, total, result) 用来往外报进度。
 
     计划里只给 netease_id 的条目（「按 ID 批量补全」走这条路）：先把所有 ID
-    一次请求补齐，再逐首写——一首一个请求会被网易云限速。
+    一次请求补齐（同批重复的 ID 只问一次），再逐首写——一首一个请求会被限速。
+
+    限速在这里统一兜住：第一次吃到 405/418/429 就停手，剩下的记成「暂停」并带上
+    retry_after，交给调用方等冷却结束再从 resume_from 续跑；没跑到的条目也要
+    报一条结果，进度条才不会停在半路。
     """
     items = plan.get("items") if isinstance(plan, dict) else plan
     items = [it for it in (items or []) if isinstance(it, dict)]
     total = len(items)
 
+    def emit(i: int, res: dict) -> None:
+        if on_item is not None:
+            on_item(i, total, res)
+
+    def pause(reason: str, start: int, ok: int, skipped: int, failed: int, picks: int) -> dict:
+        wait = int(round(netauth.cooling_for())) + 1
+        for j in range(start, total + 1):
+            emit(j, _skip_result(items[j - 1], reason))
+        return {"summary": True, "total": total, "ok": ok,
+                "skipped": skipped + max(0, total - start + 1), "failed": failed,
+                "needs_pick_count": picks, "paused": True,
+                "retry_after": wait, "resume_from": start}
+
+    if netauth.cooling_for() > 0:
+        # 还在冷却里：一次请求都不发，直接说还要等多久
+        return pause("网易云限速冷却中，先不请求", 1, 0, 0, 0, 0)
+
     by_id: dict[int, dict] = {}
     ids = sorted({int(it.get("netease_id") or 0) for it in items} - {0})
     for start in range(0, len(ids), 100):        # URL 别太长，分批问
-        for song in netease_details(ids[start:start + 100]):
+        state: dict = {}
+        for song in netease_details(ids[start:start + 100], state=state):
             cand = _netease_candidate(song)
             if cand["song_id"]:
                 by_id[cand["song_id"]] = cand
+        if state.get("rate_limited"):
+            return pause("网易云限速，批量详情没取完，先暂停", 1, 0, 0, 0, 0)
 
-    ok = failed = skipped = 0
+    ok = failed = skipped = picks = 0
     last_search = 0.0
+    search_cache: dict[tuple[str, str], tuple[dict, str]] = {}
     for i, item in enumerate(items, 1):
+        if netauth.cooling_for() > 0:
+            return pause("网易云限速，已暂停", i, ok, skipped, failed, picks)
         if str(item.get("resolve") or "") == "netease":
             gap = time.monotonic() - last_search
             if gap < RESOLVE_GAP:
                 time.sleep(RESOLVE_GAP - gap)   # 一首一次搜索，别把网易云问急了
             last_search = time.monotonic()
-        res = apply_one(item, by_id)
+
+        res = apply_one(item, by_id, search_cache)
+        hit_limit = netauth.cooling_for() > 0 and not res["ok"]
+        if hit_limit:
+            # 这一首的失败其实是限速造成的，别记成「没搜到」
+            res["note"] = "网易云限速，已暂停"
+            res["skipped"] = True
+
         if res["ok"]:
             ok += 1
         elif res.get("skipped") or res.get("readonly"):
             skipped += 1
         else:
             failed += 1
-        if on_item is not None:
-            on_item(i, total, res)
+        if res.get("needs_pick"):
+            picks += 1
+        emit(i, res)
+
+        if hit_limit:
+            return pause("网易云限速，已暂停", i + 1, ok, skipped, failed, picks)
+
     return {"summary": True, "total": total, "ok": ok,
-            "skipped": skipped, "failed": failed}
+            "skipped": skipped, "failed": failed, "needs_pick_count": picks}
 
 
 def run_inspect(target: str | Path | None, paths: list[str] | None = None) -> list[dict]:

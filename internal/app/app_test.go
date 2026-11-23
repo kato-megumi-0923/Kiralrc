@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -1585,5 +1586,202 @@ func TestScrapeCoolsDownAfterRateLimit(t *testing.T) {
 	}
 	if !strings.Contains(a.toast, "冷却") {
 		t.Fatalf("批量补全应提示冷却，实际 %q", a.toast)
+	}
+}
+
+// ---------- 清理歌词：只走回收站 ----------
+
+// 回收站报错 / 用户取消时，绝不能顺手改用 os.Remove 把文件删掉。
+func TestCleanupNeverFallsBackToRemove(t *testing.T) {
+	dir := t.TempDir()
+	var files []string
+	for _, name := range []string{"a.lrc", "b.lrc"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, p)
+	}
+
+	old := recycleFilesFn
+	t.Cleanup(func() { recycleFilesFn = old })
+	recycleFilesFn = func(paths []string) ([]string, error) {
+		return nil, errors.New("操作被取消")
+	}
+
+	a := newApp()
+	done, left, reason := a.runCleanup(false, files)
+	if len(done) != 0 || len(left) != len(files) {
+		t.Fatalf("回收站失败时应当一个都不算处理：done=%v left=%v", done, left)
+	}
+	if reason == "" {
+		t.Fatal("失败原因要带出来")
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatalf("文件被删掉了：%v", err)
+		}
+	}
+
+	msg := summarizeCleanup(false, done, left, reason)
+	if !strings.Contains(msg, "没动") || !strings.Contains(msg, "操作被取消") {
+		t.Fatalf("结果里要写清楚剩了几个、为什么：%q", msg)
+	}
+}
+
+// 用户中途取消：已经进回收站的那几个照实报，剩下的原样留着。
+func TestCleanupReportsPartialRecycle(t *testing.T) {
+	dir := t.TempDir()
+	var files []string
+	for _, name := range []string{"a.lrc", "b.lrc", "c.lrc"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, p)
+	}
+
+	old := recycleFilesFn
+	t.Cleanup(func() { recycleFilesFn = old })
+	recycleFilesFn = func(paths []string) ([]string, error) {
+		return paths[:1], nil // 只成功了一个
+	}
+
+	a := newApp()
+	done, left, _ := a.runCleanup(false, files)
+	msg := summarizeCleanup(false, done, left, "")
+	if len(done) != 1 || len(left) != 2 {
+		t.Fatalf("应当 1 成 2 留，拿到 done=%v left=%v", done, left)
+	}
+	if !strings.Contains(msg, "已移入回收站 1 个") || !strings.Contains(msg, "2 个没动") {
+		t.Fatalf("汇总不对：%q", msg)
+	}
+}
+
+// 永久删除是独立入口：只有 permanent=true 才真的 os.Remove。
+func TestCleanupPermanentDeletesOnlyOnRequest(t *testing.T) {
+	dir := t.TempDir()
+	var files []string
+	for _, name := range []string{"a.lrc", "b.lrc"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, p)
+	}
+
+	old := recycleFilesFn
+	t.Cleanup(func() { recycleFilesFn = old })
+	recycleFilesFn = func(paths []string) ([]string, error) {
+		t.Fatal("永久删除不该去碰回收站")
+		return nil, nil
+	}
+
+	a := newApp()
+	done, left, _ := a.runCleanup(true, files)
+	if len(done) != 2 || len(left) != 0 {
+		t.Fatalf("永久删除应当全成：done=%v left=%v", done, left)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Fatalf("文件还在：%v", f)
+		}
+	}
+}
+
+// ---------- 刮削：限速冷却与暂停续跑 ----------
+
+func TestScrapeCooldownBlocksEveryEntry(t *testing.T) {
+	a := newApp()
+	a.scrapeCoolUntil = time.Now().Add(time.Minute)
+
+	a.scrapeItems = []scrapeTrack{{Path: "a.flac", Writable: true, NeteaseID: 5}}
+	a.applyScrapeByID()
+	if a.scrapeApplying {
+		t.Fatal("冷却期内不该发起「按 ID」补全")
+	}
+	if !strings.Contains(a.toast, "冷却") {
+		t.Fatalf("应当提示还在冷却，实际 %q", a.toast)
+	}
+
+	a.toast = ""
+	a.scrapeItems = []scrapeTrack{{Path: "b.flac", Writable: true}}
+	a.applyScrapeByNetease()
+	if a.scrapeApplying {
+		t.Fatal("冷却期内不该发起「按网易云」补全")
+	}
+	if !strings.Contains(a.toast, "冷却") {
+		t.Fatalf("应当提示还在冷却，实际 %q", a.toast)
+	}
+}
+
+func TestScrapePauseKeepsRemainingPlan(t *testing.T) {
+	a := newApp()
+	plan := []scrapePlanItem{
+		{Path: "a.flac", Resolve: "netease"},
+		{Path: "b.flac", Resolve: "netease"},
+		{Path: "c.flac", Resolve: "netease"},
+	}
+	a.scheduleScrapeResume(plan, 2, 1, 1, 0) // 第 2 首起没跑，1 秒后理论上续
+
+	if len(a.scrapePending) != 2 || a.scrapePending[0].Path != "b.flac" {
+		t.Fatalf("没跑完的计划要留下：%+v", a.scrapePending)
+	}
+	if a.scrapeCoolUntil.IsZero() {
+		t.Fatal("暂停后要记住冷却截止时间，否则下一次又去撞限速")
+	}
+	if !strings.Contains(a.scrapeWarn, "限速") || !strings.Contains(a.scrapeWarn, "取消续跑") {
+		t.Fatalf("提示要说明暂停和可取消：%q", a.scrapeWarn)
+	}
+
+	a.cancelScrapeResume()
+	if len(a.scrapePending) != 0 || a.scrapeWarn != "" {
+		t.Fatalf("取消后不该还留着续跑：%+v %q", a.scrapePending, a.scrapeWarn)
+	}
+}
+
+// 进度行与汇总行的 JSON 形状（ok / skipped 类型不同的那个坑）。
+func TestScrapeProgressJSONShapes(t *testing.T) {
+	var item scrapeProgress
+	line := `{"i":3,"total":5,"path":"E://m//a.flac","written":false,"noop":true,` +
+		`"needs_pick":true,"note":"多条都对得上","readonly":false}`
+	if err := json.Unmarshal([]byte(line), &item); err != nil {
+		t.Fatalf("逐首行解不动：%v", err)
+	}
+	if item.Written || !item.NeedsPick || item.I != 3 || item.Total != 5 {
+		t.Fatalf("逐首字段映射不对：%+v", item)
+	}
+
+	var sum scrapeProgress
+	summary := `{"summary":true,"total":5,"ok":2,"skipped":2,"failed":1,` +
+		`"needs_pick_count":1,"paused":true,"retry_after":95,"resume_from":3}`
+	if err := json.Unmarshal([]byte(summary), &sum); err != nil {
+		t.Fatalf("汇总行解不动：%v", err)
+	}
+	if !sum.Paused || sum.RetryAfter != 95 || sum.ResumeFrom != 3 || sum.NeedsPickCount != 1 {
+		t.Fatalf("汇总字段映射不对：%+v", sum)
+	}
+}
+
+// 借用 Cloudy 登录态默认关；打开后才把开关透给 Python。
+func TestCloudyAuthOptInReachesPython(t *testing.T) {
+	a := newApp()
+	if a.setCloudyAuth {
+		t.Fatal("默认不该借别人的登录态")
+	}
+	has := func(args ...string) bool {
+		for _, e := range a.pythonCmd(args...).Env {
+			if e == "KIRALRC_CLOUDY_AUTH=1" {
+				return true
+			}
+		}
+		return false
+	}
+	if has("scrape", "search", "x") {
+		t.Fatal("没打开开关却把 KIRALRC_CLOUDY_AUTH 传下去了")
+	}
+	a.setCloudyAuth = true
+	if !has("scrape", "search", "x") {
+		t.Fatal("打开开关后要透传 KIRALRC_CLOUDY_AUTH=1")
 	}
 }

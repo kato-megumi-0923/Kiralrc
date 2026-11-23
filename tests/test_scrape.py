@@ -10,9 +10,17 @@ from kiralrc import scrape
 # ---------- 造素材 ----------
 
 def png_bytes(w: int, h: int) -> bytes:
+    """一张真能解开的纯色 PNG（CRC、IDAT、IEND 都齐）：封面要过完整性校验。"""
+    import zlib
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF))
+
     ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", len(ihdr)) + b"IHDR" + ihdr
-            + struct.pack(">I", 0))
+    row = b"\x00" + b"\x20\x40\x60" * w       # 过滤字节 0 + RGB
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(row * h)) + chunk(b"IEND", b""))
 
 
 def jpeg_bytes(w: int, h: int) -> bytes:
@@ -393,45 +401,8 @@ def test_apply_by_id_fetches_song_detail_once(tmp_path, monkeypatch):
                       "publishTime": 1059552000000}}
     asked = []
     monkeypatch.setattr(scrape, "netease_details",
-                        lambda ids, netease_json=None: asked.append(list(ids)) or [song])
-    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
-
-    summary = scrape.apply_plan({"items": [{
-        "path": str(p), "netease_id": 555,
-        "fields": {"cover": True, "year": True, "netease_id": True},
-        "mode": "fill",
-    }]})
-
-    assert asked == [[555]]                     # 只请求一次，不是一首一次
-    assert summary["ok"] == 1 and summary["failed"] == 0
-    info = scrape.inspect_track(p)
-    assert info["netease_id"] == 555
-    assert info["year"] == "2003"
-    assert (info["cover_w"], info["cover_h"]) == (1200, 1200)
-
-
-def test_apply_by_id_skips_when_detail_is_missing(tmp_path, monkeypatch):
-    p = make_flac(tmp_path / "a.flac")
-    monkeypatch.setattr(scrape, "netease_details", lambda ids, netease_json=None: [])
-    res = scrape.apply_one({"path": str(p), "netease_id": 999,
-                            "fields": {"year": True}, "mode": "fill"}, {})
-    assert res["skipped"] and not res["ok"]
-    assert "ID" in res["note"]
-    assert scrape.inspect_track(p)["year"] == ""   # 什么都没写进去
-
-
-# ---------- 按 ID 批量补全 ----------
-
-def test_apply_by_id_fetches_song_detail_once(tmp_path, monkeypatch):
-    """只给 netease_id 的计划：一次请求补齐后按 ID 的信息写，封面按 ID 拉高清。"""
-    p = make_flac(tmp_path / "a.flac")
-    song = {"id": 555, "name": "晴天", "duration": 269000,
-            "artists": [{"name": "周杰伦"}],
-            "album": {"name": "叶惠美", "picUrl": "https://x/a.jpg",
-                      "publishTime": 1059552000000}}
-    asked = []
-    monkeypatch.setattr(scrape, "netease_details",
-                        lambda ids, netease_json=None: asked.append(list(ids)) or [song])
+                        lambda ids, netease_json=None, state=None:
+                        asked.append(list(ids)) or [song])
     monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
 
     summary = scrape.apply_plan({"items": [{
@@ -550,197 +521,294 @@ def test_cover_only_overwrite_keeps_every_other_field(tmp_path, monkeypatch):
     assert (after["cover_w"], after["cover_h"]) == (1600, 1600)
 
 
-# ---------- 按网易云补全（严格匹配） ----------
-
-def test_strict_match_requires_title_artist_album():
-    local = {"title": "愛しよ", "artist": "ルルティア", "album": "R★O★C★K★S"}
-    assert scrape.strict_match(local, {"title": "愛しよ", "artist": "ルルティア",
-                                       "album": "R★O★C★K★S"})
-    # 歌名折叠后一致、但专辑不同 → 不是同一首
-    assert not scrape.strict_match(local, {"title": "愛しよ (Ballad Ver.)",
-                                           "artist": "ルルティア", "album": "Seirios"})
-    # 歌手完全不同
-    assert not scrape.strict_match(local, {"title": "愛しよ", "artist": "Opus",
-                                           "album": "R★O★C★K★S"})
-    # 本地没有专辑信息时不卡这一项
-    assert scrape.strict_match({"title": "愛しよ", "artist": "ルルティア", "album": ""},
-                               {"title": "愛しよ", "artist": "ルルティア", "album": "Seirios"})
 
 
-def test_resolve_by_search_writes_when_everything_matches(tmp_path, monkeypatch):
-    p = make_flac(tmp_path / "a.flac", title="愛しよ",
-                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
-    good = candidate(song_id=640545, title="愛しよ", artist="ルルティア",
-                     album="R★O★C★K★S", year="2001",
-                     cover_url="https://p1.music.126.net/a.jpg")
-    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [good])
-    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
+# ---------- 严格匹配：版本、完整艺人、时长 ----------
 
-    res = scrape.apply_one({"path": str(p), "resolve": "netease",
-                            "fields": {"cover": True, "year": True, "netease_id": True},
-                            "mode": "fill"})
-    assert res["ok"], res
-    info = scrape.inspect_track(p)
-    assert info["year"] == "2001" and info["netease_id"] == 640545
-    assert info["cover_w"] == 1200
+@pytest.fixture(autouse=True)
+def _fresh_netauth():
+    """每个用例都从「没登录态、没冷却」开始，别互相带。"""
+    from kiralrc import netauth
+
+    netauth.reset()
+    netauth.clear_cooldown()
+    yield
+    netauth.reset()
+    netauth.clear_cooldown()
 
 
-def test_resolve_by_search_skips_a_different_song(tmp_path, monkeypatch):
-    p = make_flac(tmp_path / "a.flac", title="愛しよ",
-                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
-    wrong = candidate(song_id=22724795, title="愛しよ", artist="ルルティア",
-                      album="Seirios", year="2004")
-    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [wrong])
-
-    res = scrape.apply_one({"path": str(p), "resolve": "netease",
-                            "fields": {"year": True, "netease_id": True}, "mode": "fill"})
-    assert res["skipped"] and not res["ok"]
-    assert "全对得上" in res["note"]
-    info = scrape.inspect_track(p)
-    assert info["year"] == "" and info["netease_id"] == 0   # 什么都没写
-
-
-# ---------- 按网易云补全（严格匹配） ----------
-
-def test_strict_match_requires_title_artist_album():
-    local = {"title": "愛しよ", "artist": "ルルティア", "album": "R★O★C★K★S"}
-    assert scrape.strict_match(local, {"title": "愛しよ", "artist": "ルルティア",
-                                       "album": "R★O★C★K★S"})
-    # 歌名折叠后一致、但专辑不同 → 不是同一首
-    assert not scrape.strict_match(local, {"title": "愛しよ (Ballad Ver.)",
-                                           "artist": "ルルティア", "album": "Seirios"})
-    # 歌手完全不同
-    assert not scrape.strict_match(local, {"title": "愛しよ", "artist": "Opus",
-                                           "album": "R★O★C★K★S"})
-    # 本地没有专辑信息时不卡这一项
-    assert scrape.strict_match({"title": "愛しよ", "artist": "ルルティア", "album": ""},
-                               {"title": "愛しよ", "artist": "ルルティア", "album": "Seirios"})
+def test_strict_match_keeps_version_tags():
+    local = {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269}
+    assert scrape.strict_match(local, {"title": "晴天", "artist": "周杰伦",
+                                       "album": "叶惠美", "duration": 270})
+    # (Live) 不能被当成原版
+    assert not scrape.strict_match(local, {"title": "晴天 (Live)", "artist": "周杰伦",
+                                           "album": "叶惠美", "duration": 269})
+    # 本地是 Live、候选是原版，同样不行
+    live = dict(local, title="晴天 (Live)")
+    assert not scrape.strict_match(live, {"title": "晴天", "artist": "周杰伦",
+                                          "album": "叶惠美", "duration": 269})
+    # 伴奏 / instrumental 也算不同录音
+    assert not scrape.strict_match(local, {"title": "晴天 (Instrumental)",
+                                           "artist": "周杰伦", "album": "叶惠美"})
 
 
-def test_resolve_by_search_writes_when_everything_matches(tmp_path, monkeypatch):
-    p = make_flac(tmp_path / "a.flac", title="愛しよ",
-                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
-    good = candidate(song_id=640545, title="愛しよ", artist="ルルティア",
-                     album="R★O★C★K★S", year="2001",
-                     cover_url="https://p1.music.126.net/a.jpg")
-    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [good])
-    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
-
-    res = scrape.apply_one({"path": str(p), "resolve": "netease",
-                            "fields": {"cover": True, "year": True, "netease_id": True},
-                            "mode": "fill"})
-    assert res["ok"], res
-    info = scrape.inspect_track(p)
-    assert info["year"] == "2001" and info["netease_id"] == 640545
-    assert info["cover_w"] == 1200
+def test_strict_match_needs_full_artist_and_album():
+    local = {"title": "晴天", "artist": "周杰伦", "album": "叶惠美"}
+    # 一方包含另一方不算对上：完整艺人必须一致
+    assert not scrape.strict_match(local, {"title": "晴天", "artist": "周杰伦/袁咏琳",
+                                           "album": "叶惠美"})
+    # 多歌手只是顺序不同，算同一批人
+    duet = {"title": "晴天", "artist": "袁咏琳/周杰伦", "album": "叶惠美"}
+    assert scrape.strict_match({"title": "晴天", "artist": "周杰伦、袁咏琳",
+                                "album": "叶惠美"}, duet)
+    # 候选缺专辑：信息不全就不猜
+    assert not scrape.strict_match(local, {"title": "晴天", "artist": "周杰伦", "album": ""})
 
 
-def test_resolve_by_search_skips_a_different_song(tmp_path, monkeypatch):
-    p = make_flac(tmp_path / "a.flac", title="愛しよ",
-                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
-    wrong = candidate(song_id=22724795, title="愛しよ", artist="ルルティア",
-                      album="Seirios", year="2004")
-    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [wrong])
+def test_strict_match_compares_duration_when_known():
+    local = {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269}
+    assert not scrape.strict_match(local, {"title": "晴天", "artist": "周杰伦",
+                                           "album": "叶惠美", "duration": 320})
+    # 一边没有时长就不比
+    assert scrape.strict_match({"title": "晴天", "artist": "周杰伦", "album": "叶惠美"},
+                               {"title": "晴天", "artist": "周杰伦", "album": "叶惠美",
+                                "duration": 320})
+
+
+def test_ambiguous_candidates_are_left_for_manual_pick(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac", title="晴天",
+                  extra={"artist": "周杰伦", "album": "叶惠美"})
+    one = candidate(song_id=11, title="晴天", artist="周杰伦", album="叶惠美", year="2003")
+    two = candidate(song_id=22, title="晴天", artist="周杰伦", album="叶惠美", year="2003")
+    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [one, two])
 
     res = scrape.apply_one({"path": str(p), "resolve": "netease",
                             "fields": {"year": True, "netease_id": True}, "mode": "fill"})
-    assert res["skipped"] and not res["ok"]
-    assert "全对得上" in res["note"]
-    info = scrape.inspect_track(p)
-    assert info["year"] == "" and info["netease_id"] == 0   # 什么都没写
+    assert res["skipped"] and res["needs_pick"] and not res["ok"]
+    assert "手动" in res["note"]
+    assert scrape.inspect_track(p)["netease_id"] == 0     # 一个字都没写
 
 
-def test_search_reports_rate_limit_instead_of_failing_silently(monkeypatch):
-    """网易云限速时不能只默默返回 iTunes 结果，得把原因带出去。"""
+def test_rate_limited_resolution_is_not_reported_as_missing(tmp_path, monkeypatch):
     from kiralrc.ratelimit import RateLimited
+
+    p = make_flac(tmp_path / "a.flac", title="晴天")
+    monkeypatch.setattr(scrape, "_netease_candidates",
+                        lambda *a, **k: (_ for _ in ()).throw(RateLimited("操作频繁")))
+    res = scrape.apply_one({"path": str(p), "resolve": "netease",
+                            "fields": {"year": True}, "mode": "fill"})
+    assert res["skipped"] and "限速" in res["note"]
+    assert "没搜到" not in res["note"]
+
+
+# ---------- 封面必须真能解开 ----------
+
+def test_html_error_page_is_not_written_as_cover(tmp_path, monkeypatch):
+    p = make_mp3(tmp_path / "a.mp3", title="晴天")
+    before = p.read_bytes()
+    html = b"<!DOCTYPE html><html><body>502 Bad Gateway</body></html>" * 40
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: html)
+
+    res = scrape.apply_one({"path": str(p),
+                            "candidate": candidate(cover_url="https://x/a.jpg"),
+                            "fields": {"cover": True}, "mode": "overwrite"})
+    assert not res["ok"] and not res["changed"]
+    assert "图片" in res["note"] and res["cover_px"] == ""
+    assert p.read_bytes() == before          # 文件一点没动
+    assert scrape.inspect_track(p)["cover_w"] == 0
+
+
+def test_truncated_png_is_not_written_as_cover(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac")
+    cut = png_bytes(1200, 1200)[:200]        # 掐掉 IDAT 与 IEND
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: cut)
+    res = scrape.apply_one({"path": str(p),
+                            "candidate": candidate(cover_url="https://x/a.png"),
+                            "fields": {"cover": True}, "mode": "overwrite"})
+    assert not res["ok"] and "残缺" in res["note"]
+    assert scrape.inspect_track(p)["cover_w"] == 0
+
+
+def test_cover_problem_accepts_valid_images():
+    assert scrape.cover_problem(png_bytes(600, 600)) == ""
+    assert scrape.cover_problem(jpeg_bytes(600, 600)) == ""
+    assert scrape.cover_problem(b"") != ""
+    assert scrape.cover_problem(b"GIF89a" + b"\x00" * 600) != ""
+
+
+# ---------- 限速冷却：所有入口共用 ----------
+
+def test_apply_plan_pauses_on_rate_limit_and_reports_resume_point(tmp_path, monkeypatch):
+    from kiralrc import netauth
+    from kiralrc.ratelimit import RateLimited
+
+    a = make_flac(tmp_path / "a.flac", title="A")
+    b = make_flac(tmp_path / "b.flac", title="B")
+    calls = []
+
+    def boom(*args, **kwargs):
+        calls.append(args)
+        netauth.record_rate_limit(30)
+        raise RateLimited("操作频繁")
+
+    monkeypatch.setattr(scrape, "_netease_candidates", boom)
+
+    seen = []
+    summary = scrape.apply_plan({"items": [
+        {"path": str(a), "resolve": "netease", "fields": {"year": True}, "mode": "fill"},
+        {"path": str(b), "resolve": "netease", "fields": {"year": True}, "mode": "fill"},
+    ]}, on_item=lambda i, t, r: seen.append((i, r["skipped"])))
+
+    assert summary["paused"] and summary["retry_after"] >= 5
+    assert summary["resume_from"] == 2                 # 第二首没跑
+    assert len(calls) == 1                             # 限速后再没发请求
+    assert [i for i, _ in seen] == [1, 2]              # 两首都报了结果，进度不缺
+    assert all(skip for _, skip in seen)
+
+
+def test_apply_plan_skips_network_while_cooling(tmp_path, monkeypatch):
+    from kiralrc import netauth
+
+    p = make_flac(tmp_path / "a.flac", title="A")
+    netauth.record_rate_limit(60)
+    hit = []
+    monkeypatch.setattr(scrape, "_netease_candidates",
+                        lambda *a, **k: hit.append(1) or [])
+    summary = scrape.apply_plan({"items": [
+        {"path": str(p), "resolve": "netease", "fields": {"year": True}, "mode": "fill"},
+    ]})
+    assert summary["paused"] and summary["resume_from"] == 1
+    assert hit == []
+
+
+def test_search_does_not_hit_network_while_cooling(monkeypatch):
+    from kiralrc import netauth
+
+    netauth.record_rate_limit(45)
+    hit = []
+    res = scrape.search_with_note("晴天", netease_search=lambda *a, **k: hit.append(1) or [],
+                                  netease_json=lambda *a, **k: hit.append(1) or {},
+                                  itunes_json=lambda *a, **k: {"results": []})
+    assert hit == []
+    assert res["items"] == [] and "冷却" in res["warning"]
+
+
+def test_by_id_batch_stops_when_detail_is_rate_limited(tmp_path, monkeypatch):
+    from kiralrc import netauth
+
+    p = make_flac(tmp_path / "a.flac")
+
+    def detail(ids, netease_json=None, state=None):
+        if state is not None:
+            state["rate_limited"] = True
+        netauth.record_rate_limit(20)
+        return []
+
+    monkeypatch.setattr(scrape, "netease_details", detail)
+    summary = scrape.apply_plan({"items": [
+        {"path": str(p), "netease_id": 42, "fields": {"year": True}, "mode": "fill"},
+    ]})
+    assert summary["paused"] and summary["ok"] == 0
+    assert summary["skipped"] == 1
+
+
+# ---------- Cookie 只发给白名单主机 ----------
+
+def test_cookie_only_goes_to_allowed_hosts(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc")
+    base = {"User-Agent": "x", "Referer": "https://music.163.com/"}
+
+    allowed = netauth.headers_for("https://music.163.com/api/song/detail?ids=[1]", base)
+    assert allowed["Cookie"] == "MUSIC_U=abc"
+    assert base == {"User-Agent": "x", "Referer": "https://music.163.com/"}   # 共用 dict 没被改
+
+    for url in ("https://interface.music.163.com/x", "http://music.163.com/api",
+                "https://evil.example.com/?music.163.com",
+                "https://music.163.com.evil.com/x",
+                "https://p1.music.126.net/a.jpg"):
+        assert "Cookie" not in netauth.headers_for(url, base), url
+
+
+def test_redirect_to_another_host_strips_cookie(monkeypatch):
+    import urllib.request
+
+    from kiralrc import netauth
+
+    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc")
+    handler = netauth._SafeRedirect()
+    req = urllib.request.Request("https://music.163.com/api/x",
+                                 headers={"Cookie": "MUSIC_U=abc"})
+    same = handler.redirect_request(req, None, 302, "Found", {},
+                                    "https://music.163.com/api/y")
+    assert same.headers.get("Cookie") == "MUSIC_U=abc"
+
+    other = handler.redirect_request(req, None, 302, "Found", {},
+                                     "https://evil.example.com/y")
+    assert "Cookie" not in other.headers
+
+
+def test_cloudy_auth_needs_explicit_opt_in(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.delenv("KIRALRC_NETEASE_COOKIE", raising=False)
+    monkeypatch.setattr(netauth, "cloudy_cookie", lambda: "MUSIC_U=borrowed")
+    monkeypatch.delenv("KIRALRC_CLOUDY_AUTH", raising=False)
+    assert not netauth.cloudy_enabled()
+    assert netauth.cookie() == ""            # 默认不借
+
+    monkeypatch.setenv("KIRALRC_CLOUDY_AUTH", "1")
+    netauth.reset()
+    assert netauth.describe() == "匿名（登录态未生效）"
+    assert netauth.cookie() == "MUSIC_U=borrowed"
+    assert netauth.describe() == "匿名（登录态未生效）"
+    netauth.note_rejected()                  # 301：退回匿名
+    assert netauth.cookie() == ""
+    assert "失效" in netauth.describe()
+
+
+def test_auth_status_follows_real_requests(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc")
+    assert netauth.describe() == "匿名（登录态未生效）"   # 还没真的发出去
+    saw = {}
+
+    def fake_open(req, timeout=0):
+        saw["cookie"] = req.headers.get("Cookie")
+
+        class R:
+            headers = {}
+            def read(self):
+                return b'{"code": 200}'
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        return R()
+
+    monkeypatch.setattr(netauth, "_get_opener",
+                        lambda: type("O", (), {"open": staticmethod(fake_open)})())
+    from kiralrc import text as txt
+
+    txt._get_json("https://music.163.com/api/x")
+    assert saw["cookie"] == "MUSIC_U=abc"
+    assert netauth.describe() == "环境变量 Cookie"        # 真的用上了才这么报
+
+
+def test_rate_limited_search_is_reported_as_rate_limit(tmp_path, monkeypatch):
+    """限速让候选变成空列表时，不能记成「没搜到」。"""
+    from kiralrc import text as txt
+    from kiralrc.ratelimit import RateLimited
+
+    p = make_flac(tmp_path / "a.flac", title="晴天", extra={"artist": "周杰伦"})
 
     def boom(*a, **k):
         raise RateLimited("操作频繁")
 
-    payload = {"results": [{"trackName": "桃色タイフーン", "artistName": "春奈るな",
-                            "collectionName": "桃色タイフーン - Single",
-                            "releaseDate": "2018", "trackTimeMillis": 257000,
-                            "artworkUrl100": "https://x/100x100bb.jpg"}]}
-
-    res = scrape.search_with_note("桃色タイフーン",
-                                  netease_search=boom, netease_json=boom,
-                                  itunes_json=lambda url: payload)
-    assert [c["source"] for c in res["items"]] == ["iTunes"]
-    assert "限速" in res["warning"] and "iTunes" in res["warning"]
-
-
-def test_search_reports_rate_limit_instead_of_failing_silently(monkeypatch):
-    """网易云限速时不能只默默返回 iTunes 结果，得把原因带出去。"""
-    from kiralrc.ratelimit import RateLimited
-
-    def boom(*a, **k):
-        raise RateLimited("操作频繁")
-
-    payload = {"results": [{"trackName": "桃色タイフーン", "artistName": "春奈るな",
-                            "collectionName": "桃色タイフーン - Single",
-                            "releaseDate": "2018", "trackTimeMillis": 257000,
-                            "artworkUrl100": "https://x/100x100bb.jpg"}]}
-
-    res = scrape.search_with_note("桃色タイフーン",
-                                  netease_search=boom, netease_json=boom,
-                                  itunes_json=lambda url: payload)
-    assert [c["source"] for c in res["items"]] == ["iTunes"]
-    assert "限速" in res["warning"] and "iTunes" in res["warning"]
-
-
-# ---------- 借 Cloudy 的登录态 ----------
-
-def test_netauth_env_cookie_overrides_and_forgets(monkeypatch):
-    from kiralrc import netauth
-
-    monkeypatch.setattr(netauth, "_cookie", None)
-    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc; __csrf=def")
-    headers = {}
-
-    assert netauth.ensure(headers)
-    assert headers["Cookie"] == "MUSIC_U=abc; __csrf=def"
-    assert netauth.describe() == "环境变量 Cookie"
-
-    # Cookie 过期时摘掉，退回匿名
-    netauth.forget(headers)
-    assert "Cookie" not in headers
-    assert netauth.netease_cookie() == ""
-
-
-def test_netauth_skips_cloudy_when_disabled(monkeypatch):
-    from kiralrc import netauth
-
-    monkeypatch.setattr(netauth, "_cookie", None)
-    monkeypatch.delenv("KIRALRC_NETEASE_COOKIE", raising=False)
-    monkeypatch.setenv("KIRALRC_NO_CLOUDY_AUTH", "1")
-    assert netauth.cloudy_cookie() == ""
-    assert netauth.describe() == "匿名"
-
-
-# ---------- 借 Cloudy 的登录态 ----------
-
-def test_netauth_env_cookie_overrides_and_forgets(monkeypatch):
-    from kiralrc import netauth
-
-    monkeypatch.setattr(netauth, "_cookie", None)
-    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc; __csrf=def")
-    headers = {}
-
-    assert netauth.ensure(headers)
-    assert headers["Cookie"] == "MUSIC_U=abc; __csrf=def"
-    assert netauth.describe() == "环境变量 Cookie"
-
-    # Cookie 过期时摘掉，退回匿名
-    netauth.forget(headers)
-    assert "Cookie" not in headers
-    assert netauth.netease_cookie() == ""
-
-
-def test_netauth_skips_cloudy_when_disabled(monkeypatch):
-    from kiralrc import netauth
-
-    monkeypatch.setattr(netauth, "_cookie", None)
-    monkeypatch.delenv("KIRALRC_NETEASE_COOKIE", raising=False)
-    monkeypatch.setenv("KIRALRC_NO_CLOUDY_AUTH", "1")
-    assert netauth.cloudy_cookie() == ""
-    assert netauth.describe() == "匿名"
+    monkeypatch.setattr(txt, "netease_search", boom)
+    res = scrape.apply_one({"path": str(p), "resolve": "netease",
+                            "fields": {"year": True}, "mode": "fill"})
+    assert res["skipped"] and "限速" in res["note"]

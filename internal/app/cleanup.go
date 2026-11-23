@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,8 +15,9 @@ import (
 
 // 批量清理歌词：选目录 → 独立页面列出各类歌词文件 → 勾选后删除。
 //
-// 删除一律先走回收站（SHFileOperation + FOF_ALLOWUNDO），回收站不可用时
-// 才退回直接删除，并在提示里说明。
+// 默认只走回收站（SHFileOperation + FOF_ALLOWUNDO）：回收站报错或用户取消了
+// 系统对话框，没处理的文件就原样留着，绝不偷偷退回 os.Remove——用户点的是
+// 「删除」，预期是「能捡回来」。真要彻底删除，得单独点「永久删除」再确认一次。
 
 type cleanupGroup struct {
 	Ext   string   // .lrc / .vtt / ...
@@ -29,6 +31,8 @@ func (a *app) openCleanup(dir string) {
 	a.cleanupDir = dir
 	a.cleanupItems = nil
 	a.cleanupConfirm = false
+	a.cleanupHardConfirm = false
+	a.cleanupResult = ""
 	a.cleanupScanned = false
 	a.navigate(pageCleanup, 0)
 	a.scanCleanup()
@@ -86,39 +90,71 @@ func (a *app) cleanupSelectedCount() int {
 	return n
 }
 
-// deleteCleanupFiles 删除勾选格式的全部文件（默认进回收站）。
-func (a *app) deleteCleanupFiles() {
+// cleanupTargets 勾选的全部文件路径。
+func (a *app) cleanupTargets() []string {
 	var targets []string
 	for _, g := range a.cleanupItems {
 		if g.Sel {
 			targets = append(targets, g.Files...)
 		}
 	}
+	return targets
+}
+
+// recycleFilesFn 便于测试替换（真调 SHFileOperation 会把文件丢进回收站）。
+var recycleFilesFn = recycleFiles
+
+// runCleanup 真正干活的一步：permanent=false 只走回收站，绝不退回直接删除。
+// 返回（处理掉的、没动的、失败原因）。
+func (a *app) runCleanup(permanent bool, targets []string) (done, left []string, reason string) {
+	if permanent {
+		for _, f := range targets {
+			if err := os.Remove(f); err == nil {
+				done = append(done, f)
+			} else {
+				left = append(left, f)
+				if reason == "" {
+					reason = err.Error()
+				}
+			}
+		}
+		return done, left, reason
+	}
+
+	var err error
+	done, err = recycleFilesFn(targets)
+	if err != nil {
+		reason = err.Error()
+	}
+	moved := make(map[string]bool, len(done))
+	for _, f := range done {
+		moved[f] = true
+	}
+	for _, f := range targets {
+		if !moved[f] {
+			left = append(left, f) // 还在原地：没进回收站就不算处理过
+		}
+	}
+	return done, left, reason
+}
+
+// deleteCleanupFiles 处理勾选的歌词文件。
+//
+// permanent=false 只走回收站：回收站报错、或者系统对话框被取消时，没处理的
+// 文件原样保留，并在界面上如实报结果。绝不因为「回收站失败」就改删文件。
+func (a *app) deleteCleanupFiles(permanent bool) {
+	targets := a.cleanupTargets()
 	if len(targets) == 0 {
 		return
 	}
 	a.cleanupConfirm = false
+	a.cleanupHardConfirm = false
 	go func() {
-		trashed, hard := 0, 0
-		if err := recycleFiles(targets); err == nil {
-			trashed = len(targets)
-		} else {
-			for _, f := range targets {
-				if os.Remove(f) == nil {
-					hard++
-				}
-			}
-		}
+		done, left, reason := a.runCleanup(permanent, targets)
+		summary := summarizeCleanup(permanent, done, left, reason)
 		a.post(func() {
-			switch {
-			case trashed > 0:
-				a.toast = fmt.Sprintf("已把 %d 个歌词文件移入回收站", trashed)
-			case hard > 0:
-				a.toast = fmt.Sprintf("已删除 %d 个歌词文件（回收站不可用，直接删除）", hard)
-			default:
-				a.toast = "没有删除任何文件"
-			}
-			a.cleanupConfirm = false
+			a.cleanupResult = summary
+			a.toast = summary
 			a.scanCleanup()
 			// 歌词被删掉了，「有词 / 无词 / 逐字就绪」都会变，曲库跟着重扫一遍
 			if len(a.libFolders) > 0 {
@@ -128,10 +164,37 @@ func (a *app) deleteCleanupFiles() {
 	}()
 }
 
+// summarizeCleanup 把「成了几个 / 剩几个、为什么」写成一句话。
+func summarizeCleanup(permanent bool, done, left []string, reason string) string {
+	verb := "移入回收站"
+	if permanent {
+		verb = "永久删除"
+	}
+	parts := make([]string, 0, 2)
+	if len(done) > 0 {
+		parts = append(parts, fmt.Sprintf("已%s %d 个", verb, len(done)))
+	}
+	if len(left) > 0 {
+		word := "没动"
+		if permanent {
+			word = "删除失败"
+		}
+		item := fmt.Sprintf("%d 个%s", len(left), word)
+		if reason != "" {
+			item += "（" + reason + "）"
+		}
+		parts = append(parts, item)
+	}
+	if len(parts) == 0 {
+		return "没有处理任何文件"
+	}
+	return strings.Join(parts, "，") + "。"
+}
+
 // ---------- 回收站 ----------
 
 var (
-	shell32            = syscall.NewLazyDLL("shell32.dll")
+	shell32             = syscall.NewLazyDLL("shell32.dll")
 	procSHFileOperation = shell32.NewProc("SHFileOperationW")
 )
 
@@ -147,47 +210,70 @@ type shFileOpStruct struct {
 }
 
 const (
-	foDelete      = 0x0003
-	fofSilent     = 0x0004
-	fofNoConfirm  = 0x0010
-	fofAllowUndo  = 0x0040
-	fofNoErrorUI  = 0x1000
+	foDelete     = 0x0003
+	fofSilent    = 0x0004
+	fofNoConfirm = 0x0010
+	fofAllowUndo = 0x0040
+	fofNoErrorUI = 0x1000
 )
 
-// recycleFiles 用 SHFileOperation 把文件丢进回收站。
+// recycleBatch 一批交给 SHFileOperation 的文件数：太多会让 pFrom 串很长。
+const recycleBatch = 200
+
+// recycleFiles 用 SHFileOperation 把文件丢进回收站，返回真正进站的那些。
+//
+// 不要拿返回值当「整批都成了」：用户取消时前面的可能已经进回收站了，
+// 所以处理完按「文件还在不在」逐个核对，调用方据此保留没处理的文件。
+//
 // 路径列表是「每个路径以 \0 结尾、整体再补一个 \0」，所以不能走 UTF16PtrFromString
 // （它会因为串里有 NUL 而报 invalid argument），得自己拼 []uint16。
-func recycleFiles(paths []string) error {
-	var buf []uint16
-	for _, p := range paths {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			continue
-		}
-		u, err := syscall.UTF16FromString(abs)   // 末尾自带一个 0
-		if err != nil {
-			continue
-		}
-		buf = append(buf, u...)
-	}
-	if len(buf) == 0 {
-		return fmt.Errorf("没有可删除的路径")
-	}
-	buf = append(buf, 0)                          // 列表结束的第二个 0
+func recycleFiles(paths []string) ([]string, error) {
+	var moved []string
+	var firstErr error
+	for start := 0; start < len(paths); start += recycleBatch {
+		end := min(start+recycleBatch, len(paths))
+		batch := paths[start:end]
 
-	op := shFileOpStruct{
-		wFunc:  foDelete,
-		pFrom:  &buf[0],
-		fFlags: fofAllowUndo | fofNoConfirm | fofSilent | fofNoErrorUI,
+		buf := make([]uint16, 0, len(batch)*64)
+		for _, p := range batch {
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				continue
+			}
+			u, err := syscall.UTF16FromString(abs) // 末尾自带一个 0
+			if err != nil {
+				continue
+			}
+			buf = append(buf, u...)
+		}
+		if len(buf) == 0 {
+			continue
+		}
+		buf = append(buf, 0) // 列表结束的第二个 0
+
+		op := shFileOpStruct{
+			wFunc:  foDelete,
+			pFrom:  &buf[0],
+			fFlags: fofAllowUndo | fofNoConfirm | fofSilent | fofNoErrorUI,
+		}
+		ret, _, _ := procSHFileOperation.Call(uintptr(unsafe.Pointer(&op)))
+		switch {
+		case ret != 0:
+			if firstErr == nil {
+				firstErr = fmt.Errorf("回收站操作返回 %d", ret)
+			}
+		case op.fAnyOperationsAborted != 0:
+			if firstErr == nil {
+				firstErr = fmt.Errorf("操作被取消")
+			}
+		}
+		for _, p := range batch {
+			if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+				moved = append(moved, p)
+			}
+		}
 	}
-	ret, _, _ := procSHFileOperation.Call(uintptr(unsafe.Pointer(&op)))
-	if ret != 0 {
-		return fmt.Errorf("SHFileOperation 返回 %d", ret)
-	}
-	if op.fAnyOperationsAborted != 0 {
-		return fmt.Errorf("操作被取消")
-	}
-	return nil
+	return moved, firstErr
 }
 
 // ---------- 页面 ----------
@@ -252,8 +338,8 @@ func (a *app) viewCleanup(c *ui.Context) {
 						if g.Sel {
 							pt.Fill(r, p.accent, 5)
 							// 勾：两条短线
-							pt.Fill(ui.Rect{X: r.X + r.W*0.24, Y: r.Y + r.H*0.52, W: r.W*0.2, H: 2}, p.onAccent, 1)
-							pt.Fill(ui.Rect{X: r.X + r.W*0.40, Y: r.Y + r.H*0.40, W: r.W*0.38, H: 2}, p.onAccent, 1)
+							pt.Fill(ui.Rect{X: r.X + r.W*0.24, Y: r.Y + r.H*0.52, W: r.W * 0.2, H: 2}, p.onAccent, 1)
+							pt.Fill(ui.Rect{X: r.X + r.W*0.40, Y: r.Y + r.H*0.40, W: r.W * 0.38, H: 2}, p.onAccent, 1)
 						}
 					})
 					ui.Text(c, g.Ext).Width(70).Shrink(0).FontSize(13).FontWeight(700).PassThrough()
@@ -288,10 +374,10 @@ func (a *app) viewCleanup(c *ui.Context) {
 			// 整条可点：第一下变成确认态，第二下真删。
 			// （用 Row 而不是 pillButton —— 这套布局里 Row 的点击才稳定。）
 			bg, fg := p.surface2, p.text
-			label := fmt.Sprintf("删除这 %d 个文件", selCount)
+			label := fmt.Sprintf("删除这 %d 个文件（移入回收站）", selCount)
 			if a.cleanupConfirm {
 				bg, fg = p.accent, p.onAccent
-				label = fmt.Sprintf("确认删除 %d 个？点了就没了", selCount)
+				label = fmt.Sprintf("确认移入回收站：%d 个？", selCount)
 			}
 			bar := ui.Row(c.Key("cleanup-do")).FillWidth().Height(52).PaddingX(18).Gap(10).
 				Radius(14).AlignItems(ui.Center).Background(bg).Children(func() {
@@ -301,16 +387,46 @@ func (a *app) viewCleanup(c *ui.Context) {
 			a.traceRect("cleanup-do", bar)
 			if bar.Clicked() {
 				if a.cleanupConfirm {
-					a.deleteCleanupFiles()
+					a.deleteCleanupFiles(false)
 				} else {
 					a.cleanupConfirm = true
+					a.cleanupHardConfirm = false
+				}
+				if a.win != nil {
+					a.win.Invalidate()
+				}
+			}
+
+			// 永久删除单独一个入口：颜色更淡、位置更靠下、确认文案更明确。
+			hardBg, hardFg := ui.Transparent, p.err
+			hardLabel := fmt.Sprintf("永久删除这 %d 个文件（不进回收站，删了就没了）", selCount)
+			if a.cleanupHardConfirm {
+				hardBg, hardFg = p.errBg, p.err
+				hardLabel = fmt.Sprintf("确认永久删除 %d 个？不可恢复", selCount)
+			}
+			hard := ui.Row(c.Key("cleanup-do-hard")).FillWidth().Height(40).PaddingX(18).Gap(8).
+				Radius(12).AlignItems(ui.Center).Background(hardBg).Children(func() {
+				ui.Text(c, hardLabel).FontSize(12).FontWeight(600).TextColor(hardFg)
+			})
+			hard.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 12, 1) })
+			a.traceRect("cleanup-do-hard", hard)
+			if hard.Clicked() {
+				if a.cleanupHardConfirm {
+					a.deleteCleanupFiles(true)
+				} else {
+					a.cleanupHardConfirm = true
+					a.cleanupConfirm = false
 				}
 				if a.win != nil {
 					a.win.Invalidate()
 				}
 			}
 		}
-		ui.Text(c, "删除先进回收站，回收站不可用时才会直接删除。歌词可以重新下载，但删错了要去回收站翻。").
+
+		if a.cleanupResult != "" {
+			ui.Text(c, a.cleanupResult).FontSize(12.5).FontWeight(600).TextColor(p.muted)
+		}
+		ui.Text(c, "删除一律先进回收站；回收站报错或系统对话框被取消时，没处理的文件会原样留着，不会改成直接删除。").
 			FontSize(11.5).TextColor(p.faint)
 	})
 }

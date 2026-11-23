@@ -58,27 +58,30 @@ from .ratelimit import RateLimited  # noqa: E402  （与 text 共用同一个异
 
 
 def _get(url: str, timeout: int = 20) -> bytes:
-    headers = HEADERS
-    if "music.163.com" in url:
-        # 登录态只发给网易云：这个 HEADERS 也用在 QQ/酷狗/AMLL 上，别把 Cookie 泄漏出去
-        from . import netauth
+    # 身份由 netauth 决定：只在白名单主机上附带 Cookie，跨主机重定向会摘掉
+    from . import netauth
 
-        headers = dict(HEADERS)
-        netauth.ensure(headers)
-    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with netauth.open_url(url, HEADERS, timeout) as r:
             return r.read()
     except urllib.error.HTTPError as e:
         # 405/429 是"问得太勤"，跟"没有这首歌"是两回事
         if e.code in (405, 429, 418):
+            retry = netauth.parse_retry_after(e.headers.get("Retry-After"))
+            netauth.record_rate_limit(retry)
             raise RateLimited(f"HTTP {e.code}") from e
         raise
 
 
 def _json(url: str, timeout: int = 20):
     body = _get(url, timeout)
-    return json.loads(body.decode("utf-8", "replace"))
+    data = json.loads(body.decode("utf-8", "replace"))
+    if isinstance(data, dict) and data.get("code") in (405, 418, 429):
+        from . import netauth
+
+        netauth.record_rate_limit(None)
+        raise RateLimited(data.get("message") or data.get("msg") or "网易云限速")
+    return data
 
 
 def parse_yrc(text: str) -> list[WordLine]:
