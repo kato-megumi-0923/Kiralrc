@@ -197,6 +197,11 @@ func (a *app) loadScrapeItems() {
 				a.toast = "读取标签失败：" + err.Error()
 				return
 			}
+			for i := range items {
+				if a.scrapeWritten[items[i].Path] {
+					items[i].WriteState = "done" // 「重新读取」之后仍能看出哪些已经写过
+				}
+			}
 			a.scrapeItems = items
 			if len(items) > 0 {
 				a.scrapeQuery = scrapeDefaultQuery(items[0])
@@ -539,7 +544,7 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			return
 		}
 		results := map[string]string{}
-		var ok, skipped, failed int
+		var ok, skipped, failed, upgraded, kept int
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
@@ -548,17 +553,19 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 				continue
 			}
 			var msg struct {
-				I        int      `json:"i"`
-				Total    int      `json:"total"`
-				Path     string   `json:"path"`
-				Written  bool     `json:"written"`
-				Changed  []string `json:"changed"`
-				Note     string   `json:"note"`
-				Readonly bool     `json:"readonly"`
-				Summary  bool     `json:"summary"`
-				OK       int      `json:"ok"`
-				Failed   int      `json:"failed"`
-				Skipped  int      `json:"skipped"`
+				I         int      `json:"i"`
+				Total     int      `json:"total"`
+				Path      string   `json:"path"`
+				Written   bool     `json:"written"`
+				Changed   []string `json:"changed"`
+				Note      string   `json:"note"`
+				Readonly  bool     `json:"readonly"`
+				CoverPX   string   `json:"cover_px"`
+				CoverKept bool     `json:"cover_kept"`
+				Summary   bool     `json:"summary"`
+				OK        int      `json:"ok"`
+				Failed    int      `json:"failed"`
+				Skipped   int      `json:"skipped"`
 			}
 			if json.Unmarshal([]byte(line), &msg) != nil {
 				continue
@@ -566,6 +573,12 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			if msg.Summary {
 				ok, skipped, failed = msg.OK, msg.Skipped, msg.Failed
 				continue
+			}
+			if msg.CoverPX != "" {
+				upgraded++
+			}
+			if msg.CoverKept {
+				kept++
 			}
 			if msg.Path != "" {
 				switch {
@@ -587,9 +600,17 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 		}
 		a.finishScrapeApply(note, results)
 		a.post(func() {
-			if note == "" {
-				a.toast = fmt.Sprintf("写入完成：成功 %d 首，跳过 %d 首，失败 %d 首", ok, skipped, failed)
+			if note != "" {
+				return
 			}
+			msg := fmt.Sprintf("写入完成：成功 %d 首，跳过 %d 首，失败 %d 首", ok, skipped, failed)
+			if upgraded > 0 {
+				msg += fmt.Sprintf("；封面更新 %d 首", upgraded)
+			}
+			if kept > 0 {
+				msg += fmt.Sprintf("；%d 首源图比本地小，保留原图", kept)
+			}
+			a.toast = msg
 		})
 	}()
 }
@@ -615,6 +636,10 @@ func (a *app) finishScrapeApply(errMsg string, results map[string]string) {
 				}
 				a.scrapeItems[i].WriteState = state
 				if state == "done" {
+					if a.scrapeWritten == nil {
+						a.scrapeWritten = map[string]bool{}
+					}
+					a.scrapeWritten[path] = true
 					delete(a.scrapeSel, path) // 已写入的不再重复提交，没成的留着重试
 				}
 			}

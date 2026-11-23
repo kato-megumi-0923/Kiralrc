@@ -335,6 +335,7 @@ type app struct {
 	scrapeThumbs     map[string]*ui.Bitmap
 	scrapeThumbBusy  map[string]bool
 	scrapeCovers     map[string]*ui.Bitmap // 当前曲目内嵌封面缩略图（不外挂缓存）
+	scrapeWritten    map[string]bool       // 本次运行写过标签的路径，重读后仍标「已写入」
 	scrapeListScroll ui.ScrollState
 	scrapeCandScroll ui.ScrollState
 

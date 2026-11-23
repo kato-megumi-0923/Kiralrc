@@ -162,7 +162,7 @@ def test_itunes_candidates_are_parsed_and_upscaled():
     assert c["song_id"] == 0
     assert c["thumb_url"].endswith("240x240bb.jpg")
     assert c["cover_url"].endswith("1200x1200bb.jpg")
-    assert c["cover_hint"] == "1200×1200"
+    assert c["cover_hint"] == "≤1200×1200"
 
 
 def test_netease_candidates_get_album_and_year():
@@ -456,3 +456,15 @@ def test_apply_by_id_skips_when_detail_is_missing(tmp_path, monkeypatch):
     assert res["skipped"] and not res["ok"]
     assert "ID" in res["note"]
     assert scrape.inspect_track(p)["year"] == ""   # 什么都没写进去
+
+
+def test_a_smaller_source_cover_does_not_downgrade(tmp_path, monkeypatch):
+    """网易云的 ?param=1200 只是请求尺寸：源图 390 时不能把本地 800 换成 390。"""
+    p = make_flac(tmp_path / "a.flac", cover=png_bytes(800, 800))
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(390, 390))
+    res = scrape.apply_one({"path": str(p),
+                            "candidate": candidate(cover_url="https://x/small.png"),
+                            "fields": {"cover": True}, "mode": "overwrite"})
+    assert res["cover_kept"] and not res["ok"]
+    assert "比本地" in res["note"]
+    assert scrape.inspect_track(p)["cover_w"] == 800

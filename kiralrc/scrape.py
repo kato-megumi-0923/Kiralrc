@@ -240,7 +240,7 @@ def _netease_candidate(song: dict) -> dict:
         "song_id": int(song.get("id") or 0),
         "thumb_url": _pic_url(pic, THUMB),
         "cover_url": _pic_url(pic, HIRES),
-        "cover_hint": f"{HIRES}×{HIRES}",
+        "cover_hint": f"≤{HIRES}×{HIRES}",
     }
 
 
@@ -358,7 +358,7 @@ def _itunes_candidates(query, artist, title, itunes_json) -> list[dict]:
             "song_id": 0,                     # iTunes 没有网易云 ID
             "thumb_url": _artwork(art, THUMB),
             "cover_url": _artwork(art, HIRES),
-            "cover_hint": f"{HIRES}×{HIRES}",
+            "cover_hint": f"≤{HIRES}×{HIRES}",
         })
     return out
 
@@ -550,7 +550,7 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
     fields = item.get("fields") or {}
     mode = "overwrite" if str(item.get("mode") or "") == "overwrite" else "fill"
     res = {"path": str(path), "ok": False, "changed": [], "note": "",
-           "readonly": False, "skipped": False}
+           "readonly": False, "skipped": False, "cover_px": "", "cover_kept": False}
 
     if not path.is_file():
         res["note"] = "文件不存在"
@@ -585,12 +585,23 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
         return res
 
     cover = b""
+    cover_px = ""
+    kept_note = ""
     if want.get("cover_url"):
-        cover = _download(str(want.pop("cover_url")))
-        if cover:
-            want["cover"] = True
-        else:
+        data = _download(str(want.pop("cover_url")))
+        new_w, new_h = image_size(data)
+        old_w, old_h = image_size(local.get("cover") or b"")
+        if not data:
             res["note"] = "高清封面下载失败"
+        elif old_w and old_h and min(new_w, new_h) < min(old_w, old_h):
+            # 网易云的 ?param=1200 只是请求尺寸，服务端不会放大：源图本来就 390px 时
+            # 硬写进去就是把大图换成小图，宁可保留原图并把实情说出来。
+            kept_note = f"源图 {new_w}×{new_h}，比本地 {old_w}×{old_h} 小，保留原图"
+            res["cover_kept"] = True
+        else:
+            cover = data
+            cover_px = f"{new_w}×{new_h}"
+            want["cover"] = True
 
     try:
         writer(path, want, cover)
@@ -600,6 +611,10 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
 
     res["changed"] = [k for k in ("cover", "year", "netease_id", "album",
                                   "title", "artist") if k in want]
+    if cover_px:
+        res["cover_px"] = cover_px
+    if kept_note and not res["note"]:
+        res["note"] = kept_note
     res["ok"] = bool(res["changed"])
     if not res["ok"] and not res["note"]:
         res["note"] = "没有需要改动的字段"
