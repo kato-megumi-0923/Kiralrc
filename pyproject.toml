@@ -35,3 +35,7 @@ include = ["kiralrc", "kiralrc._hubertfa"]
 
 [tool.setuptools.package-data]
 "kiralrc._hubertfa" = ["LICENSE"]
+
+[tool.pytest.ini_options]
+# 直接 `pytest` 只跑本项目测试：out/ 下有试验用的 conda 环境，全盘收集会炸
+testpaths = ["tests"]

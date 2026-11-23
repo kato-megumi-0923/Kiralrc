@@ -162,6 +162,52 @@ def cmd_decrypt(a) -> int:
     return 0 if bad == 0 else 1
 
 
+def cmd_scrape(a) -> int:
+    from . import scrape
+
+    action = getattr(a, "action", "")
+    if action == "inspect":
+        paths = None
+        if getattr(a, "paths_file", None):
+            with open(a.paths_file, encoding="utf-8") as f:
+                paths = [line.strip() for line in f if line.strip()]
+        if not a.dir and not paths:
+            print("请给出要检查的目录，或用 --paths-file 指定文件清单")
+            return 2
+        items = scrape.run_inspect(a.dir or None, paths)
+        print(json.dumps(items, ensure_ascii=False), flush=True)
+        return 0
+
+    if action == "search":
+        cands = scrape.search_candidates(
+            a.query or "", artist=a.artist or "", title=a.title or "",
+            netease_id=tx.parse_song_id(a.netease_id), limit=a.limit)
+        print(json.dumps(cands, ensure_ascii=False), flush=True)
+        return 0
+
+    if action == "apply":
+        try:
+            plan = scrape.load_plan(a.plan)
+        except Exception as e:
+            print(f"读不了计划文件：{e}")
+            return 2
+
+        def on_item(i: int, total: int, res: dict) -> None:
+            # 逐首的 ok / skipped 是布尔，汇总里是首数，换个键名免得类型撞车
+            line = {"i": i, "total": total}
+            line.update({k: v for k, v in res.items() if k not in ("ok", "skipped")})
+            line["written"] = bool(res.get("ok"))
+            line["noop"] = bool(res.get("skipped"))
+            print(json.dumps(line, ensure_ascii=False), flush=True)
+
+        summary = scrape.apply_plan(plan, on_item)
+        print(json.dumps(summary, ensure_ascii=False), flush=True)
+        return 0 if summary["failed"] == 0 else 1
+
+    print("请指定 inspect / search / apply")
+    return 2
+
+
 def cmd_clean(a) -> int:
     from . import pipeline
 
@@ -494,6 +540,23 @@ def main(argv: list[str] | None = None) -> int:
                    help="按「歌名 - 歌手」改名（默认沿用 .ncm 的文件名，好跟同名 .lrc 配对）")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_decrypt)
+
+    p = sub.add_parser("scrape", help="多候选标签与高清封面刮削（网易云 + iTunes，手动挑版本）")
+    sp = p.add_subparsers(dest="action", required=True)
+    pi = sp.add_parser("inspect", help="读目录或清单里每首歌的现状，输出 JSON")
+    pi.add_argument("dir", nargs="?", default="", help="目录，可省略（用 --paths-file 给清单时）")
+    pi.add_argument("--paths-file", help="只处理清单里的文件（每行一个路径）")
+    pi.set_defaults(func=cmd_scrape)
+    ps = sp.add_parser("search", help="按关键词同时搜网易云与 iTunes，输出 JSON 候选")
+    ps.add_argument("query")
+    ps.add_argument("--netease-id", help="已知网易云 ID：按 ID 取的那条排第一")
+    ps.add_argument("--artist", default="")
+    ps.add_argument("--title", default="")
+    ps.add_argument("--limit", type=int, default=8)
+    ps.set_defaults(func=cmd_scrape)
+    pa = sp.add_parser("apply", help="按计划 JSON 逐首写回，边写边输出进度 JSON")
+    pa.add_argument("plan")
+    pa.set_defaults(func=cmd_scrape)
 
     p = sub.add_parser("clean", help="清理 work/ 中间产物缓存（默认仅清 30 天前，全清需加 --all）")
     p.add_argument("--days", type=float, default=30.0, help="仅清理超过 N 天的缓存（默认 30 天）")

@@ -34,6 +34,7 @@ const (
 	pageSeparate
 	pageCleanup
 	pageSettings
+	pageScrape
 )
 
 const (
@@ -312,7 +313,31 @@ type app struct {
 	toolLog          string
 	toolScroll       ui.ScrollState
 
-	// 6. 设置
+	// 6. 标签刮削（见 scrape.go）
+	scrapeDir        string
+	scrapePaths      []string
+	scrapeItems      []scrapeTrack
+	scrapeCur        int
+	scrapeFilter     int // 0 全部 1 缺封面/低清 2 缺 ID/年份
+	scrapeQuery      string
+	scrapeCands      []scrapeCandidate
+	scrapeCandPath   string
+	scrapeCandCache  map[string][]scrapeCandidate
+	scrapeSearching  bool
+	scrapeLoading    bool
+	scrapeSel        map[string]scrapeCandidate // 路径 → 已确认的候选
+	scrapeFields     [5]bool                    // 封面/年份/ID/专辑/标题歌手
+	scrapeMode       int                        // 0 仅补缺失 1 覆盖选中
+	scrapeApplying   bool
+	scrapeDone       int
+	scrapeTotal      int
+	scrapeMu         sync.Mutex
+	scrapeThumbs     map[string]*ui.Bitmap
+	scrapeThumbBusy  map[string]bool
+	scrapeListScroll ui.ScrollState
+	scrapeCandScroll ui.ScrollState
+
+	// 7. 设置
 	modelOK            [3]bool
 	setAutoSkipNoVocal bool
 	setVocalRatio      string
@@ -570,6 +595,7 @@ func newApp() *app {
 		edShowPinyin:       true,
 		edSnapOnset:        true,
 		edEditingLine:      -1,
+		scrapeFields:       [5]bool{true, true, true, false, false},
 		sideWidthPx:        232,
 		setAutoSkipNoVocal: true,
 		setVocalRatio:      "0.08",
@@ -1490,6 +1516,14 @@ func (a *app) runToolInteractive(toolCmd string) {
 				return
 			}
 			a.openCleanup(dir)
+		}()
+	case "scrape":
+		go func() {
+			dir, err := chooseFolder(a.win, "选择要刮削标签的文件夹", a.alignBatchDir)
+			if err != nil || dir == "" {
+				return
+			}
+			a.post(func() { a.openScrapeFolder(dir) })
 		}()
 	case "separate":
 		go func() {
@@ -3577,6 +3611,7 @@ func Run() error {
 		}
 	})
 	err := mygo.App.Run()
-	purgeSepCache()   // 分离的临时音轨跟着程序一起走
+	purgeSepCache()        // 分离的临时音轨跟着程序一起走
+	cleanupScrapeThumbs()  // 刮削画廊的缩略图也只活一次运行
 	return err
 }

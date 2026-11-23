@@ -95,6 +95,8 @@ func (a *app) view(c *ui.Context) {
 					a.viewSeparate(c)
 				case pageCleanup:
 					a.viewCleanup(c)
+				case pageScrape:
+					a.viewScrape(c)
 				case pageSettings:
 					a.viewSettings(c)
 				}
@@ -996,6 +998,13 @@ func (a *app) viewLibrary(c *ui.Context) {
 				} else if selCount > 0 {
 					if pillButton(c.Key("lib-download-lyrics"), iconDownload, fmt.Sprintf("下载歌词（%d 首）", selCount), p.surface2, p.text).Clicked() {
 						a.downloadLyricsOf(selTracks)
+					}
+					if pillButton(c.Key("lib-scrape"), iconTag, fmt.Sprintf("刮削标签（%d 首）", selCount), p.surface2, p.text).Clicked() {
+						paths := make([]string, 0, len(selTracks))
+						for _, t := range selTracks {
+							paths = append(paths, t.FullPath)
+						}
+						a.openScrapeTracks(paths)
 					}
 					if pillButton(c.Key("lib-start-align"), iconPlay, fmt.Sprintf("对齐歌词（%d 首）", selCount), p.accent, p.onAccent).Clicked() {
 						a.enqueueFromLibrary()
@@ -3041,6 +3050,7 @@ func (a *app) viewTools(c *ui.Context) {
 				{"人声分离", "demucs htdemucs 分离出人声与伴奏轨，可单独导出用于试听。", "separate", 285, iconMic, []string{"info"}},
 				{"清理歌词文件", "选定目录后按格式勾选，批量删除 .lrc / .vtt / .ttml 等歌词文件，先进回收站。", "cleanup", 20, iconTrash, []string{"info"}},
 				{"解密加密音频", "把网易云 NCM 解成普通音频，歌名、歌手、专辑、封面与 ID 等原始信息全部写回标签。", "decrypt", 20, iconUnlock, []string{"info"}},
+				{"标签刮削", "并排看网易云与 iTunes 的候选封面，手动挑版本后再批量补高清封面、专辑年份与 NETEASE_ID。", "scrape", 200, iconTag, []string{"info"}},
 			}
 
 			// 三列等分：行先撑满，卡片用 Grow/Basis(0) 平分，文字允许收缩换行

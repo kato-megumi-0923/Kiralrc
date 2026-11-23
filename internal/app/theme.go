@@ -360,6 +360,7 @@ var (
 	iconChevronR = strokeIcon(`<path d="M9 5l7 7-7 7"/>`)
 	iconChevronD = strokeIcon(`<path d="M6 9l6 6 6-6"/>`)
 	iconTrash    = strokeIcon(`<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/>`)
+	iconTag      = strokeIcon(`<path d="M20.6 13.4 12 22l-9-9 8.6-8.6H20a1 1 0 0 1 1 1v7.6a1 1 0 0 1-.4.8Z"/><circle cx="16.5" cy="7.5" r="1.3"/>`)
 )
 
 func roundButton(c *ui.Context, size float32, color ui.Color, label string) ui.Element {

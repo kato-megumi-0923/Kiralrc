@@ -933,3 +933,177 @@ func TestEmbeddedCoverParsesID3v23AndV24(t *testing.T) {
 		}
 	}
 }
+
+// ---------- 标签刮削 ----------
+
+func TestScrapeDefaultsAndQuickFilters(t *testing.T) {
+	a := newApp()
+	// 默认只补最保守的三项：封面、年份、NETEASE_ID
+	if a.scrapeFields != [5]bool{true, true, true, false, false} {
+		t.Fatalf("默认勾选不对：%v", a.scrapeFields)
+	}
+	if a.scrapeMode != 0 {
+		t.Fatalf("默认策略应是「仅补缺失」，拿到 %d", a.scrapeMode)
+	}
+
+	a.scrapeItems = []scrapeTrack{
+		{Path: "a.flac", Writable: true},                                                     // 什么都不全
+		{Path: "b.flac", Writable: true, CoverW: 1200, CoverH: 1200, NeteaseID: 33, Year: "2020"}, // 都齐了
+		{Path: "c.flac", Writable: true, CoverW: 300, CoverH: 300, NeteaseID: 44},            // 低清 + 缺年份
+	}
+
+	a.scrapeFilter = 0
+	if got := len(a.scrapeVisible()); got != 3 {
+		t.Fatalf("「全部」应有 3 首，拿到 %d", got)
+	}
+
+	a.scrapeFilter = 1 // 缺封面 / 低清
+	got := a.scrapeVisible()
+	if len(got) != 2 || a.scrapeItems[got[0]].Path != "a.flac" || a.scrapeItems[got[1]].Path != "c.flac" {
+		t.Fatalf("「缺封面 / 低清」筛错了：%v", got)
+	}
+
+	a.scrapeFilter = 2 // 缺 ID / 年份
+	got = a.scrapeVisible()
+	if len(got) != 2 || a.scrapeItems[got[0]].Path != "a.flac" || a.scrapeItems[got[1]].Path != "c.flac" {
+		t.Fatalf("「缺 ID / 年份」筛错了：%v", got)
+	}
+
+	if tag := scrapeLocalTag(a.scrapeItems[2]); tag != "300px" {
+		t.Fatalf("本地现状小标签不对：%q", tag)
+	}
+	if tag := scrapeLocalTag(a.scrapeItems[1]); tag != "" {
+		t.Fatalf("都齐了的歌不该有小标签：%q", tag)
+	}
+	if tag := scrapeLocalTag(a.scrapeItems[0]); tag != "无封面" {
+		t.Fatalf("无封面应该标出来：%q", tag)
+	}
+}
+
+func TestScrapeCandidateSelectionCounts(t *testing.T) {
+	a := newApp()
+	path := filepath.Join(t.TempDir(), "a.flac")
+	a.scrapeItems = []scrapeTrack{{Path: path, Writable: true}}
+
+	netease := scrapeCandidate{Source: "网易云", Title: "晴天", SongID: 11, CoverURL: "n"}
+	itunes := scrapeCandidate{Source: "iTunes", Title: "晴天", CoverURL: "i"}
+
+	a.toggleScrapeCandidate(path, netease)
+	if a.scrapeSelectedCount() != 1 || !a.isScrapeCandidateSelected(path, netease) {
+		t.Fatal("点一次应该选中")
+	}
+	a.toggleScrapeCandidate(path, netease) // 再点取消
+	if a.scrapeSelectedCount() != 0 {
+		t.Fatal("再点一次应该取消选中")
+	}
+
+	a.toggleScrapeCandidate(path, netease)
+	a.toggleScrapeCandidate(path, itunes) // 同一首只留一个候选
+	if a.scrapeSelectedCount() != 1 {
+		t.Fatalf("同一首应该只留一个候选，拿到 %d", a.scrapeSelectedCount())
+	}
+	if !a.isScrapeCandidateSelected(path, itunes) || a.isScrapeCandidateSelected(path, netease) {
+		t.Fatal("选中应该切到后点的那张")
+	}
+
+	plan := a.scrapePlan()
+	if len(plan) != 1 || plan[0].Candidate.Source != "iTunes" || plan[0].Mode != "fill" {
+		t.Fatalf("计划不对：%+v", plan)
+	}
+	if !plan[0].Fields["cover"] || plan[0].Fields["album"] {
+		t.Fatalf("字段勾选没传进计划：%+v", plan[0].Fields)
+	}
+
+	a.scrapeMode = 1
+	a.scrapeFields[3] = true
+	plan = a.scrapePlan()
+	if plan[0].Mode != "overwrite" || !plan[0].Fields["album"] {
+		t.Fatalf("覆盖模式 / 专辑字段没生效：%+v", plan[0])
+	}
+}
+
+func TestScrapePageRenders(t *testing.T) {
+	a := newApp()
+	path := filepath.Join(t.TempDir(), "晴天.flac")
+	a.scrapeDir = `D:/music`
+	a.scrapeItems = []scrapeTrack{{
+		Path: path, Name: "晴天.flac", Writable: true, Format: "flac",
+		Title: "晴天", Artist: "周杰伦", Album: "叶惠美", Year: "2003",
+		CoverW: 300, CoverH: 300, NeteaseID: 186016,
+	}}
+	a.scrapeCur = 0
+	a.scrapeCandPath = path
+	a.scrapeQuery = "晴天 周杰伦"
+	a.scrapeCands = []scrapeCandidate{
+		{Source: "网易云", Title: "晴天", Artist: "周杰伦", Album: "叶惠美",
+			Year: "2003", Duration: 269, SongID: 186016, CoverHint: "1200×1200"},
+		{Source: "iTunes", Title: "晴天", Artist: "Jay Chou", Album: "叶惠美",
+			Year: "2003", Duration: 269, CoverHint: "1200×1200"},
+	}
+	a.page = pageScrape
+
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	a.toggleScrapeCandidate(path, a.scrapeCands[1])
+	tt.Frame()
+	tt.Frame()
+}
+
+// 后端（python -m kiralrc scrape）的输出形状是跨语言的契约，这里按真实输出核对一遍。
+func TestScrapeJSONContract(t *testing.T) {
+	var items []scrapeTrack
+	inspect := `[{"path":"E://m//a.flac","name":"a.flac","format":"flac","writable":true,` +
+		`"title":"晴天","artist":"周杰伦","album":"叶惠美","year":"2003",` +
+		`"netease_id":186016,"cover_w":1200,"cover_h":1200}]`
+	if err := json.Unmarshal([]byte(inspect), &items); err != nil {
+		t.Fatalf("inspect 输出解不动：%v", err)
+	}
+	if items[0].NeteaseID != 186016 || items[0].CoverW != 1200 || items[0].Year != "2003" {
+		t.Fatalf("inspect 字段映射不对：%+v", items[0])
+	}
+
+	var cands []scrapeCandidate
+	search := `[{"source":"网易云","title":"晴天","artist":"周杰伦","album":"叶惠美",` +
+		`"year":"2003","duration":269,"song_id":186016,` +
+		`"thumb_url":"https://p1.music.126.net/a.jpg?param=240y240",` +
+		`"cover_url":"https://p1.music.126.net/a.jpg?param=1200y1200","cover_hint":"1200×1200"},` +
+		`{"source":"iTunes","title":"晴天","artist":"Jay Chou","album":"叶惠美","year":"2003",` +
+		`"duration":269,"song_id":0,"thumb_url":"https://x/240x240bb.jpg",` +
+		`"cover_url":"https://x/1200x1200bb.jpg","cover_hint":"1200×1200"}]`
+	if err := json.Unmarshal([]byte(search), &cands); err != nil {
+		t.Fatalf("search 输出解不动：%v", err)
+	}
+	if len(cands) != 2 || cands[0].SongID != 186016 || cands[1].SongID != 0 {
+		t.Fatalf("search 字段映射不对：%+v", cands)
+	}
+
+	// apply 的进度行：逐首 written 是布尔，末尾汇总 ok 是首数
+	var progress struct {
+		I       int      `json:"i"`
+		Total   int      `json:"total"`
+		Path    string   `json:"path"`
+		Written bool     `json:"written"`
+		Changed []string `json:"changed"`
+		Note    string   `json:"note"`
+	}
+	line := `{"i":1,"total":1,"path":"E://m//a.flac","written":true,` +
+		`"changed":["cover","year"],"note":"","readonly":false,"skipped":false}`
+	if err := json.Unmarshal([]byte(line), &progress); err != nil {
+		t.Fatalf("apply 进度行解不动：%v", err)
+	}
+	if !progress.Written || len(progress.Changed) != 2 {
+		t.Fatalf("apply 进度字段映射不对：%+v", progress)
+	}
+	var summary struct {
+		Summary bool `json:"summary"`
+		OK      int  `json:"ok"`
+		Skipped int  `json:"skipped"`
+		Failed  int  `json:"failed"`
+	}
+	if err := json.Unmarshal([]byte(`{"summary":true,"total":3,"ok":2,"skipped":1,"failed":0}`), &summary); err != nil {
+		t.Fatalf("apply 汇总行解不动：%v", err)
+	}
+	if !summary.Summary || summary.OK != 2 || summary.Skipped != 1 {
+		t.Fatalf("apply 汇总字段映射不对：%+v", summary)
+	}
+}
