@@ -26,7 +26,6 @@ WRITABLE = {".flac": "flac", ".mp3": "mp3", ".m4a": "m4a", ".mp4": "m4a"}
 AUDIO_EXTS = {".flac", ".mp3", ".m4a", ".mp4", ".wav", ".aif", ".aiff",
               ".ape", ".wv", ".ogg", ".opus", ".dsf"}
 
-HIRES = 1200          # 高清封面请求边长
 THUMB = 240           # 画廊缩略图边长
 LOW_COVER = 600       # 低于这个尺寸算「低清」，fill 模式下可以换掉
 UA = tx.UA
@@ -206,10 +205,15 @@ def list_audio(path: str | Path) -> list[Path]:
 
 # ---------- 候选搜索 ----------
 
-def _pic_url(url: str, size: int) -> str:
+def _pic_url(url: str, size: int = 0) -> str:
+    """size 为 0 时不带 param，直接要原图。
+
+    网易云的 ?param=WxH 只缩不放（源图 390 请求 1200 还是 390），
+    所以「高清」只有一条路：不带参数取原图。
+    """
     if not url:
         return ""
-    if "?" in url:
+    if size <= 0 or "?" in url:
         return url
     return f"{url}?param={size}y{size}"
 
@@ -239,8 +243,8 @@ def _netease_candidate(song: dict) -> dict:
         "duration": int(round((song.get("duration") or 0) / 1000)),
         "song_id": int(song.get("id") or 0),
         "thumb_url": _pic_url(pic, THUMB),
-        "cover_url": _pic_url(pic, HIRES),
-        "cover_hint": f"≤{HIRES}×{HIRES}",
+        "cover_url": _pic_url(pic),          # 原图，尺寸由前端实测
+        "cover_hint": "",
     }
 
 
@@ -307,6 +311,11 @@ def _itunes_country(text: str) -> str:
     return "us"
 
 
+# Apple 的图按路径里的边长给，最大一般 3000（再大也返回 3000）。
+# 6000 只是「要尽可能大」，服务端会夹到自己的原图尺寸。
+APPLE_MAX = 6000
+
+
 def _artwork(url: str, size: int) -> str:
     if not url:
         return ""
@@ -357,8 +366,8 @@ def _itunes_candidates(query, artist, title, itunes_json) -> list[dict]:
             "duration": int(r.get("trackTimeMillis") or 0) // 1000,
             "song_id": 0,                     # iTunes 没有网易云 ID
             "thumb_url": _artwork(art, THUMB),
-            "cover_url": _artwork(art, HIRES),
-            "cover_hint": f"≤{HIRES}×{HIRES}",
+            "cover_url": _artwork(art, APPLE_MAX),   # 尺寸由前端实测
+            "cover_hint": "",
         })
     return out
 

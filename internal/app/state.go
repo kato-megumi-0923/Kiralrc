@@ -92,22 +92,22 @@ type lyricLine struct {
 }
 
 type queueItem struct {
-	Title       string
-	Artist      string
-	Sub         string
-	AudioPath   string
-	LrcPath     string
-	Lang        string
-	NeteaseID   string // 单曲手动指定的网易云歌曲 ID / 链接（避免批量任务串 ID）
-	RefPath     string // 单曲手动参考歌词文件（--ref）
+	Title          string
+	Artist         string
+	Sub            string
+	AudioPath      string
+	LrcPath        string
+	Lang           string
+	NeteaseID      string // 单曲手动指定的网易云歌曲 ID / 链接（避免批量任务串 ID）
+	RefPath        string // 单曲手动参考歌词文件（--ref）
 	AsrFallback    bool   // 是否显式开启 --asr-fallback 本地人声听写兜底
 	WaveformFirst  bool   // 是否开启 --waveform-first 鬼畜 / 波形起音优先模式
 	IgnoreRefTimes bool   // 是否开启 --ignore-ref-times 强制 ASR 重定位
 	IgnoreRefEnds  bool   // 沿用参考句首，重新对齐逐字时间与句尾
 	Status         string // "waiting", "running", "done", "skipped", "skipped_nolyrics", "failed"
-	Stage       int    // 0..6 live stage for this song
-	Note        string
-	Hue         float32
+	Stage          int    // 0..6 live stage for this song
+	Note           string
+	Hue            float32
 }
 
 type modelStatusItem struct {
@@ -173,41 +173,41 @@ type app struct {
 	recents     []recentItem
 
 	// 1. 曲库（默认未添加文件夹，用户点击添加后再扫描）
-	libFolders        []string
-	downloading       bool // 正在批量下载歌词
-	sepAudio          string
-	sepRunning        bool
-	sepStage          string
-	sepPct            int
-	sepStems          []sepStem
-	sepPlaying        string // 正在试听哪条轨
-	cleanupDir        string
-	cleanupItems      []cleanupGroup
-	cleanupConfirm    bool
-	cleanupScanned    bool
-	sepPaused         bool
-	downloadDone      int
-	downloadAll       int
-	downloadNote      string
-	libScanning       bool
-	scanToken         uint64 // 每次扫描自增，旧扫描据此自行退出（原子访问）
-	libPage           int    // 当前页码（0 起）
-	libPageSize       int  // 每页条数：50 / 100
-	pageMenuOpen      bool // 每页数下拉是否展开
-	libScanDone       int
-	libScanAll        int
-	libScanTime       string
-	libStats          libStats
-	libFilter         int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏 5:官方逐字
-	libQuery          string
-	tracks            []trackItem
-	libSelected       map[string]bool // 勾选状态按路径存：切片重建也不会丢
+	libFolders     []string
+	downloading    bool // 正在批量下载歌词
+	sepAudio       string
+	sepRunning     bool
+	sepStage       string
+	sepPct         int
+	sepStems       []sepStem
+	sepPlaying     string // 正在试听哪条轨
+	cleanupDir     string
+	cleanupItems   []cleanupGroup
+	cleanupConfirm bool
+	cleanupScanned bool
+	sepPaused      bool
+	downloadDone   int
+	downloadAll    int
+	downloadNote   string
+	libScanning    bool
+	scanToken      uint64 // 每次扫描自增，旧扫描据此自行退出（原子访问）
+	libPage        int    // 当前页码（0 起）
+	libPageSize    int    // 每页条数：50 / 100
+	pageMenuOpen   bool   // 每页数下拉是否展开
+	libScanDone    int
+	libScanAll     int
+	libScanTime    string
+	libStats       libStats
+	libFilter      int // 0:有效人声 1:待升级逐字 2:逐字就绪 3:无歌词 4:纯音乐/OST/伴奏 5:官方逐字
+	libQuery       string
+	tracks         []trackItem
+	libSelected    map[string]bool // 勾选状态按路径存：切片重建也不会丢
 
 	// 封面按需加载（见 cover.go）
-	coverMu       sync.Mutex
-	coverInFlight map[string]bool
-	coverSem      chan struct{}
-	coverPending  bool
+	coverMu           sync.Mutex
+	coverInFlight     map[string]bool
+	coverSem          chan struct{}
+	coverPending      bool
 	libScroll         ui.ScrollState
 	notFoundPaths     map[string]bool   // 持久化：多源均未搜到的「全网无词」音频路径（小写归一化）
 	libBatchIdOpen    bool              // 无歌词 Tab：顶部「批量填网易云 ID」抽屉是否展开
@@ -220,33 +220,33 @@ type app struct {
 	libManualFilePath string            // 用记事本编辑时的落盘路径
 
 	// 2. 新建对齐
-	alignAudio       string
-	alignAudioPath   string
-	alignLocalLrc    string
-	alignRefLrc      string
-	alignNeteaseID   string // 手动指定的网易云歌曲 ID 或链接
+	alignAudio          string
+	alignAudioPath      string
+	alignLocalLrc       string
+	alignRefLrc         string
+	alignNeteaseID      string // 手动指定的网易云歌曲 ID 或链接
 	alignBatchDir       string
 	alignBatchTracks    []trackItem
 	alignIgnoreRefTimes bool
 	alignIgnoreRefEnds  bool
 	alignWaveformFirst  bool // 鬼畜 / 波形起音优先模式（--waveform-first）
-	alignSource         int // 0:优先本地LRC(无则搜网易云) 1:手动指定参考文件 2:强制搜网易云
-	alignSearch    string
-	alignCandidate int
-	alignLang      int // 0:中文 1:日文 2:英文 3:其它
-	alignPolyCheck bool
-	alignSustain   bool
-	alignEnMode    int // 0:按词 1:按字母均分
-	alignTitle     string
-	alignArtist    string
-	alignAlbum     string
-	alignOut       string
-	alignDecimals  int // 0:3位 1:2位
-	alignLead      string
-	alignEndTag    bool
-	alignKeepTrans bool
-	alignAutoValid bool
-	alignScroll    ui.ScrollState
+	alignSource         int  // 0:优先本地LRC(无则搜网易云) 1:手动指定参考文件 2:强制搜网易云
+	alignSearch         string
+	alignCandidate      int
+	alignLang           int // 0:中文 1:日文 2:英文 3:其它
+	alignPolyCheck      bool
+	alignSustain        bool
+	alignEnMode         int // 0:按词 1:按字母均分
+	alignTitle          string
+	alignArtist         string
+	alignAlbum          string
+	alignOut            string
+	alignDecimals       int // 0:3位 1:2位
+	alignLead           string
+	alignEndTag         bool
+	alignKeepTrans      bool
+	alignAutoValid      bool
+	alignScroll         ui.ScrollState
 
 	// 3. 任务队列
 	queueJobs        int
@@ -264,35 +264,35 @@ type app struct {
 	queueScroll      ui.ScrollState
 
 	// 4. 编辑与校对
-	player         *audioPlayer
-	volume         float64
-	muted          bool
-	preMuteVol     float64
-	edFile         string
-	edPath         string
-	edAudioPath    string
-	edCover        *ui.Bitmap
-	edCoverAudio   string
-	edMarqueeText  string
-	edMarqueeStart time.Time
-	edVinylDeg     float32
-	edVinylLast    time.Time
-	dockDur        float64
-	playTickerOn   bool
-	edSub          string
-	edModified     bool
-	edPreviewMode  int // 0:律动预览 1:LRC源码
-	edTrackMode    int // 0:原曲 1:人声轨
-	edSpeedMode    int // 0:0.5x 1:0.75x 2:1x
-	edShowPinyin   bool
-	edSnapOnset    bool
-	edRipple       bool
-	edPlaying      bool
-	edPlayhead     float64
-	edSelectedLine int
-	edSelectedChar int
-	edEditingLine  int // -1 表示未处于行内编辑状态
-	edEditingText  string
+	player                *audioPlayer
+	volume                float64
+	muted                 bool
+	preMuteVol            float64
+	edFile                string
+	edPath                string
+	edAudioPath           string
+	edCover               *ui.Bitmap
+	edCoverAudio          string
+	edMarqueeText         string
+	edMarqueeStart        time.Time
+	edVinylDeg            float32
+	edVinylLast           time.Time
+	dockDur               float64
+	playTickerOn          bool
+	edSub                 string
+	edModified            bool
+	edPreviewMode         int // 0:律动预览 1:LRC源码
+	edTrackMode           int // 0:原曲 1:人声轨
+	edSpeedMode           int // 0:0.5x 1:0.75x 2:1x
+	edShowPinyin          bool
+	edSnapOnset           bool
+	edRipple              bool
+	edPlaying             bool
+	edPlayhead            float64
+	edSelectedLine        int
+	edSelectedChar        int
+	edEditingLine         int // -1 表示未处于行内编辑状态
+	edEditingText         string
 	edSrcEditing          bool   // LRC 源码是否处于直接编辑模式
 	edSrcText             string // LRC 源码编辑缓冲
 	edSrcInitCaret        int    // 进入编辑时初始光标位置（按 rune 偏移定位到当前选中行）
@@ -300,13 +300,13 @@ type app struct {
 	edSrcScrollToSelected bool   // 选中行变更时自动滚动 LRC 源码到可视区域
 	edTranslating         bool   // 是否正在执行单曲 AI 歌词翻译
 	edMetas               []string
-	edLines        []lyricLine
-	edIssues       []string
-	edLineScroll   ui.ScrollState
-	edSrcScroll    ui.ScrollState
-	waveMix        []float32
-	waveVoc        []float32
-	waveKey        string
+	edLines               []lyricLine
+	edIssues              []string
+	edLineScroll          ui.ScrollState
+	edSrcScroll           ui.ScrollState
+	waveMix               []float32
+	waveVoc               []float32
+	waveKey               string
 
 	// 5. 工具箱
 	toolSelectedFile int
@@ -336,21 +336,23 @@ type app struct {
 	scrapeThumbBusy  map[string]bool
 	scrapeCovers     map[string]*ui.Bitmap // 当前曲目内嵌封面缩略图（不外挂缓存）
 	scrapeWritten    map[string]bool       // 本次运行写过标签的路径，重读后仍标「已写入」
+	scrapeSizes      map[string][2]int     // 候选封面 URL → 实测像素
+	scrapeSizeBusy   map[string]bool
 	scrapeListScroll ui.ScrollState
 	scrapeCandScroll ui.ScrollState
 
 	// 7. 设置
-	modelOK            [3]bool
-	setAutoSkipNoVocal bool
-	setVocalRatio      string
-	setEnMode          int
-	setFetchInterval   string
-	setProxyOn         bool
-	setProxyAddr       string
-	setCacheSummary    string
-	setGpuName         string
-	setModels          []modelStatusItem
-	setCleanDays       int // 0:7天前 1:30天前 2:全部
+	modelOK               [3]bool
+	setAutoSkipNoVocal    bool
+	setVocalRatio         string
+	setEnMode             int
+	setFetchInterval      string
+	setProxyOn            bool
+	setProxyAddr          string
+	setCacheSummary       string
+	setGpuName            string
+	setModels             []modelStatusItem
+	setCleanDays          int // 0:7天前 1:30天前 2:全部
 	setAppleToken         string
 	setAppleStorefront    int // 0:jp 1:cn 2:us
 	setAIBaseURL          string
@@ -728,12 +730,12 @@ func (a *app) clearLibraryFolders() {
 }
 
 var (
-	reAccomp = regexp.MustCompile(`(?i)(off\s*vocals?|instrumental|伴奏|karaoke|カラオケ)`)
-	reOST    = regexp.MustCompile(`(?i)(original\s*soundtrack|\bost\b|白2纯音乐|纯音乐演奏|大提琴Free)`)
-	rePure   = regexp.MustCompile(`(?i)(纯音乐|无词哼唱|烟雨濛濛\(人声曲\))`)
+	reAccomp  = regexp.MustCompile(`(?i)(off\s*vocals?|instrumental|伴奏|karaoke|カラオケ)`)
+	reOST     = regexp.MustCompile(`(?i)(original\s*soundtrack|\bost\b|白2纯音乐|纯音乐演奏|大提琴Free)`)
+	rePure    = regexp.MustCompile(`(?i)(纯音乐|无词哼唱|烟雨濛濛\(人声曲\))`)
 	reInstLrc = regexp.MustCompile(`(?i)(纯音乐\s*[，,]\s*请欣赏|純音樂|没有填词的纯音乐)`)
-	reKana   = regexp.MustCompile(`[\x{3040}-\x{30ff}]`)
-	reHan    = regexp.MustCompile(`[\x{4e00}-\x{9fff}]`)
+	reKana    = regexp.MustCompile(`[\x{3040}-\x{30ff}]`)
+	reHan     = regexp.MustCompile(`[\x{4e00}-\x{9fff}]`)
 )
 
 func classifyAudioTrack(audioPath, relPath, lrcRaw string) string {
@@ -1535,7 +1537,7 @@ func (a *app) runToolInteractive(toolCmd string) {
 			if err != nil || p == "" {
 				return
 			}
-			a.startSeparate(p)   // 直接进分离页看进度
+			a.startSeparate(p) // 直接进分离页看进度
 		}()
 	default:
 		a.runKiralrcCLI("info")
@@ -1697,7 +1699,7 @@ func (a *app) pickLrcFile() {
 
 func (a *app) setLibFilter(f int) {
 	a.libFilter = f
-	a.libPage = 0          // 换筛选就回第一页
+	a.libPage = 0 // 换筛选就回第一页
 	if f != 3 {
 		a.libBatchIdOpen = false
 		a.libExpandedPath = ""
@@ -1785,9 +1787,9 @@ func statusFilterMask(status string) uint {
 	case "missing", "nolyrics_notfound":
 		return 1<<0 | 1<<3
 	case "inst_pure", "inst_ost", "inst_accomp":
-		return 1<<4
+		return 1 << 4
 	}
-	return 1<<0
+	return 1 << 0
 }
 
 // statusMatchesFilter 某个状态是否属于某个 Tab。
@@ -3543,7 +3545,7 @@ func (a *app) loadLrcFile(path string) error {
 			a.edSub = fmt.Sprintf("整行 LRC · %d 行（尚未升级逐字标签）", len(lines))
 		}
 		a.edMetas = metas
-	a.edLines = lines
+		a.edLines = lines
 		a.edModified = false
 		a.selectEditorLine(0)
 
@@ -3613,7 +3615,7 @@ func Run() error {
 		}
 	})
 	err := mygo.App.Run()
-	purgeSepCache()        // 分离的临时音轨跟着程序一起走
-	cleanupScrapeThumbs()  // 刮削画廊的缩略图也只活一次运行
+	purgeSepCache()       // 分离的临时音轨跟着程序一起走
+	cleanupScrapeThumbs() // 刮削画廊的缩略图也只活一次运行
 	return err
 }

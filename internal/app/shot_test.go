@@ -166,19 +166,15 @@ func seedScrapeDemo(a *app) {
 
 	cands := []scrapeCandidate{
 		{Source: "网易云", Title: "届かない恋", Artist: "上原れな", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK",
-			Year: "2011", Duration: 292, SongID: 28718123, CoverHint: "1200×1200",
-			ThumbURL: "demo://netease/1", CoverURL: "https://p1.music.126.net/demo.jpg?param=1200y1200"},
+			Year: "2011", Duration: 292, SongID: 28718123, ThumbURL: "demo://netease/1", CoverURL: "https://p1.music.126.net/demo-1.jpg"},
 		{Source: "iTunes", Title: "届かない恋", Artist: "Various Artists", Album: "WHITE ALBUM 2 Original Soundtrack",
-			Year: "2011", Duration: 291, CoverHint: "1200×1200",
-			ThumbURL: "demo://itunes/1", CoverURL: "https://x/1200x1200bb.jpg"},
+			Year: "2011", Duration: 291, ThumbURL: "demo://itunes/1", CoverURL: "https://x/demo-2.jpg"},
 		{Source: "网易云", Title: "届かない恋 '13", Artist: "小木曽雪菜", Album: "届かない恋 '13",
-			Year: "2013", Duration: 302, SongID: 26508034, CoverHint: "1200×1200",
-			ThumbURL: "demo://netease/2"},
+			Year: "2013", Duration: 302, SongID: 26508034, ThumbURL: "demo://netease/2", CoverURL: "https://x/demo-3.jpg"},
 		{Source: "iTunes", Title: "Kodoku na I Love You", Artist: "Rena Uehara", Album: "WHITE ALBUM 2",
-			Year: "2011", Duration: 260, CoverHint: "1200×1200", ThumbURL: "demo://itunes/2"},
+			Year: "2011", Duration: 260, ThumbURL: "demo://itunes/2", CoverURL: "https://x/demo-4.jpg"},
 		{Source: "网易云", Title: "幸せな記憶", Artist: "上原れな", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK",
-			Year: "2011", Duration: 268, SongID: 28718124, CoverHint: "1200×1200",
-			ThumbURL: "demo://netease/3"},
+			Year: "2011", Duration: 268, SongID: 28718124, ThumbURL: "demo://netease/3", CoverURL: "https://x/demo-5.jpg"},
 	}
 
 	a.page = pageScrape
@@ -193,11 +189,17 @@ func seedScrapeDemo(a *app) {
 	a.scrapeFields = [5]bool{true, true, true, false, false}
 
 	hues := []float64{8, 32, 210, 280, 150}
+	// 实测像素也一起摆好：截图不联网，卡片上才有真实尺寸可看
+	sizes := [][2]int{{1600, 1600}, {1200, 1200}, {390, 390}, {3000, 3000}, {800, 800}}
 	a.scrapeMu.Lock()
 	a.scrapeThumbs = map[string]*ui.Bitmap{}
+	a.scrapeSizes = map[string][2]int{}
 	for i, c := range cands {
 		if c.ThumbURL != "" {
 			a.scrapeThumbs[c.ThumbURL] = ui.NewBitmap(demoCover(hues[i%len(hues)]))
+		}
+		if c.CoverURL != "" {
+			a.scrapeSizes[c.CoverURL] = sizes[i%len(sizes)]
 		}
 	}
 	a.scrapeMu.Unlock()

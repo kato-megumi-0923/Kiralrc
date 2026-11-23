@@ -170,7 +170,7 @@ func TestLoadLrcFileIntoEditor(t *testing.T) {
 
 func TestNoLyricsWorkflowAndNeteaseIDParsing(t *testing.T) {
 	cases := map[string]string{
-		"30967650":                                    "30967650",
+		"30967650": "30967650",
 		"https://music.163.com/#/song?id=30967650":    "30967650",
 		"https://music.163.com/song/30967650?foo=bar": "30967650",
 		"随便写的": "",
@@ -535,7 +535,7 @@ func writeTestFLAC(t *testing.T, path, title, artist string) {
 		body = append(body, e...)
 	}
 	out := []byte("fLaC")
-	out = append(out, 0x00, 0x00, 0x00, 34)          // STREAMINFO，34 字节
+	out = append(out, 0x00, 0x00, 0x00, 34) // STREAMINFO，34 字节
 	out = append(out, make([]byte, 34)...)
 	out = append(out, 0x84, byte(len(body)>>16), byte(len(body)>>8), byte(len(body))) // 最后一块
 	out = append(out, body...)
@@ -915,9 +915,9 @@ func TestEmbeddedCoverParsesID3v23AndV24(t *testing.T) {
 	apic := func() []byte {
 		b := []byte{0} // 编码：Latin-1
 		b = append(b, []byte("image/png")...)
-		b = append(b, 0)    // MIME 结尾
-		b = append(b, 3)    // 图片类型：正面
-		b = append(b, 0)    // 空描述
+		b = append(b, 0) // MIME 结尾
+		b = append(b, 3) // 图片类型：正面
+		b = append(b, 0) // 空描述
 		return append(b, cover...)
 	}
 	filler := [2][]byte{[]byte("USLT"), append([]byte{0, 0, 0}, bytes.Repeat([]byte("歌词"), 120)...)}
@@ -948,9 +948,9 @@ func TestScrapeDefaultsAndQuickFilters(t *testing.T) {
 	}
 
 	a.scrapeItems = []scrapeTrack{
-		{Path: "a.flac", Writable: true},                                                     // 什么都不全
+		{Path: "a.flac", Writable: true}, // 什么都不全
 		{Path: "b.flac", Writable: true, CoverW: 1200, CoverH: 1200, NeteaseID: 33, Year: "2020"}, // 都齐了
-		{Path: "c.flac", Writable: true, CoverW: 300, CoverH: 300, NeteaseID: 44},            // 低清 + 缺年份
+		{Path: "c.flac", Writable: true, CoverW: 300, CoverH: 300, NeteaseID: 44},                 // 低清 + 缺年份
 	}
 
 	a.scrapeFilter = 0
@@ -1047,9 +1047,11 @@ func TestScrapePageRenders(t *testing.T) {
 	a.scrapeQuery = "晴天 周杰伦"
 	a.scrapeCands = []scrapeCandidate{
 		{Source: "网易云", Title: "晴天", Artist: "周杰伦", Album: "叶惠美",
-			Year: "2003", Duration: 269, SongID: 186016, CoverHint: "1200×1200"},
+			Year: "2003", Duration: 269, SongID: 186016,
+			ThumbURL: "demo://a", CoverURL: "demo://a-big"},
 		{Source: "iTunes", Title: "晴天", Artist: "Jay Chou", Album: "叶惠美",
-			Year: "2003", Duration: 269, CoverHint: "1200×1200"},
+			Year: "2003", Duration: 269,
+			ThumbURL: "demo://b", CoverURL: "demo://b-big"},
 	}
 	a.page = pageScrape
 
@@ -1146,7 +1148,7 @@ func buildFLACFixture(t *testing.T, path string, withPicture bool) {
 	t.Helper()
 	var b bytes.Buffer
 	b.WriteString("fLaC")
-	b.Write([]byte{0x00, 0, 0, 34})   // STREAMINFO，不是最后一块
+	b.Write([]byte{0x00, 0, 0, 34}) // STREAMINFO，不是最后一块
 	b.Write(make([]byte, 34))
 	if !withPicture {
 		b.Write([]byte{0x81, 0, 0, 0}) // PADDING 收尾
@@ -1294,5 +1296,42 @@ func TestScrapePlanJSONOmitsEmptyCandidate(t *testing.T) {
 	}
 	if !strings.Contains(string(byID), `"netease_id":7`) {
 		t.Fatalf("按 ID 的计划少了 netease_id：%s", byID)
+	}
+}
+
+// 候选角标写的是实测像素，不是请求值——所以要先量得出来。
+func TestProbeImageSize(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 320, 200))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(buf.Bytes())
+	}))
+	defer srv.Close()
+
+	if w, h := probeImageSize(srv.URL); w != 320 || h != 200 {
+		t.Fatalf("量出来的尺寸不对：%dx%d", w, h)
+	}
+
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer missing.Close()
+	if w, h := probeImageSize(missing.URL); w != 0 || h != 0 {
+		t.Fatalf("取不到时应该是 0×0，拿到 %dx%d", w, h)
+	}
+}
+
+func TestScrapeCoverLabelUsesMeasuredSize(t *testing.T) {
+	a := newApp()
+	a.scrapeSizes = map[string][2]int{"u": {390, 390}}
+	if got := a.scrapeCoverLabel("u"); got != "390×390" {
+		t.Fatalf("角标应该写实测尺寸，拿到 %q", got)
+	}
+	if got := a.scrapeCoverLabel(""); got != "无图" {
+		t.Fatalf("没有地址时角标不对：%q", got)
 	}
 }

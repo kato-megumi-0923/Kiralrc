@@ -161,8 +161,8 @@ def test_itunes_candidates_are_parsed_and_upscaled():
     assert c["year"] == "2023" and c["duration"] == 261
     assert c["song_id"] == 0
     assert c["thumb_url"].endswith("240x240bb.jpg")
-    assert c["cover_url"].endswith("1200x1200bb.jpg")
-    assert c["cover_hint"] == "≤1200×1200"
+    assert c["cover_url"].endswith("6000x6000bb.jpg")   # 要尽可能大的原图，尺寸由前端实测
+    assert c["cover_hint"] == ""
 
 
 def test_netease_candidates_get_album_and_year():
@@ -186,7 +186,7 @@ def test_netease_candidates_get_album_and_year():
     assert c["source"] == "网易云" and c["album"] == "叶惠美"
     assert c["year"] == "2003" and c["song_id"] == 11
     assert "param=240y240" in c["thumb_url"]
-    assert "param=1200y1200" in c["cover_url"]
+    assert c["cover_url"] == "https://p1.music.126.net/a.jpg"   # 不带 param = 原图
 
 
 def test_netease_by_id_comes_first():

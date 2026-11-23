@@ -47,16 +47,15 @@ type scrapeTrack struct {
 }
 
 type scrapeCandidate struct {
-	Source    string `json:"source"`
-	Title     string `json:"title"`
-	Artist    string `json:"artist"`
-	Album     string `json:"album"`
-	Year      string `json:"year"`
-	Duration  int    `json:"duration"`
-	SongID    int    `json:"song_id"`
-	ThumbURL  string `json:"thumb_url"`
-	CoverURL  string `json:"cover_url"`
-	CoverHint string `json:"cover_hint"`
+	Source   string `json:"source"`
+	Title    string `json:"title"`
+	Artist   string `json:"artist"`
+	Album    string `json:"album"`
+	Year     string `json:"year"`
+	Duration int    `json:"duration"`
+	SongID   int    `json:"song_id"`
+	ThumbURL string `json:"thumb_url"`
+	CoverURL string `json:"cover_url"` // 原图地址，真实尺寸由前端实测
 }
 
 type scrapePlanItem struct {
@@ -405,6 +404,88 @@ func downloadScrapeThumb(url string) []byte {
 		_ = os.WriteFile(path, data, 0o644)
 	}
 	return data
+}
+
+// scrapeCoverLabel 候选封面的「实测像素」；还没测出来就先写「测量中…」。
+func (a *app) scrapeCoverLabel(url string) string {
+	if url == "" {
+		return "无图"
+	}
+	w, h, known := a.scrapeCoverPx(url)
+	switch {
+	case !known:
+		return "测量中…"
+	case w <= 0 || h <= 0:
+		return "尺寸未知"
+	}
+	return fmt.Sprintf("%d×%d", w, h)
+}
+
+// scrapeCoverPx 返回这张图真实的像素。第一次问会顺手起个后台任务去量：
+// 只读前 512KB 就够找到 PNG 的 IHDR / JPEG 的 SOFn，不必把整张图拖下来。
+func (a *app) scrapeCoverPx(url string) (int, int, bool) {
+	a.scrapeMu.Lock()
+	if a.scrapeSizes == nil {
+		a.scrapeSizes = map[string][2]int{}
+	}
+	if size, ok := a.scrapeSizes[url]; ok {
+		a.scrapeMu.Unlock()
+		return size[0], size[1], true
+	}
+	if a.scrapeSizeBusy[url] {
+		a.scrapeMu.Unlock()
+		return 0, 0, false
+	}
+	if a.scrapeSizeBusy == nil {
+		a.scrapeSizeBusy = map[string]bool{}
+	}
+	a.scrapeSizeBusy[url] = true
+	a.scrapeMu.Unlock()
+
+	go func() {
+		w, h := probeImageSize(url)
+		a.post(func() {
+			a.scrapeMu.Lock()
+			delete(a.scrapeSizeBusy, url)
+			a.scrapeSizes[url] = [2]int{w, h} // 量不出来也记下，别反复试
+			a.scrapeMu.Unlock()
+		})
+	}()
+	return 0, 0, false
+}
+
+var scrapeProbeSem = make(chan struct{}, 4)
+
+// probeImageSize 只读到能解出宽高为止；失败返回 0, 0。
+func probeImageSize(url string) (int, int) {
+	scrapeProbeSem <- struct{}{}
+	defer func() { <-scrapeProbeSem }()
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	// 两家 CDN 都支持 Range：拉前 256KB 就够定位 IHDR / SOFn，不必整张拖下来
+	req.Header.Set("Range", "bytes=0-262143")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return 0, 0
+	}
+	head, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if err != nil && len(head) == 0 {
+		return 0, 0
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(head))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
 }
 
 // scrapeThumbBitmap 居中裁成正方形再缩到 240，画廊里不必反复缩放大图。
@@ -1023,7 +1104,9 @@ func (a *app) viewScrapeCandCard(c *ui.Context, it scrapeTrack, cand scrapeCandi
 				}
 				statusPill(c, cand.Source, srcBg, srcFg)
 				ui.Box(c).Grow(1)
-				ui.Text(c, cand.CoverHint).FontSize(10.5).TextColor(p.faint).SingleLine()
+				// 角标写实测像素，不是请求值：网易云的图可能本来就小
+				ui.Text(c, a.scrapeCoverLabel(cand.CoverURL)).FontSize(10.5).
+					TextColor(p.faint).SingleLine()
 			})
 			ui.Text(c, cand.Title).FontSize(12.5).FontWeight(700).SingleLine()
 			ui.Text(c, cand.Artist).FontSize(11).TextColor(p.muted).SingleLine()
