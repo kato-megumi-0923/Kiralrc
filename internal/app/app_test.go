@@ -1423,3 +1423,42 @@ func TestScrapeFollowsNextAfterWrite(t *testing.T) {
 		t.Fatalf("末尾消失后应落到新的最后一首 b.flac，实际 %q", got)
 	}
 }
+
+// 「按网易云补全」只挑没有 ID、可写、没写过、也没手工挑过的曲目。
+func TestScrapeNeteaseTargets(t *testing.T) {
+	a := newApp()
+	a.scrapeItems = []scrapeTrack{
+		{Path: "a.flac", Writable: true},
+		{Path: "b.flac", Writable: true, NeteaseID: 5},
+		{Path: "c.flac", Writable: false},
+		{Path: "d.flac", Writable: true, WriteState: "done"},
+		{Path: "e.flac", Writable: true},
+	}
+	a.scrapeSel = map[string]scrapeCandidate{"e.flac": {Source: "iTunes"}}
+
+	got := a.scrapeNeteaseTargets()
+	if len(got) != 1 || got[0].Path != "a.flac" {
+		t.Fatalf("按网易云补全的目标挑错了：%+v", got)
+	}
+
+	a.scrapeMode = 1 // 覆盖选中：写过的也重来
+	got = a.scrapeNeteaseTargets()
+	if len(got) != 2 || got[0].Path != "a.flac" || got[1].Path != "d.flac" {
+		t.Fatalf("覆盖选中下应含已写入的：%+v", got)
+	}
+}
+
+// 计划里要明确写 resolve=netease，后端才知道这是「搜出来比对」而不是按 ID。
+func TestScrapePlanCarriesResolveFlag(t *testing.T) {
+	data, err := json.Marshal(scrapePlanItem{Path: "a", Resolve: "netease",
+		Fields: map[string]bool{"year": true}, Mode: "fill"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"resolve":"netease"`) {
+		t.Fatalf("计划里少了 resolve：%s", data)
+	}
+	if strings.Contains(string(data), `"candidate"`) || strings.Contains(string(data), `"netease_id"`) {
+		t.Fatalf("按网易云补全不该带候选或 ID：%s", data)
+	}
+}

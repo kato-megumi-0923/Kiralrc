@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -413,6 +414,48 @@ def search_candidates(query: str, artist: str = "", title: str = "",
 
 # ---------- 写入 ----------
 
+RESOLVE_GAP = 0.8   # 「按网易云补全」每首之间歇一下，免得被限速
+
+
+def strict_match(local: dict, cand: dict) -> bool:
+    """歌名、歌手、专辑都对上才算同一首。
+
+    折叠（去括号副标题、去标点空白、统一大小写）后再比，所以
+    「愛しよ」与「愛しよ (Ballad Ver.)」的歌名算一致——但专辑也要对得上，
+    真·另一个版本通常专辑不同，会被挡掉。
+    """
+    fold = tx._fold
+    t1, t2 = fold(local.get("title", "")), fold(cand.get("title", ""))
+    if not t1 or t1 != t2:
+        return False
+    a1, a2 = fold(local.get("artist", "")), fold(cand.get("artist", ""))
+    if not a1 or not a2:
+        return False
+    if a1 != a2 and a1 not in a2 and a2 not in a1:
+        return False
+    alb1, alb2 = fold(local.get("album", "")), fold(cand.get("album", ""))
+    if alb1 and alb2 and alb1 != alb2:
+        return False
+    return True
+
+
+def resolve_by_search(local: dict, path: Path) -> dict:
+    """按「歌名 歌手」搜网易云，返回第一条完全对得上的候选；没有就空。"""
+    query = " ".join(x for x in (local.get("title"), local.get("artist")) if x)
+    if not query:
+        query = path.stem
+    try:
+        cands = _netease_candidates(query, "", "", None, 6)
+    except tx.RateLimited:
+        return {}
+    except Exception:
+        return {}
+    for cand in cands:
+        if strict_match(local, cand):
+            return cand
+    return {}
+
+
 def _download(url: str, timeout: int = 30) -> bytes:
     if not url:
         return b""
@@ -585,21 +628,29 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
         res["readonly"] = True
         return res
 
-    if not cand:
-        # 计划里没带候选（Go 侧「按 ID 补全」发来的就是这样）：按 ID 取那首歌
-        want_id = int(item.get("netease_id") or 0)
-        cand = (by_id or {}).get(want_id) or {}
-        if not cand:
-            res["note"] = "按 NETEASE_ID 没取到这首歌（可能被限速）"
-            res["skipped"] = True
-            return res
-
     local = _local_meta(path, ext)
     if not local.get("netease_id"):
         try:
             local["netease_id"] = int(tx.netease_id_of(path) or 0)
         except Exception:
             local["netease_id"] = 0
+
+    if not cand:
+        if str(item.get("resolve") or "") == "netease":
+            # 「按网易云补全」：拿本地歌名/歌手去搜，只认完全对得上的那条
+            cand = resolve_by_search(local, path)
+            if not cand:
+                res["note"] = "网易云没搜到歌名/歌手/专辑全对得上的"
+                res["skipped"] = True
+                return res
+        else:
+            # 计划里没带候选（Go 侧「按 ID 补全」发来的就是这样）：按 ID 取那首歌
+            want_id = int(item.get("netease_id") or 0)
+            cand = (by_id or {}).get(want_id) or {}
+            if not cand:
+                res["note"] = "按 NETEASE_ID 没取到这首歌（可能被限速）"
+                res["skipped"] = True
+                return res
 
     want = _want(local, cand, fields, mode)
     if not want:
@@ -665,7 +716,13 @@ def apply_plan(plan, on_item=None) -> dict:
                 by_id[cand["song_id"]] = cand
 
     ok = failed = skipped = 0
+    last_search = 0.0
     for i, item in enumerate(items, 1):
+        if str(item.get("resolve") or "") == "netease":
+            gap = time.monotonic() - last_search
+            if gap < RESOLVE_GAP:
+                time.sleep(RESOLVE_GAP - gap)   # 一首一次搜索，别把网易云问急了
+            last_search = time.monotonic()
         res = apply_one(item, by_id)
         if res["ok"]:
             ok += 1

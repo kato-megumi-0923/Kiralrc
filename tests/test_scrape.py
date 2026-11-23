@@ -548,3 +548,103 @@ def test_cover_only_overwrite_keeps_every_other_field(tmp_path, monkeypatch):
     for key in ("title", "artist", "album", "year", "netease_id"):
         assert after[key] == before[key], f"{key} 被改了：{before[key]} → {after[key]}"
     assert (after["cover_w"], after["cover_h"]) == (1600, 1600)
+
+
+# ---------- 按网易云补全（严格匹配） ----------
+
+def test_strict_match_requires_title_artist_album():
+    local = {"title": "愛しよ", "artist": "ルルティア", "album": "R★O★C★K★S"}
+    assert scrape.strict_match(local, {"title": "愛しよ", "artist": "ルルティア",
+                                       "album": "R★O★C★K★S"})
+    # 歌名折叠后一致、但专辑不同 → 不是同一首
+    assert not scrape.strict_match(local, {"title": "愛しよ (Ballad Ver.)",
+                                           "artist": "ルルティア", "album": "Seirios"})
+    # 歌手完全不同
+    assert not scrape.strict_match(local, {"title": "愛しよ", "artist": "Opus",
+                                           "album": "R★O★C★K★S"})
+    # 本地没有专辑信息时不卡这一项
+    assert scrape.strict_match({"title": "愛しよ", "artist": "ルルティア", "album": ""},
+                               {"title": "愛しよ", "artist": "ルルティア", "album": "Seirios"})
+
+
+def test_resolve_by_search_writes_when_everything_matches(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac", title="愛しよ",
+                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
+    good = candidate(song_id=640545, title="愛しよ", artist="ルルティア",
+                     album="R★O★C★K★S", year="2001",
+                     cover_url="https://p1.music.126.net/a.jpg")
+    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [good])
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
+
+    res = scrape.apply_one({"path": str(p), "resolve": "netease",
+                            "fields": {"cover": True, "year": True, "netease_id": True},
+                            "mode": "fill"})
+    assert res["ok"], res
+    info = scrape.inspect_track(p)
+    assert info["year"] == "2001" and info["netease_id"] == 640545
+    assert info["cover_w"] == 1200
+
+
+def test_resolve_by_search_skips_a_different_song(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac", title="愛しよ",
+                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
+    wrong = candidate(song_id=22724795, title="愛しよ", artist="ルルティア",
+                      album="Seirios", year="2004")
+    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [wrong])
+
+    res = scrape.apply_one({"path": str(p), "resolve": "netease",
+                            "fields": {"year": True, "netease_id": True}, "mode": "fill"})
+    assert res["skipped"] and not res["ok"]
+    assert "全对得上" in res["note"]
+    info = scrape.inspect_track(p)
+    assert info["year"] == "" and info["netease_id"] == 0   # 什么都没写
+
+
+# ---------- 按网易云补全（严格匹配） ----------
+
+def test_strict_match_requires_title_artist_album():
+    local = {"title": "愛しよ", "artist": "ルルティア", "album": "R★O★C★K★S"}
+    assert scrape.strict_match(local, {"title": "愛しよ", "artist": "ルルティア",
+                                       "album": "R★O★C★K★S"})
+    # 歌名折叠后一致、但专辑不同 → 不是同一首
+    assert not scrape.strict_match(local, {"title": "愛しよ (Ballad Ver.)",
+                                           "artist": "ルルティア", "album": "Seirios"})
+    # 歌手完全不同
+    assert not scrape.strict_match(local, {"title": "愛しよ", "artist": "Opus",
+                                           "album": "R★O★C★K★S"})
+    # 本地没有专辑信息时不卡这一项
+    assert scrape.strict_match({"title": "愛しよ", "artist": "ルルティア", "album": ""},
+                               {"title": "愛しよ", "artist": "ルルティア", "album": "Seirios"})
+
+
+def test_resolve_by_search_writes_when_everything_matches(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac", title="愛しよ",
+                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
+    good = candidate(song_id=640545, title="愛しよ", artist="ルルティア",
+                     album="R★O★C★K★S", year="2001",
+                     cover_url="https://p1.music.126.net/a.jpg")
+    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [good])
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
+
+    res = scrape.apply_one({"path": str(p), "resolve": "netease",
+                            "fields": {"cover": True, "year": True, "netease_id": True},
+                            "mode": "fill"})
+    assert res["ok"], res
+    info = scrape.inspect_track(p)
+    assert info["year"] == "2001" and info["netease_id"] == 640545
+    assert info["cover_w"] == 1200
+
+
+def test_resolve_by_search_skips_a_different_song(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac", title="愛しよ",
+                  extra={"artist": "ルルティア", "album": "R★O★C★K★S"})
+    wrong = candidate(song_id=22724795, title="愛しよ", artist="ルルティア",
+                      album="Seirios", year="2004")
+    monkeypatch.setattr(scrape, "_netease_candidates", lambda *a, **k: [wrong])
+
+    res = scrape.apply_one({"path": str(p), "resolve": "netease",
+                            "fields": {"year": True, "netease_id": True}, "mode": "fill"})
+    assert res["skipped"] and not res["ok"]
+    assert "全对得上" in res["note"]
+    info = scrape.inspect_track(p)
+    assert info["year"] == "" and info["netease_id"] == 0   # 什么都没写

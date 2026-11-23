@@ -63,6 +63,7 @@ type scrapePlanItem struct {
 	Candidate *scrapeCandidate `json:"candidate,omitempty"`  // 指针才好 omitempty
 	NeteaseID int              `json:"netease_id,omitempty"` // 不给候选时按它去取
 	CoverSize int              `json:"cover_size,omitempty"` // 0 原图，1200 请求 1200
+	Resolve   string           `json:"resolve,omitempty"`    // "netease"：后端自己搜（只认全对上的）
 	Fields    map[string]bool  `json:"fields"`
 	Mode      string           `json:"mode"`
 }
@@ -622,6 +623,47 @@ func (a *app) scrapeIDTotal() int {
 	return n
 }
 
+// scrapeNeteaseTargets 「按网易云补全」的目标：当前筛选里没有 NETEASE_ID、
+// 可写、没写过（覆盖选中时除外）、也没手工挑过候选的曲目。
+// 有 ID 的走「按 ID 补全」，那条路更准，不必再搜。
+func (a *app) scrapeNeteaseTargets() []scrapeTrack {
+	out := make([]scrapeTrack, 0, len(a.scrapeItems))
+	for _, idx := range a.scrapeVisible() {
+		t := a.scrapeItems[idx]
+		if t.NeteaseID > 0 || !t.Writable {
+			continue
+		}
+		if t.WriteState == "done" && a.scrapeMode == 0 {
+			continue
+		}
+		if _, picked := a.scrapeSel[t.Path]; picked {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// applyScrapeByNetease 没有 ID 的那些：拿本地歌名/歌手去网易云搜，后端只认
+// 「歌名、歌手、专辑全对得上」的那条，对上了就按勾选的字段一次写完。
+func (a *app) applyScrapeByNetease() {
+	if a.scrapeApplying {
+		return
+	}
+	targets := a.scrapeNeteaseTargets()
+	if len(targets) == 0 {
+		a.toast = "当前筛选里没有可补全的曲目"
+		return
+	}
+	fields, mode := a.scrapeFieldMap(), a.scrapeModeName()
+	plan := make([]scrapePlanItem, 0, len(targets))
+	for _, t := range targets {
+		plan = append(plan, scrapePlanItem{Path: t.Path, Resolve: "netease",
+			CoverSize: a.scrapeCoverSize(), Fields: fields, Mode: mode})
+	}
+	a.runScrapePlan(plan)
+}
+
 // applyScrapeByID 不再逐首挑候选：文件里已经有网易云 ID，就按 ID 取那首歌的
 // 封面/年份/专辑，直接套用当前勾选的字段与策略写进去。
 func (a *app) applyScrapeByID() {
@@ -891,6 +933,23 @@ func (a *app) viewScrapeList(c *ui.Context) {
 				}
 			})
 		}
+
+		// 没有 NETEASE_ID 的那些：按歌名/歌手去网易云搜，全对上了才写
+		ne := len(a.scrapeNeteaseTargets())
+		neBg, neFg := p.surface2, p.text
+		if ne == 0 || a.scrapeApplying {
+			neBg, neFg = p.surface2, p.faint
+		}
+		neRow := ui.Row(c).FillWidth().Children(func() {
+			if pillButton(c.Key("scrape-byne"), iconSearch,
+				fmt.Sprintf("按网易云补全（%d 首）", ne), neBg, neFg).
+				Grow(1).Clicked() && ne > 0 && !a.scrapeApplying {
+				a.applyScrapeByNetease()
+			}
+		})
+		neRow.Shrink(0)
+		ui.Text(c, "歌名 / 歌手 / 专辑全对上才写，只认网易云").
+			FontSize(10.5).TextColor(p.faint).SingleLine().Shrink(0)
 
 		if a.scrapeLoading {
 			ui.Text(c, "正在读取标签…").FontSize(12.5).TextColor(p.muted)
