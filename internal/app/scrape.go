@@ -68,9 +68,15 @@ type scrapePlanItem struct {
 
 // ---------- 快捷筛选 ----------
 
-// 缺封面 / 低清（<600px）
-func scrapeNeedsCover(t scrapeTrack) bool {
-	return t.CoverW <= 0 || t.CoverW < 600 || t.CoverH < 600
+// 三种「该补」的情况分开算：缺封面（一张都没）和低清（有图但太小）
+// 是两件事，混在一个胶囊里会让人以为「低清」的那些连封面都没有。
+
+func scrapeNoCover(t scrapeTrack) bool {
+	return t.CoverW <= 0 || t.CoverH <= 0
+}
+
+func scrapeLowRes(t scrapeTrack) bool {
+	return !scrapeNoCover(t) && (t.CoverW < 600 || t.CoverH < 600)
 }
 
 // 缺 ID / 年份
@@ -78,15 +84,37 @@ func scrapeNeedsMeta(t scrapeTrack) bool {
 	return t.NeteaseID <= 0 || strings.TrimSpace(t.Year) == ""
 }
 
+// scrapeFilterCounts 各胶囊后面的数字，跟 scrapeVisible 用的是同一套判断。
+func (a *app) scrapeFilterCounts() [4]int {
+	var out [4]int
+	for _, t := range a.scrapeItems {
+		out[0]++
+		if scrapeNoCover(t) {
+			out[1]++
+		}
+		if scrapeLowRes(t) {
+			out[2]++
+		}
+		if scrapeNeedsMeta(t) {
+			out[3]++
+		}
+	}
+	return out
+}
+
 func (a *app) scrapeVisible() []int {
 	out := make([]int, 0, len(a.scrapeItems))
 	for i, t := range a.scrapeItems {
 		switch a.scrapeFilter {
 		case 1:
-			if !scrapeNeedsCover(t) {
+			if !scrapeNoCover(t) {
 				continue
 			}
 		case 2:
+			if !scrapeLowRes(t) {
+				continue
+			}
+		case 3:
 			if !scrapeNeedsMeta(t) {
 				continue
 			}
@@ -626,19 +654,17 @@ func (a *app) viewScrapeList(c *ui.Context) {
 	p := a.pal
 	left := ui.Column(c.Key("scrape-left")).Width(280).Shrink(0).MinHeight(0).Gap(10)
 	left.Children(func() {
-		ui.Row(c).Gap(6).Children(func() {
-			labels := [3]string{"全部", "缺封面 / 低清", "缺 ID / 年份"}
-			for i, label := range labels {
-				idx := i
-				bg, fg := p.surface2, p.muted
-				if a.scrapeFilter == idx {
-					bg, fg = p.accent.Alpha(0.16), p.accent
+		counts := a.scrapeFilterCounts()
+		labels := [4]string{"全部", "无封面", "低清 (<600px)", "缺 ID / 年份"}
+		// 两行两列：280px 里塞得下，数字让「缺封面」和「低清」不再混为一谈
+		for row := 0; row < 2; row++ {
+			start := row * 2
+			ui.Row(c).FillWidth().Gap(6).Children(func() {
+				for i := start; i < start+2; i++ {
+					a.scrapeFilterChip(c, i, labels[i], counts[i])
 				}
-				if pillButton(c.Key("scrape-filter-"+strconv.Itoa(idx)), nil, label, bg, fg).Clicked() {
-					a.scrapeFilter = idx
-				}
-			}
-		})
+			})
+		}
 
 		if a.scrapeLoading {
 			ui.Text(c, "正在读取标签…").FontSize(12.5).TextColor(p.muted)
@@ -698,6 +724,30 @@ func (a *app) viewScrapeRow(c *ui.Context, idx int) {
 		if a.win != nil {
 			a.win.Invalidate()
 		}
+	}
+}
+
+// scrapeFilterChip 左栏顶部的筛选胶囊：标签 + 条数。
+func (a *app) scrapeFilterChip(c *ui.Context, idx int, label string, count int) {
+	p := a.pal
+	on := a.scrapeFilter == idx
+	bg, fg := p.surface2, p.muted
+	if on {
+		bg, fg = p.accent.Alpha(0.16), p.accent
+	}
+	b := ui.ButtonBase(c.Key("scrape-filter-" + strconv.Itoa(idx))).Grow(1).Basis(0).Height(28).
+		PaddingX(9).Gap(5).Radius(999).AlignItems(ui.Center).Label(label).FocusRing(false)
+	fill := bg
+	if b.Hovered() {
+		fill = bg.Mix(ui.RGB(255, 255, 255), 0.12)
+	}
+	b.Background(b.AnimateColor("bg", fill, ui.Animation{Duration: 120 * time.Millisecond}))
+	b.Children(func() {
+		ui.Text(c, label).FontSize(11.5).FontWeight(600).TextColor(fg).SingleLine()
+		ui.Text(c, strconv.Itoa(count)).FontSize(10.5).FontWeight(700).TextColor(fg).SingleLine()
+	})
+	if b.Clicked() {
+		a.scrapeFilter = idx
 	}
 }
 

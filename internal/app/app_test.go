@@ -958,16 +958,26 @@ func TestScrapeDefaultsAndQuickFilters(t *testing.T) {
 		t.Fatalf("「全部」应有 3 首，拿到 %d", got)
 	}
 
-	a.scrapeFilter = 1 // 缺封面 / 低清
+	a.scrapeFilter = 1 // 无封面：只有一张都没有的
 	got := a.scrapeVisible()
-	if len(got) != 2 || a.scrapeItems[got[0]].Path != "a.flac" || a.scrapeItems[got[1]].Path != "c.flac" {
-		t.Fatalf("「缺封面 / 低清」筛错了：%v", got)
+	if len(got) != 1 || a.scrapeItems[got[0]].Path != "a.flac" {
+		t.Fatalf("「无封面」筛错了：%v", got)
 	}
 
-	a.scrapeFilter = 2 // 缺 ID / 年份
+	a.scrapeFilter = 2 // 低清：有图但 <600px
+	got = a.scrapeVisible()
+	if len(got) != 1 || a.scrapeItems[got[0]].Path != "c.flac" {
+		t.Fatalf("「低清」筛错了：%v", got)
+	}
+
+	a.scrapeFilter = 3 // 缺 ID / 年份
 	got = a.scrapeVisible()
 	if len(got) != 2 || a.scrapeItems[got[0]].Path != "a.flac" || a.scrapeItems[got[1]].Path != "c.flac" {
 		t.Fatalf("「缺 ID / 年份」筛错了：%v", got)
+	}
+
+	if counts := a.scrapeFilterCounts(); counts != [4]int{3, 1, 1, 2} {
+		t.Fatalf("筛选条数不对：%v", counts)
 	}
 
 	if tag := scrapeLocalTag(a.scrapeItems[2]); tag != "300px" {

@@ -318,7 +318,7 @@ type app struct {
 	scrapePaths      []string
 	scrapeItems      []scrapeTrack
 	scrapeCur        int
-	scrapeFilter     int // 0 全部 1 缺封面/低清 2 缺 ID/年份
+	scrapeFilter     int // 0 全部 1 无封面 2 低清(<600px) 3 缺 ID/年份
 	scrapeQuery      string
 	scrapeCands      []scrapeCandidate
 	scrapeCandPath   string
