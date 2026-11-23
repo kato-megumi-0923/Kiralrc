@@ -1355,3 +1355,24 @@ func TestScrapeCoverLabelUsesMeasuredSize(t *testing.T) {
 		t.Fatalf("原图档应该照实显示，拿到 %q", got)
 	}
 }
+
+// 按钮常驻，但「仅补缺失」下写过的就不再纳入——0 首要能从 scrapeIDTotal 看出来。
+func TestScrapeIDTotalCountsWrittenOnes(t *testing.T) {
+	a := newApp()
+	a.scrapeItems = []scrapeTrack{
+		{Path: "a.flac", Writable: true, NeteaseID: 11, WriteState: "done"},
+		{Path: "b.flac", Writable: true, NeteaseID: 12},
+		{Path: "c.flac", Writable: true},
+		{Path: "d.flac", Writable: false, NeteaseID: 13},
+	}
+	if got := a.scrapeIDTotal(); got != 2 {
+		t.Fatalf("带 ID 且可写的应该有 2 首，拿到 %d", got)
+	}
+	if got := len(a.scrapeByIDTargets()); got != 1 {
+		t.Fatalf("仅补缺失下应该只剩 1 首没写过的，拿到 %d", got)
+	}
+	a.scrapeMode = 1
+	if got := len(a.scrapeByIDTargets()); got != 2 {
+		t.Fatalf("覆盖选中下两首都该算，拿到 %d", got)
+	}
+}

@@ -577,6 +577,18 @@ func (a *app) scrapeByIDTargets() []scrapeTrack {
 	return out
 }
 
+// scrapeIDTotal 当前筛选里带 NETEASE_ID 且可写的曲目总数（不管写没写过），
+// 用来解释「按 ID 补全为什么是 0 首」。
+func (a *app) scrapeIDTotal() int {
+	n := 0
+	for _, idx := range a.scrapeVisible() {
+		if t := a.scrapeItems[idx]; t.NeteaseID > 0 && t.Writable {
+			n++
+		}
+	}
+	return n
+}
+
 // applyScrapeByID 不再逐首挑候选：文件里已经有网易云 ID，就按 ID 取那首歌的
 // 封面/年份/专辑，直接套用当前勾选的字段与策略写进去。
 func (a *app) applyScrapeByID() {
@@ -1220,6 +1232,11 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
 			hint := "只写勾选的字段；「仅补缺失」不动已有的值，也不碰 163 key 与封底图。"
+			if !a.scrapeApplying && a.scrapeMode == 0 {
+				if total := a.scrapeIDTotal(); total > 0 && len(a.scrapeByIDTargets()) == 0 {
+					hint = fmt.Sprintf("带 NETEASE_ID 的 %d 首都写过了；切「覆盖选中」可以按 ID 重写一遍", total)
+				}
+			}
 			if a.scrapeApplying {
 				hint = fmt.Sprintf("正在写入 %d / %d…", a.scrapeDone, a.scrapeTotal)
 			}
@@ -1227,28 +1244,28 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 
 			segmented(c.Key("scrape-mode"), &a.scrapeMode, "仅补缺失", "覆盖选中")
 
-			// 文件里已经有网易云 ID 的，不用一张张挑：按 ID 取那首歌的信息直接写
-			if byID := len(a.scrapeByIDTargets()); byID > 0 {
-				bg, fg := p.surface2, p.text
-				if a.scrapeApplying {
-					bg, fg = p.surface2, p.faint
-				}
-				if pillButton(c.Key("scrape-byid"), iconLink,
-					fmt.Sprintf("按 ID 补全（%d 首）", byID), bg, fg).Clicked() && !a.scrapeApplying {
-					a.applyScrapeByID()
-				}
+			// 文件里已经有网易云 ID 的，不用一张张挑：按 ID 取那首歌的信息直接写。
+			// 0 首时按钮照样在（灰掉），否则会被当成「这个模式没有这功能」。
+			byID := len(a.scrapeByIDTargets())
+			bg, fg := p.surface2, p.text
+			if byID == 0 || a.scrapeApplying {
+				bg, fg = p.surface2, p.faint
+			}
+			if pillButton(c.Key("scrape-byid"), iconLink,
+				fmt.Sprintf("按 ID 补全（%d 首）", byID), bg, fg).Clicked() && byID > 0 && !a.scrapeApplying {
+				a.applyScrapeByID()
 			}
 
 			n := a.scrapeSelectedCount()
 			label := fmt.Sprintf("写入已确认（%d 首）", n)
-			bg, fg := p.accent, p.onAccent
+			applyBg, applyFg := p.accent, p.onAccent
 			if n == 0 || a.scrapeApplying {
-				bg, fg = p.surface2, p.faint
+				applyBg, applyFg = p.surface2, p.faint
 				if a.scrapeApplying {
 					label = fmt.Sprintf("写入中 %d/%d", a.scrapeDone, a.scrapeTotal)
 				}
 			}
-			if pillButton(c.Key("scrape-apply"), iconCheck, label, bg, fg).Clicked() && n > 0 && !a.scrapeApplying {
+			if pillButton(c.Key("scrape-apply"), iconCheck, label, applyBg, applyFg).Clicked() && n > 0 && !a.scrapeApplying {
 				a.applyScrape()
 			}
 		})
