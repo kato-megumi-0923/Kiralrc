@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -1314,35 +1315,123 @@ func (a *app) viewLibrary(c *ui.Context) {
 					}
 				}
 
-				ui.Row(c.Key("lib-pager")).FillWidth().AlignItems(ui.Center).Gap(10).
+				// 分页：页码按钮 + 每页条数下拉
+				ui.Row(c.Key("lib-pager")).FillWidth().AlignItems(ui.Center).Gap(6).
 					Margin(8, 0, 0, 0).Children(func() {
-					ui.Text(c, fmt.Sprintf("共 %d 首 · 第 %d / %d 页", len(visible), a.libPage+1, pages)).
-						FontSize(12).TextColor(p.muted)
-					for _, n := range []int{50, 100} {
-						size := n
-						bg, fg := p.surface2, p.text
-						if a.pageSize() == size {
-							bg, fg = p.accent.Alpha(0.12), p.accent
+					ui.Text(c, fmt.Sprintf("共 %d 首", len(visible))).FontSize(12).TextColor(p.muted)
+
+					arrow := func(key string, icon *ui.SVG, target int, enabled bool) {
+						col := p.text
+						if !enabled {
+							col = p.faint.Alpha(0.4)
 						}
-						if pillButton(c.Key(fmt.Sprintf("page-size-%d", size)), nil,
-							fmt.Sprintf("%d / 页", size), bg, fg).Clicked() {
-							a.setPageSize(size)
+						b := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(9).Center().Label(key)
+						if b.Hovered() && enabled {
+							b.Background(p.hover)
+						}
+						b.Children(func() { ui.Icon(c, icon).Size(14, 14).TextColor(col) })
+						if enabled && b.Clicked() {
+							a.libPage = target
+							a.win.Invalidate()
 						}
 					}
-					if a.libPage > 0 {
-						if pillButton(c.Key("page-prev"), nil, "上一页", p.surface2, p.text).Clicked() {
-							a.libPage--
+					arrow("page-prev", iconChevronL, a.libPage-1, a.libPage > 0)
+
+					for _, n := range pageNumbers(a.libPage+1, pages, 5) {
+						if n == 0 {
+							ui.Text(c, "…").FontSize(12).TextColor(p.faint).Width(14).Shrink(0)
+							continue
+						}
+						idx := n - 1
+						cur := idx == a.libPage
+						pb := ui.ButtonBase(c.Key(fmt.Sprintf("page-n-%d", n))).Size(30, 30).Radius(9).Center().
+							Label(fmt.Sprintf("第 %d 页", n))
+						switch {
+						case cur:
+							pb.Background(p.surface2)
+						case pb.Hovered():
+							pb.Background(p.hover)
+						}
+						txCol, weight := p.muted, 500
+						if cur {
+							txCol, weight = p.text, 700
+						}
+						pb.Children(func() {
+							ui.Text(c, fmt.Sprintf("%d", n)).FontSize(12.5).FontWeight(weight).TextColor(txCol)
+						})
+						if pb.Clicked() {
+							a.libPage = idx
+							a.win.Invalidate()
 						}
 					}
-					if a.libPage < pages-1 {
-						if pillButton(c.Key("page-next"), nil, "下一页", p.surface2, p.text).Clicked() {
-							a.libPage++
+
+					arrow("page-next", iconChevronR, a.libPage+1, a.libPage < pages-1)
+
+					// 每页条数：按钮显示当前值，点开再选
+					sizeBtn := ui.ButtonBase(c.Key("page-size-btn")).Height(30).PaddingX(12).Radius(999).
+						Gap(5).AlignItems(ui.Center).Label(fmt.Sprintf("每页 %d 条", a.pageSize())).
+						Background(p.accent.Alpha(0.10))
+					sizeBtn.Children(func() {
+						ui.Text(c, fmt.Sprintf("%d / 页", a.pageSize())).FontSize(12).FontWeight(600).
+							TextColor(p.accent).SingleLine()
+						// 始终朝下：表示「可以展开」
+						ui.Icon(c, iconChevronD).Size(11, 11).TextColor(p.accent)
+					})
+					if sizeBtn.Clicked() {
+						a.pageMenuOpen = !a.pageMenuOpen
+						a.win.Invalidate()
+					}
+
+					if a.pageMenuOpen {
+						for _, n := range []int{50, 100} {
+							size := n
+							cur := a.pageSize() == size
+							bg, fg := p.surface2, p.text
+							if cur {
+								bg, fg = p.accent.Alpha(0.10), p.accent
+							}
+							if pillButton(c.Key(fmt.Sprintf("page-size-%d", size)), nil,
+								fmt.Sprintf("%d / 页", size), bg, fg).Clicked() {
+								a.setPageSize(size)
+								a.pageMenuOpen = false
+								a.win.Invalidate()
+							}
 						}
 					}
 				})
 			})
 		})
 	})
+}
+
+// pageNumbers 生成要显示的页码（0 表示省略号）：首页、末页、当前页左右各一个。
+func pageNumbers(cur, total, width int) []int {
+	if total <= width+2 {
+		out := make([]int, 0, total)
+		for i := 1; i <= total; i++ {
+			out = append(out, i)
+		}
+		return out
+	}
+	set := map[int]bool{1: true, total: true}
+	for d := -1; d <= 1; d++ {
+		if n := cur + d; n >= 1 && n <= total {
+			set[n] = true
+		}
+	}
+	nums := make([]int, 0, len(set))
+	for n := range set {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+	out := make([]int, 0, len(nums)+2)
+	for i, n := range nums {
+		if i > 0 && n-nums[i-1] > 1 {
+			out = append(out, 0)
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // viewLibraryEmpty renders Cloudy's clean empty state before any music folder is added.

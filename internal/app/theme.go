@@ -356,6 +356,9 @@ var (
 	iconRefresh  = strokeIcon(`<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>`)
 	iconSun      = strokeIcon(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`)
 	iconX        = strokeIcon(`<path d="M18 6 6 18M6 6l12 12"/>`)
+	iconChevronL = strokeIcon(`<path d="M15 19l-7-7 7-7"/>`)
+	iconChevronR = strokeIcon(`<path d="M9 5l7 7-7 7"/>`)
+	iconChevronD = strokeIcon(`<path d="M6 9l6 6 6-6"/>`)
 	iconTrash    = strokeIcon(`<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/>`)
 )
 

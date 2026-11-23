@@ -190,6 +190,7 @@ type app struct {
 	libScanning       bool
 	libPage           int  // 当前页码（0 起）
 	libPageSize       int  // 每页条数：50 / 100
+	pageMenuOpen      bool // 每页数下拉是否展开
 	libScanDone       int
 	libScanAll        int
 	libScanTime       string
