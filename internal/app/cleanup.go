@@ -220,10 +220,19 @@ const (
 // recycleBatch 一批交给 SHFileOperation 的文件数：太多会让 pFrom 串很长。
 const recycleBatch = 200
 
+// shellDelete 真正调 SHFileOperation；抽成变量是为了能在测试里替换
+// （真调一次就会真的把文件丢进回收站）。
+var shellDelete = func(op *shFileOpStruct) uintptr {
+	ret, _, _ := procSHFileOperation.Call(uintptr(unsafe.Pointer(op)))
+	return ret
+}
+
 // recycleFiles 用 SHFileOperation 把文件丢进回收站，返回真正进站的那些。
 //
 // 不要拿返回值当「整批都成了」：用户取消时前面的可能已经进回收站了，
 // 所以处理完按「文件还在不在」逐个核对，调用方据此保留没处理的文件。
+// 一旦用户在系统对话框里按了取消，后面的批次立刻停下——不然会一个接一个
+// 地弹窗，等于逼着他再取消 N 次。
 //
 // 路径列表是「每个路径以 \0 结尾、整体再补一个 \0」，所以不能走 UTF16PtrFromString
 // （它会因为串里有 NUL 而报 invalid argument），得自己拼 []uint16。
@@ -251,26 +260,41 @@ func recycleFiles(paths []string) ([]string, error) {
 		}
 		buf = append(buf, 0) // 列表结束的第二个 0
 
+		// 先记下哪些本来就在：事后「不见了」才算进站，别把不存在的路径算成处理过
+		existed := make(map[string]bool, len(batch))
+		for _, p := range batch {
+			if _, err := os.Lstat(p); err == nil {
+				existed[p] = true
+			}
+		}
+
 		op := shFileOpStruct{
 			wFunc:  foDelete,
 			pFrom:  &buf[0],
 			fFlags: fofAllowUndo | fofNoConfirm | fofSilent | fofNoErrorUI,
 		}
-		ret, _, _ := procSHFileOperation.Call(uintptr(unsafe.Pointer(&op)))
+		ret := shellDelete(&op)
+		aborted := op.fAnyOperationsAborted != 0
 		switch {
 		case ret != 0:
 			if firstErr == nil {
 				firstErr = fmt.Errorf("回收站操作返回 %d", ret)
 			}
-		case op.fAnyOperationsAborted != 0:
+		case aborted:
 			if firstErr == nil {
 				firstErr = fmt.Errorf("操作被取消")
 			}
 		}
 		for _, p := range batch {
+			if !existed[p] {
+				continue
+			}
 			if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
 				moved = append(moved, p)
 			}
+		}
+		if aborted {
+			break // 用户取消了，别再弹后面的批次
 		}
 	}
 	return moved, firstErr

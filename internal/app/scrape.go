@@ -689,6 +689,16 @@ func (a *app) scrapeNeteaseTargets() []scrapeTrack {
 	return out
 }
 
+// scrapePickCount 「需要手选」的首数：有汇总就用汇总的，没有才退回逐行计数。
+//
+// 两者数的是同一件事，加起来就是双倍——之前提示里「N 首需要手选」翻倍就是这么来的。
+func scrapePickCount(summaryPicks, linePicks int, gotSummary bool) int {
+	if gotSummary {
+		return summaryPicks
+	}
+	return linePicks
+}
+
 // scrapeBlockedByCooldown 冷却期内不再发新计划（单曲搜索、按 ID、按网易云共用一套冷却）。
 // 返回 true 时提示已经写好。
 func (a *app) scrapeBlockedByCooldown() bool {
@@ -712,6 +722,7 @@ func (a *app) applyScrapeByNetease() {
 		return
 	}
 	fields, mode := a.scrapeFieldMap(), a.scrapeModeName()
+	a.scrapeResumeTries = 0
 	plan := make([]scrapePlanItem, 0, len(targets))
 	for _, t := range targets {
 		plan = append(plan, scrapePlanItem{Path: t.Path, Resolve: "netease",
@@ -732,6 +743,7 @@ func (a *app) applyScrapeByID() {
 		return
 	}
 	fields, mode := a.scrapeFieldMap(), a.scrapeModeName()
+	a.scrapeResumeTries = 0
 	plan := make([]scrapePlanItem, 0, len(targets))
 	for _, t := range targets {
 		plan = append(plan, scrapePlanItem{Path: t.Path, NeteaseID: t.NeteaseID,
@@ -749,6 +761,7 @@ func (a *app) applyScrape() {
 		a.toast = "还没有确认任何候选"
 		return
 	}
+	a.scrapeResumeTries = 0
 	a.runScrapePlan(plan)
 }
 
@@ -793,7 +806,9 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			return
 		}
 		results := map[string]string{}
-		var ok, skipped, failed, upgraded, kept, picks int
+		var ok, skipped, failed, upgraded, kept int
+		var summaryPicks, linePicks int
+		gotSummary := false
 		var paused bool
 		var retryAfter, resumeFrom int
 		sc := bufio.NewScanner(stdout)
@@ -810,11 +825,12 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 			if msg.Summary {
 				ok, skipped, failed = msg.OK, msg.Skipped, msg.Failed
 				paused, retryAfter, resumeFrom = msg.Paused, msg.RetryAfter, msg.ResumeFrom
-				picks += msg.NeedsPickCount
+				summaryPicks = msg.NeedsPickCount
+				gotSummary = true
 				continue
 			}
 			if msg.NeedsPick {
-				picks++
+				linePicks++
 			}
 			if msg.CoverPX != "" {
 				upgraded++
@@ -835,6 +851,7 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 				a.scrapeDone, a.scrapeTotal = done, total
 			})
 		}
+		picks := scrapePickCount(summaryPicks, linePicks, gotSummary)
 		waitErr := cmd.Wait()
 		note := ""
 		if waitErr != nil && ok+skipped+failed == 0 {
@@ -896,6 +913,13 @@ func (a *app) scheduleScrapeResume(plan []scrapePlanItem, resumeFrom, retryAfter
 	if resumeFrom < 1 || resumeFrom > len(plan) {
 		return
 	}
+	if a.scrapeResumeTries >= 3 {
+		// 一直续下去只会变成后台不停地撞接口：停下来交给用户
+		a.scrapeWarn = ""
+		a.toast = "连续 3 次被网易云限速，已停止自动续跑；过一会儿手动再来一次"
+		return
+	}
+	a.scrapeResumeTries++
 	wait := retryAfter
 	if wait <= 0 {
 		wait = 120
@@ -934,6 +958,7 @@ func (a *app) scheduleScrapeResume(plan []scrapePlanItem, resumeFrom, retryAfter
 func (a *app) cancelScrapeResume() {
 	a.scrapeGen++
 	a.scrapePending = nil
+	a.scrapeResumeTries = 0
 	a.scrapeWarn = ""
 	a.toast = "已取消续跑，剩下的可以手动再来一次"
 }

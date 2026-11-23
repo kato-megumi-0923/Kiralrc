@@ -648,14 +648,18 @@ def find_unique_match(local: dict, cands: list[dict]) -> tuple[dict, str]:
     return hits[0], ""
 
 
-def resolve_by_search(local: dict, path: Path, cache: dict | None = None) -> tuple[dict, str]:
+def resolve_by_search(local: dict, path: Path,
+                      cache: dict | None = None) -> tuple[dict, str]:
     """按「歌名 歌手」搜网易云，返回 (唯一命中, 原因)。
 
-    cache 是同一批里共享的查询结果：同一首歌重复出现时不再问第二遍。
+    cache 是同一批里共享的**候选列表**，不是匹配结果：同名同歌手的曲目
+    查询完全一样，但专辑 / 版本 / 时长可能不同，所以每首都要拿自己那份
+    现状重新比一遍，不能把上一首选好的候选直接借过来。
     """
     key = (tx._fold(local.get("title", "")), tx._fold(local.get("artist", "")))
     if cache is not None and key[0] and key in cache:
-        return cache[key]
+        return find_unique_match(local, cache[key])
+
     query = " ".join(x for x in (local.get("title"), local.get("artist")) if x)
     if not query:
         query = path.stem
@@ -669,10 +673,9 @@ def resolve_by_search(local: dict, path: Path, cache: dict | None = None) -> tup
     if state.get("rate_limited"):
         # 限速时候选是不全的：这时候「没找到」不能当结论，得如实说被限速了
         return {}, "rate_limited"
-    result = find_unique_match(local, cands)
     if cache is not None and key[0]:
-        cache[key] = result
-    return result
+        cache[key] = cands
+    return find_unique_match(local, cands)
 
 
 def _download(url: str, timeout: int = 30) -> bytes:
@@ -1012,11 +1015,12 @@ def apply_plan(plan, on_item=None) -> dict:
             last_search = time.monotonic()
 
         res = apply_one(item, by_id, search_cache)
-        hit_limit = netauth.cooling_for() > 0 and not res["ok"]
-        if hit_limit:
-            # 这一首的失败其实是限速造成的，别记成「没搜到」
-            res["note"] = "网易云限速，已暂停"
-            res["skipped"] = True
+
+        if netauth.cooling_for() > 0 and not res["ok"]:
+            # 这一首没办成、而且是限速造成的：它算「待处理」，从本首续跑。
+            # 这里不记它的结果，否则续跑时会重复统计，而 resume_from 若写成
+            # i+1，这一首就永远没人再试了（只有一首时更是根本不会续跑）。
+            return pause("网易云限速，已暂停", i, ok, skipped, failed, picks)
 
         if res["ok"]:
             ok += 1
@@ -1027,9 +1031,6 @@ def apply_plan(plan, on_item=None) -> dict:
         if res.get("needs_pick"):
             picks += 1
         emit(i, res)
-
-        if hit_limit:
-            return pause("网易云限速，已暂停", i + 1, ok, skipped, failed, picks)
 
     return {"summary": True, "total": total, "ok": ok,
             "skipped": skipped, "failed": failed, "needs_pick_count": picks}

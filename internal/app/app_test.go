@@ -1785,3 +1785,63 @@ func TestCloudyAuthOptInReachesPython(t *testing.T) {
 		t.Fatal("打开开关后要透传 KIRALRC_CLOUDY_AUTH=1")
 	}
 }
+
+// 用户在系统对话框里按了取消：后面的批次别再弹窗。
+func TestCleanupStopsBatchesAfterCancel(t *testing.T) {
+	dir := t.TempDir()
+	files := make([]string, 0, 450) // 200 一批，正常会分 3 批
+	for i := 0; i < 450; i++ {
+		files = append(files, filepath.Join(dir, fmt.Sprintf("f%d.lrc", i)))
+	}
+
+	old := shellDelete
+	t.Cleanup(func() { shellDelete = old })
+	calls := 0
+	shellDelete = func(op *shFileOpStruct) uintptr {
+		calls++
+		op.fAnyOperationsAborted = 1
+		return 0
+	}
+
+	moved, err := recycleFiles(files)
+	if err == nil || !strings.Contains(err.Error(), "取消") {
+		t.Fatalf("取消要如实报出来，拿到 %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("取消后还弹了 %d 次对话框", calls)
+	}
+	if len(moved) != 0 {
+		t.Fatalf("一个都没进回收站，却报了 %d 个", len(moved))
+	}
+}
+
+// 「需要手选」的首数：有汇总就用汇总的，不能和逐行的加起来。
+func TestScrapePickCountPrefersSummary(t *testing.T) {
+	if got := scrapePickCount(2, 2, true); got != 2 {
+		t.Fatalf("汇总与逐行数的是同一件事，不该翻倍，拿到 %d", got)
+	}
+	if got := scrapePickCount(0, 3, false); got != 3 {
+		t.Fatalf("没有汇总时要用逐行计数，拿到 %d", got)
+	}
+}
+
+// 一直被限速时别在后台无限续跑：连续三次就停手，交回给用户。
+func TestScrapeResumeStopsAfterRepeatedRateLimits(t *testing.T) {
+	a := newApp()
+	plan := []scrapePlanItem{{Path: "a.flac", Resolve: "netease"}}
+
+	a.scrapeResumeTries = 2
+	a.scheduleScrapeResume(plan, 1, 1, 1, 0)
+	if len(a.scrapePending) != 1 {
+		t.Fatal("第三次还该再试一次")
+	}
+	a.scrapePending = nil
+
+	a.scheduleScrapeResume(plan, 1, 1, 1, 0) // 第三次用完了
+	if len(a.scrapePending) != 0 {
+		t.Fatalf("连续被限速还排续跑：%+v", a.scrapePending)
+	}
+	if !strings.Contains(a.toast, "停止自动续跑") {
+		t.Fatalf("要告诉用户已经停手，实际 %q", a.toast)
+	}
+}

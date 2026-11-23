@@ -316,40 +316,41 @@ type app struct {
 	toolScroll       ui.ScrollState
 
 	// 6. 标签刮削（见 scrape.go）
-	scrapeDir        string
-	scrapePaths      []string
-	scrapeItems      []scrapeTrack
-	scrapeCur        int
-	scrapeFilter     int // 0 全部 1 无封面 2 低清(<600px) 3 缺 ID/年份
-	scrapeQuery      string
-	scrapeCands      []scrapeCandidate
-	scrapeCandPath   string
-	scrapeCandCache  map[string][]scrapeCandidate
-	scrapeSearching  bool
-	scrapeWarn       string    // 这次搜索的告警（比如网易云限速），显示在右栏
-	scrapeCoolUntil  time.Time // 网易云限速后的冷却截止时间
-	scrapeAuth       string    // 这次搜索用的身份（Cloudy 登录态 / 匿名）
-	scrapeLoading    bool
-	scrapeSel        map[string]scrapeCandidate // 路径 → 已确认的候选
-	scrapeFields     [5]bool                    // 封面/年份/ID/专辑/标题歌手
-	scrapeMode       int                        // 0 仅补缺失 1 覆盖选中
-	scrapeQuality    int                        // 0 封面取原图 1 只请求 1200
-	scrapeApplying   bool
-	scrapeDone       int
-	scrapeTotal      int
-	scrapeMu         sync.Mutex
-	scrapeThumbs     map[string]*ui.Bitmap
-	scrapeThumbBusy  map[string]bool
-	scrapeCovers     map[string]*ui.Bitmap // 当前曲目内嵌封面缩略图（不外挂缓存）
-	scrapeWritten    map[string]bool       // 本次运行写过标签的路径，重读后仍标「已写入」
-	scrapeFollowPath string                // 写入前选中的曲目（写完看它还在不在列表里）
-	scrapeFollowPos  int                   // 它在当时列表里的位置
-	scrapeSizes      map[string][2]int     // 候选封面 URL → 实测像素
-	scrapeSizeBusy   map[string]bool
-	scrapePending    []scrapePlanItem // 限速暂停后没跑完的计划，冷却结束自动续跑
-	scrapeGen        int              // 每次发起写入自增，用来作废旧定时器
-	scrapeListScroll ui.ScrollState
-	scrapeCandScroll ui.ScrollState
+	scrapeDir         string
+	scrapePaths       []string
+	scrapeItems       []scrapeTrack
+	scrapeCur         int
+	scrapeFilter      int // 0 全部 1 无封面 2 低清(<600px) 3 缺 ID/年份
+	scrapeQuery       string
+	scrapeCands       []scrapeCandidate
+	scrapeCandPath    string
+	scrapeCandCache   map[string][]scrapeCandidate
+	scrapeSearching   bool
+	scrapeWarn        string    // 这次搜索的告警（比如网易云限速），显示在右栏
+	scrapeCoolUntil   time.Time // 网易云限速后的冷却截止时间
+	scrapeAuth        string    // 这次搜索用的身份（Cloudy 登录态 / 匿名）
+	scrapeLoading     bool
+	scrapeSel         map[string]scrapeCandidate // 路径 → 已确认的候选
+	scrapeFields      [5]bool                    // 封面/年份/ID/专辑/标题歌手
+	scrapeMode        int                        // 0 仅补缺失 1 覆盖选中
+	scrapeQuality     int                        // 0 封面取原图 1 只请求 1200
+	scrapeApplying    bool
+	scrapeDone        int
+	scrapeTotal       int
+	scrapeMu          sync.Mutex
+	scrapeThumbs      map[string]*ui.Bitmap
+	scrapeThumbBusy   map[string]bool
+	scrapeCovers      map[string]*ui.Bitmap // 当前曲目内嵌封面缩略图（不外挂缓存）
+	scrapeWritten     map[string]bool       // 本次运行写过标签的路径，重读后仍标「已写入」
+	scrapeFollowPath  string                // 写入前选中的曲目（写完看它还在不在列表里）
+	scrapeFollowPos   int                   // 它在当时列表里的位置
+	scrapeSizes       map[string][2]int     // 候选封面 URL → 实测像素
+	scrapeSizeBusy    map[string]bool
+	scrapePending     []scrapePlanItem // 限速暂停后没跑完的计划，冷却结束自动续跑
+	scrapeGen         int              // 每次发起写入自增，用来作废旧定时器
+	scrapeResumeTries int              // 连续续跑次数，防止一直被限速时死循环
+	scrapeListScroll  ui.ScrollState
+	scrapeCandScroll  ui.ScrollState
 
 	// 7. 设置
 	modelOK               [3]bool
