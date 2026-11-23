@@ -145,7 +145,7 @@ type pyProbeResult struct {
 
 func probePython(pyPath string) (pyProbeResult, error) {
 	code := `import importlib.util, json, sys
-req = ["torch", "torchaudio", "numpy", "av", "faster_whisper", "demucs", "transformers", "pypinyin", "fugashi", "unidic_lite", "yaml", "pykakasi", "onnxruntime"]
+req = ["torch", "torchaudio", "numpy", "av", "faster_whisper", "demucs", "transformers", "pypinyin", "fugashi", "unidic_lite", "yaml", "pykakasi", "onnxruntime", "mutagen", "numba"]
 miss = [m for m in req if importlib.util.find_spec(m) is None]
 print(json.dumps({"version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}", "missing": miss}))`
 	cmd := newHiddenCmd(pyPath, "-X", "utf8", "-c", code)
