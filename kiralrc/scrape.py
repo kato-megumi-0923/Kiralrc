@@ -323,6 +323,20 @@ def _artwork(url: str, size: int) -> str:
     return re.sub(r"/\d+x\d+bb\.", f"/{size}x{size}bb.", url)
 
 
+def resize_cover_url(url: str, size: int) -> str:
+    """把原图地址改成「请求指定边长」：网易云加 ?param，Apple 改路径里的 WxH。
+
+    size<=0 表示要原图，原样返回。
+    """
+    if not url or size <= 0:
+        return url
+    if "bb.jpg" in url or "mzstatic.com" in url:
+        return re.sub(r"/\d+x\d+bb\.", f"/{size}x{size}bb.", url)
+    if "?" in url:
+        return url
+    return f"{url}?param={size}y{size}"
+
+
 def _http_json(url: str, timeout: int = 15):
     """iTunes 用的轻量 GET：失败就当没结果，不打断另一个来源。"""
     try:
@@ -597,7 +611,9 @@ def apply_one(item: dict, by_id: dict | None = None) -> dict:
     cover_px = ""
     kept_note = ""
     if want.get("cover_url"):
-        data = _download(str(want.pop("cover_url")))
+        cover_url = resize_cover_url(str(want.pop("cover_url")),
+                                    int(item.get("cover_size") or 0))
+        data = _download(cover_url)
         new_w, new_h = image_size(data)
         old_w, old_h = image_size(local.get("cover") or b"")
         if not data:

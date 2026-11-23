@@ -1272,6 +1272,14 @@ func TestScrapeByIDTargets(t *testing.T) {
 	if len(got) != 1 || got[0].Path != "f.flac" {
 		t.Fatalf("筛选后目标不对：%+v", got)
 	}
+
+	// 「覆盖选中」是用户明确要重来一遍：写过的也要算进来
+	a.scrapeFilter = 0
+	a.scrapeMode = 1
+	got = a.scrapeByIDTargets()
+	if len(got) != 3 || got[0].Path != "a.flac" || got[1].Path != "d.flac" || got[2].Path != "f.flac" {
+		t.Fatalf("覆盖选中应当连已写入的也纳入：%+v", got)
+	}
 }
 
 // 计划里没有候选时不要塞一个空 candidate 进去，Python 那边靠“有没有 candidate”决定按 ID 取。
@@ -1287,7 +1295,7 @@ func TestScrapePlanJSONOmitsEmptyCandidate(t *testing.T) {
 	}
 
 	byID, err := json.Marshal(scrapePlanItem{Path: "a", NeteaseID: 7,
-		Fields: map[string]bool{"cover": true}, Mode: "fill"})
+		CoverSize: 1200, Fields: map[string]bool{"cover": true}, Mode: "fill"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1296,6 +1304,9 @@ func TestScrapePlanJSONOmitsEmptyCandidate(t *testing.T) {
 	}
 	if !strings.Contains(string(byID), `"netease_id":7`) {
 		t.Fatalf("按 ID 的计划少了 netease_id：%s", byID)
+	}
+	if !strings.Contains(string(byID), `"cover_size":1200`) {
+		t.Fatalf("封面档位没写进计划：%s", byID)
 	}
 }
 
@@ -1327,11 +1338,20 @@ func TestProbeImageSize(t *testing.T) {
 
 func TestScrapeCoverLabelUsesMeasuredSize(t *testing.T) {
 	a := newApp()
-	a.scrapeSizes = map[string][2]int{"u": {390, 390}}
+	a.scrapeSizes = map[string][2]int{"u": {390, 390}, "big": {1600, 1600}}
 	if got := a.scrapeCoverLabel("u"); got != "390×390" {
 		t.Fatalf("角标应该写实测尺寸，拿到 %q", got)
 	}
 	if got := a.scrapeCoverLabel(""); got != "无图" {
 		t.Fatalf("没有地址时角标不对：%q", got)
+	}
+	// 选了 1200 档，写进去的就被夹到 1200，角标不能还写 1600
+	a.scrapeQuality = 1
+	if got := a.scrapeCoverLabel("big"); got != "1200×1200" {
+		t.Fatalf("1200 档的角标应该封顶，拿到 %q", got)
+	}
+	a.scrapeQuality = 0
+	if got := a.scrapeCoverLabel("big"); got != "1600×1600" {
+		t.Fatalf("原图档应该照实显示，拿到 %q", got)
 	}
 }

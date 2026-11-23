@@ -328,6 +328,7 @@ type app struct {
 	scrapeSel        map[string]scrapeCandidate // 路径 → 已确认的候选
 	scrapeFields     [5]bool                    // 封面/年份/ID/专辑/标题歌手
 	scrapeMode       int                        // 0 仅补缺失 1 覆盖选中
+	scrapeQuality    int                        // 0 封面取原图 1 只请求 1200
 	scrapeApplying   bool
 	scrapeDone       int
 	scrapeTotal      int

@@ -62,6 +62,7 @@ type scrapePlanItem struct {
 	Path      string           `json:"path"`
 	Candidate *scrapeCandidate `json:"candidate,omitempty"`  // 指针才好 omitempty
 	NeteaseID int              `json:"netease_id,omitempty"` // 不给候选时按它去取
+	CoverSize int              `json:"cover_size,omitempty"` // 0 原图，1200 请求 1200
 	Fields    map[string]bool  `json:"fields"`
 	Mode      string           `json:"mode"`
 }
@@ -418,6 +419,10 @@ func (a *app) scrapeCoverLabel(url string) string {
 	case w <= 0 || h <= 0:
 		return "尺寸未知"
 	}
+	// 选了 1200 档，写进去的就是「最长边不超过 1200」，角标也要跟着封顶
+	if size := a.scrapeCoverSize(); size > 0 {
+		w, h = min(w, size), min(h, size)
+	}
 	return fmt.Sprintf("%d×%d", w, h)
 }
 
@@ -522,6 +527,14 @@ func (a *app) scrapeFieldMap() map[string]bool {
 	}
 }
 
+// scrapeCoverSize 封面档位：0 取原图，1200 只请求 1200（体积小些）。
+func (a *app) scrapeCoverSize() int {
+	if a.scrapeQuality == 1 {
+		return 1200
+	}
+	return 0
+}
+
 func (a *app) scrapeModeName() string {
 	if a.scrapeMode == 1 {
 		return "overwrite"
@@ -537,7 +550,8 @@ func (a *app) scrapePlan() []scrapePlanItem {
 		if !ok {
 			continue
 		}
-		plan = append(plan, scrapePlanItem{Path: it.Path, Candidate: &cand, Fields: fields, Mode: mode})
+		plan = append(plan, scrapePlanItem{Path: it.Path, Candidate: &cand,
+			CoverSize: a.scrapeCoverSize(), Fields: fields, Mode: mode})
 	}
 	return plan
 }
@@ -548,7 +562,11 @@ func (a *app) scrapeByIDTargets() []scrapeTrack {
 	out := make([]scrapeTrack, 0, len(a.scrapeItems))
 	for _, idx := range a.scrapeVisible() {
 		t := a.scrapeItems[idx]
-		if t.NeteaseID <= 0 || !t.Writable || t.WriteState == "done" {
+		if t.NeteaseID <= 0 || !t.Writable {
+			continue
+		}
+		// 仅补缺失时跳过写过的；「覆盖选中」是用户明确要重来一遍，写过的也算
+		if t.WriteState == "done" && a.scrapeMode == 0 {
 			continue
 		}
 		if _, picked := a.scrapeSel[t.Path]; picked {
@@ -574,7 +592,7 @@ func (a *app) applyScrapeByID() {
 	plan := make([]scrapePlanItem, 0, len(targets))
 	for _, t := range targets {
 		plan = append(plan, scrapePlanItem{Path: t.Path, NeteaseID: t.NeteaseID,
-			Fields: fields, Mode: mode})
+			CoverSize: a.scrapeCoverSize(), Fields: fields, Mode: mode})
 	}
 	a.runScrapePlan(plan)
 }
@@ -1194,6 +1212,9 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			ui.Text(c, "写入字段").FontSize(12).FontWeight(700).TextColor(p.muted).Margin(0, 10, 0, 4)
 			for i, label := range scrapeFieldLabels {
 				a.scrapeFieldCheck(c, i, label)
+				if i == 0 {
+					a.scrapeQualityToggle(c) // 封面档位紧跟着「高清封面」
+				}
 			}
 		})
 
@@ -1231,6 +1252,37 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 				a.applyScrape()
 			}
 		})
+	})
+}
+
+// scrapeQualityToggle 封面档位：原图（大）或 1200（体积小）。
+// 只有勾了「高清封面」才有意义，没勾时整个开关变灰不可点。
+func (a *app) scrapeQualityToggle(c *ui.Context) {
+	p := a.pal
+	dim := !a.scrapeFields[0]
+	box := ui.Row(c.Key("scrape-quality")).Height(24).Padding(2, 2, 2, 2).Radius(999).
+		Background(p.surface2).Gap(2).AlignItems(ui.Center).Shrink(0)
+	box.Children(func() {
+		for i, label := range [2]string{"原图", "1200"} {
+			idx := i
+			on := a.scrapeQuality == idx
+			fg, bg := p.muted, ui.Transparent
+			weight := 600
+			if on {
+				fg, bg, weight = p.accent, p.bg, 700
+			}
+			if dim {
+				fg = p.faint
+			}
+			b := ui.ButtonBase(c.Key("scrape-quality-" + strconv.Itoa(idx))).Height(20).
+				PaddingX(9).Radius(999).Center().Background(bg).Label(label).FocusRing(false)
+			b.Children(func() {
+				ui.Text(c, label).FontSize(11).FontWeight(weight).TextColor(fg).SingleLine()
+			})
+			if b.Clicked() && !dim {
+				a.scrapeQuality = idx
+			}
+		}
 	})
 }
 

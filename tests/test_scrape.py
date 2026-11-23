@@ -468,3 +468,37 @@ def test_a_smaller_source_cover_does_not_downgrade(tmp_path, monkeypatch):
     assert res["cover_kept"] and not res["ok"]
     assert "比本地" in res["note"]
     assert scrape.inspect_track(p)["cover_w"] == 800
+
+
+# ---------- 封面档位：原图 / 1200 ----------
+
+def test_resize_cover_url_handles_both_cdns():
+    netease = "https://p1.music.126.net/a.jpg"
+    assert scrape.resize_cover_url(netease, 1200) == netease + "?param=1200y1200"
+    assert scrape.resize_cover_url(netease, 0) == netease          # 0 = 原图
+    # 已经带了参数的地址不重复拼
+    assert scrape.resize_cover_url(netease + "?param=240y240", 1200).endswith("param=240y240")
+
+    apple = "https://is1-ssl.mzstatic.com/image/thumb/Music/x/100x100bb.jpg"
+    assert scrape.resize_cover_url(apple, 1200).endswith("/1200x1200bb.jpg")
+    assert scrape.resize_cover_url(apple, 0) == apple
+
+
+def test_apply_fetches_at_the_chosen_size(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac")
+    seen = []
+    monkeypatch.setattr(scrape, "_download",
+                        lambda url, timeout=30: seen.append(url) or png_bytes(1200, 1200))
+    # 原图候选 + 1200 档 → 实际请求要带 param
+    scrape.apply_one({"path": str(p),
+                      "candidate": candidate(song_id=1, cover_url="https://p1.music.126.net/a.jpg"),
+                      "fields": {"cover": True}, "mode": "overwrite", "cover_size": 1200})
+    assert "param=1200y1200" in seen[0]
+
+    # 原图档 → 请求保持裸地址
+    p2 = make_flac(tmp_path / "b.flac")
+    seen.clear()
+    scrape.apply_one({"path": str(p2),
+                      "candidate": candidate(song_id=1, cover_url="https://p1.music.126.net/b.jpg"),
+                      "fields": {"cover": True}, "mode": "overwrite", "cover_size": 0})
+    assert seen[0] == "https://p1.music.126.net/b.jpg"
