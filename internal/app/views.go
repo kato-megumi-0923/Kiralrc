@@ -217,17 +217,16 @@ func (a *app) viewSidebar(c *ui.Context) {
 			mark.Children(func() {
 				ui.Icon(c, iconNote).Size(15, 15).TextColor(p.onAccent)
 			})
-			ui.Text(c, "Kiralrc").FontSize(15.5).FontWeight(800).SingleLine()
-			ui.Box(c).Grow(1)
-			// BETA 胶囊，版本号在右边略高一点
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				beta := ui.Row(c).Padding(7, 7, 6, 7).Radius(999).Background(p.surface2)
+			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Kiralrc").FontSize(15.5).FontWeight(800).SingleLine()
+				beta := ui.Box(c).Height(16).PaddingX(4).Margin(0, 0, 6, 0).Radius(5).Center().
+					Background(p.accent.Alpha(0.08)).Border(1, p.accent.Alpha(0.30))
 				beta.Children(func() {
-					ui.Text(c, "BETA").FontSize(9.5).FontWeight(800).TextColor(p.muted).SingleLine()
+					ui.Text(c, "BETA").FontSize(10).FontWeight(600).TextColor(p.accent).SingleLine()
 				})
-				ui.Text(c, "v"+appVersion).FontSize(8).FontWeight(700).TextColor(p.faint).
-					Margin(-9, 0, 0, 2).SingleLine()
 			})
+			ui.Box(c).Grow(1)
+			ui.Text(c, "v"+appVersion).FontSize(8).FontWeight(700).TextColor(p.muted).SingleLine()
 		})
 
 		// Real live search input (filters tracks in 曲库)
