@@ -925,7 +925,8 @@ func (a *app) viewLibrary(c *ui.Context) {
 				} else {
 					ui.Text(c, fmt.Sprintf("已选择 %d 首歌曲", selCount)).FontSize(13).FontWeight(700)
 				}
-				if pillButton(c.Key("lib-sel-all"), nil, "全选本页", p.surface2, p.text).Clicked() {
+				// 没有分页：选的是当前筛选下的全部，不是「本页」
+				if pillButton(c.Key("lib-sel-all"), nil, "全选", p.surface2, p.text).Clicked() {
 					a.setVisibleTracksSelected(true)
 				}
 				if selCount > 0 {
