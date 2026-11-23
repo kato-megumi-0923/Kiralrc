@@ -111,9 +111,6 @@ def cmd_fetch_lyrics(a) -> int:
     if not a.dir and not getattr(a, "paths_file", None):
         print("请给出要处理的目录，或用 --paths-file 指定文件清单")
         return 2
-    if not a.dir and not getattr(a, "paths_file", None):
-        print("请给出要处理的目录，或用 --paths-file 指定文件清单")
-        return 2
     paths = None
     if getattr(a, "paths_file", None):
         with open(a.paths_file, encoding="utf-8") as f:
@@ -153,8 +150,6 @@ def cmd_decrypt(a) -> int:
             if not a.quiet:
                 print(f"[ok] {p.name} → {info.path.name}  {info.title} / {info.artist}"
                       f"{'  id=' + str(info.song_id) if info.song_id else ''}")
-                if info.tag_error:      # 音频出来了，但标签没写进去
-                    print(f"  [标签未写入] {info.tag_error}")
                 if info.tag_error:      # 音频出来了，但标签没写进去
                     print(f"  [标签未写入] {info.tag_error}")
         except decrypt.NotEncrypted as e:

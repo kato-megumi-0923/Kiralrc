@@ -22,7 +22,6 @@ from . import format as fmt
 from . import sources
 from . import text as tx
 from .ratelimit import RateLimited
-from .ratelimit import RateLimited
 
 BY_RE = re.compile(r"^\[by:([^\]]*)\]", re.M)
 ALIGN_RE = re.compile(r"^\[kiralrc:aligned\]", re.M | re.I)

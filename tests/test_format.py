@@ -51,7 +51,6 @@ def test_validate_catches_problems(tmp_path):
     p.write_bytes("[00:01.000]<00:01.000>你<00:00.500>好<00:01.000>\n".encode("utf-8"))
     probs = fmt.validate_enhanced(p)
     assert any("倒序" in x for x in probs)
-    assert any("倒序" in x for x in probs)
 
 
 def test_validate_passes_on_good(tmp_path):

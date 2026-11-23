@@ -47,7 +47,6 @@ class WordLyric:
     lines: list[WordLine] = field(default_factory=list)
     timed: bool = False    # 有字级时间
     song_id: int = 0       # 对应的网易云 ID（有就写进 LRC 头）
-    song_id: int = 0       # 对应的网易云 ID（有就写进 LRC 头）
 
     def __len__(self) -> int:
         return len(self.lines)
