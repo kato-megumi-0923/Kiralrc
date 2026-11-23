@@ -1,216 +1,207 @@
+<div align="center">
+
 # Kiralrc
 
-给歌曲补**逐字 LRC 歌词**的工具。
+**面向本地音乐曲库的逐字（Enhanced LRC）歌词管理、下载与歌声对齐工具**
 
-> **硬件与系统说明**：GUI 支持 Windows 10/11 x64；当前 GPU 加速**仅支持 NVIDIA 显卡（CUDA）**，暂不支持 AMD / Intel 显卡加速（无 NVIDIA 显卡时回退 CPU 运行，速度会明显变慢）。建议 **≥6GB 显存**，并预留约 **6~8GB** 磁盘空间存放模型权重。
+[![Version](https://img.shields.io/badge/version-v0.2.0--beta-e53935?style=flat-square)](https://github.com/kato-megumi-0923/Kiralrc/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4?style=flat-square)](#快速开始)
+[![License](https://img.shields.io/badge/license-MIT-2e8b57?style=flat-square)](LICENSE)
 
-核心思路只有一条：**时间必须由专门的对齐器从音频里算出来，不能靠 ASR 的句子边界去猜。**
+优先直下平台官方逐字歌词，冷门缺词再上人声轨歌声模型逐字精算，<br/>
+一站式打通 **NCM 解密 → 曲库管理 → 官方取词 → 歌声对齐 → 波形校对 → AI 翻译**。
 
-- 文本：优先使用参考歌词（支持多平台顺序拉取），ASR 只用来给每句找个大致位置；
-- 时间：按语种选用专门的歌声/歌词强制对齐模型（中文默认走 HubertFA，日文走 NextFire MMS，英文及其他语言走 Echora-300M MMS）；
-- 所有对齐都在 **demucs 分离出的人声轨**上跑，因为伴奏会显著干扰对齐。
+</div>
 
-## 支持语言与对齐模型
+---
 
-| 语言 | 强制对齐模型 | 文本 / 音素处理 | 特色支持 |
-|---|---|---|---|
-| **中文（`zh`）** | **HubertFA v0.0.7**（ONNX，默认）；可选 SOFA | `pypinyin` + `ds-zh-pinyin-lite` 词典 | 支持 `polyphone.toml` 自定义多音字读音覆盖 |
-| **日文（`ja`）** | **NextFire MMS**（`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`，歌声专精） | `fugashi`（MeCab + unidic）精确注音切分 | 准确处理「は→わ」「へ→え」等助词及长音、促音、拗音 |
-| **英文（`en`）及其他** | **Echora-300M MMS**（`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`，多语歌词专精） | 24s 长滑窗 + 词级/音节级对齐 | 支持 `en_granularity` 切换按词（`word`）或按字母（`char`），并按人声能量包络保真长音 |
+<p align="center">
+  <img src="docs/screenshots/library.png" alt="曲库总览" width="49%" />
+  <img src="docs/screenshots/editor.png" alt="编辑与校对" width="49%" />
+</p>
 
-> 前置定位与人声分离全语种统一采用 `demucs` + `faster-whisper-large-v3`。
+## 为什么做 Kiralrc？
 
-## 为什么用歌声对齐模型处理逐字时间
+整理本地无损曲库时，歌词往往卡在四个痛点上：
+1. **网易云 NCM 解密后丢 ID**：只转了音频格式，后续搜歌词还得靠文件名盲猜；
+2. **盲目跑模型费时费显卡**：明明平台本身就有现成的官方逐字词，却被一锅端扔进模型重算；
+3. **冷门曲 / Live / 翻唱没逐字**：传统 ASR（如 Whisper）在歌声上行首偏早、长拖腔被压扁；
+4. **冷门外语歌没译文**：好不容易对上了日文/英文时间轴，听歌时却缺一份自然流畅的中文翻译。
 
-实测（本机）：
+Kiralrc 用一条完整的工作流解决这四个问题：
 
-| 做法 | 结果 |
-|---|---|
-| faster-whisper 词级时间 + 按字数均摊 | 中文同音字错一堆（乡间→相见、暮归→木龟），且行首普遍**早 0.5~1.2 秒** |
-| WhisperX（wav2vec2 语音 CTC） | 短音准；**长音被压扁**——实际 5.27s 的拖腔只给 2.47s，快歌/歌声鲁棒性差 |
-| **SOFA（中文歌声专门）** | 长音正确、句内节奏自然；配合人声轨，与声学起音差 <0.1s |
-| **MMS 歌声/歌词微调（日/英/多语）** | 基于 MMS-300M 针对**歌声/歌词微调**（NextFire 日语 / Echora-300M 多语），适应歌唱发声与连音；配合 24s 长滑窗上下文、通配符边界对齐与人声能量包络长音保真，全面替代 WhisperX |
-
-还有一条经验：**不要拿网易云官方 LRC 当校验基准**。它对应的是另一版母带，
-本地文件可能比它多 0.7s 前导静音——用它校验会得出「我很准」的错误结论。
-判断准不准，要看**人声轨的能量包络**（见 `kiralrc/audio.py: rms_envelope`）。
-
-## 获取歌词优先级
-
-运行对齐时，按以下顺序获取参考歌词文本（`resolve_reference`）：
-
-1. **显式指定的参考文件（`--ref`）**：若指定路径存在，优先使用。
-2. **同目录同名 `.lrc` 文件**：若音频同目录下存在同名 `.lrc` 且有效歌词不少于 4 行（过滤「纯音乐，请欣赏」等短占位），直接复用。
-3. **多平台顺序自动搜索（`best_match`）**：支持直接指定网易云歌曲 ID（`--netease-id` 或读取音频文件内嵌 ID），否则根据 `--query` 或文件名提取关键词，结合时长与相似度打分按语种动态顺序兜底匹配并合并译文：
-   - **中文曲目**：`网易云 → AMLL → QQ音乐 → 酷狗音乐 → Apple Music（可选）→ LRCLIB`
-   - **日/外语曲目**：`网易云 → AMLL → Apple Music（可选）→ QQ音乐 → LRCLIB → 酷狗音乐`
-4. **外语译文自动补全**：若歌词识别为日文（`ja`）或英文（`en`）且本地参考文件不含中文译文，会自动向网易云拉取对应译文补全。
-
-## 逐字歌词生成链路
-
-端到端处理流程（`make_lrc`）分为 6 步：
-
-1. **确定文本与语种**：按上述优先级取得歌词行与译文映射，并自动识别语种（`zh` / `ja` / `en` 等）。
-2. **确定每句位置**：
-   - 若参考 LRC 自带精确时间戳（非粗糙/统一小数尾数且未强制重定位），直接沿用句首时间；
-   - 否则用 `faster-whisper-large-v3` 转录音频，通过单调动态规划将歌词行对齐到 ASR 分段，同时过滤制作人员信息行与剪辑版音频中缺失的段落（低于 `min_line_coverage`）。
-3. **人声分离**：使用 `demucs`（`htdemucs`）分离人声轨 `vocals.wav`（同一首歌会复用缓存）。
-4. **主唱检测**：分析人声轨 1~4kHz 能量占比与 P90 RMS（`min_vocal_ratio` / `min_vocal_rms`），拦截纯音乐或无人声轨道。
-5. **分语种逐字强制对齐**（在分离后的人声轨上按句切片运行）：
-   - **中文（`zh`）**：`pypinyin` + `polyphone.toml` 词表转拼音，再用 **HubertFA** 在句内对齐。ONNX Runtime CPU 版即可运行；装有 GPU 版且 CUDA 可用时也可走 GPU。
-   - **日文（`ja`）**：`fugashi`（MeCab + unidic）切分注音，结合人声能量包络避开上句拖音 → 运行 **NextFire MMS** 日语歌声模型对齐。
-   - **英文（`en`）及其他**：24s 长滑窗全上下文计算发射概率 → 运行 **Echora-300M MMS** 多语歌词专精模型对齐，按 `en_granularity`（`word` / `char`）切分粒度，并按人声能量包络做长音时长保真。
-6. **回填译文与输出**：挂载对应中文译文行，写入 `[ti:]` / `[ar:]` / `[al:]` / `[by:]` 元信息并按统一格式输出。
-
-## 输出格式
-
-```
-[ti:曲名]
-[ar:歌手]
-[by:HubertFA 歌声对齐]
-[00:06.232]<00:06.232>走<00:07.115>在<00:07.440>乡...
+```text
+  ① NCM 解密留 ID  ──▶  ② 优先直下官方逐字  ──▶  ③ 人声轨歌声模型兜底  ──▶  ④ 波形校对 & AI 翻译
+  还原标签/封面/ID       网易云/QQ/AMLL/酷狗      HubertFA / NextFire / Echora     拖拽微调 · 一键补译文
 ```
 
-- 时间戳 **三位小数**（全库统一）
-- **行尾多一个标签**，标该行最后一个字的收尾时间；少了它播放器会把末字起点当行尾，
-  字还没唱完就被切掉
-- UTF-8 无 BOM
+---
 
-### 播放器兼容性说明
+## 核心特性
 
-本项目输出的是标准的 **Enhanced LRC（增强型逐字 LRC）** 格式，适用于支持 `<mm:ss.xxx>` 行内逐字标签的本地音乐播放器（如椒盐音乐 / Salt Player、Foobar2000 逐字歌词插件、MusicFree、Oto Music 等）。
+### 1. 本地曲库总览 & 智能分类
+- 原生读取 FLAC / MP3 内嵌标签与专辑封面，自动识别歌手与歌名，不再受限于文件命名格式。
+- 自动统计歌词覆盖率，精准区分 **官方逐字 / 对齐逐字 / 仅整行 / 无歌词**，并自动排除纯音乐、OST 原声与伴奏轨。
 
-> **注意（网易云音乐官方 App）**：网易云官方 App 的本地歌词解析器仅支持传统整行 LRC（其云端逐字歌词使用的是专有 `yrc` 格式），**不识别 Enhanced LRC 的行内 `<mm:ss.xxx>` 标签**。直接导入网易云官方 App 会出现显示异常：
-> - 所有 `<00:06.232>` 尖括号时间戳会被当作普通歌词正文**原样显示在屏幕上**（例如屏幕直接显示 `<00:06.232>走<00:07.115>在...`）；
-> - **无法触发逐字高亮**，仅按行首 `[00:06.232]` 整行滚动，且可能伴随排版截断或异常换行。
+### 2. 优先直下平台官方逐字歌词（不烧显卡）
+- 优先解析音频内嵌的网易云 `163 key` 与 `NETEASE_ID` 标签，绕过模糊搜索直连原曲。
+- 按 **网易云（YRC）→ QQ 音乐（QRC）→ AMLL（TTML）→ 酷狗（KRC）** 顺序抓取官方逐字与双语译文；已有对齐版时支持官方逐字自动替换并保留 `.lrc.bak` 备份。
 
-## 安装
+### 3. 人声轨分语种歌声强制对齐
+对平台仅有整行或无逐字的曲目，先用 `demucs (htdemucs)` 分离纯净人声轨（内置 1–4kHz 主唱能量检测，自动跳过无人声轨），再按语种调用专门的歌声对齐模型：
 
-只需**单个 Python 环境**即可运行全部功能（SOFA 推理已剥离 `lightning` / `librosa<0.10` / `matplotlib` / `pandas` / `textgrid` 等训练期旧依赖，直接复用主环境 PyTorch + torchaudio 并在 GPU 上推理）：
+| 语种 | 默认对齐模型 | 特色处理 |
+| :--- | :--- | :--- |
+| **中文 (`zh`)** | **HubertFA v0.0.7**（ONNX，可选回退 SOFA） | `pypinyin` + `polyphone.toml` 多音字自定义词表，支持「鬼畜/波形起音优先」模式 |
+| **日文 (`ja`)** | **NextFire MMS**（日语卡拉 OK 歌声模型） | `fugashi`（MeCab / UniDic）精确语境读音，自动处理助词读音与长拖腔 |
+| **英文 (`en`) 及多语** | **Echora-300M MMS**（多语歌词专精模型） | 24s 长滑窗上下文 + 人声能量包络长音保真，支持按词 / 按字母粒度切换 |
+
+> 全网无词的极端冷门曲，也支持在曲库内 **批量填写网易云 ID**、**手动粘贴/导入参考词**，或启用 **本地 ASR 人声听写兜底**（`faster-whisper-large-v3` / 中文 `FireRedASR-AED-L`）。
+
+### 4. 可视化编辑校对 & 一键 AI 歌词翻译
+- **沉浸式校对台**：黑胶封面律动预览、原曲/人声轨双波形对照、逐字时间块直接拖拽微调、`±50ms` 整体偏移、LRC 源码直编，以及人声波形异常行一键定位。
+- **AI 整首翻译**：面向缺译文的外语歌，支持 OpenAI 兼容接口（内置 DeepSeek、OpenAI、Gemini、硅基流动、智谱 GLM、通义千问、OpenRouter、本地 Ollama 预设），整首结合上下文翻译并严格对齐行数；API Key 在 Windows 上经 **DPAPI 加密存储**。
+
+### 5. 实用工具箱
+- **NCM 加密音频解密**：还原无损 MP3 / FLAC，完整写回歌名、歌手、专辑、封面与 `NETEASE_ID`（QQ 的 `.qmc` / `.mflac` / `.mgg` 暂不支持，会明确提示）。
+- **独立人声分离页**：实时进度条、分离出人声与伴奏双轨、自动标出首次起声点、支持页面内试听并导出为 **FLAC / WAV / MP3**。
+- **格式批处理**：逐字 LRC 规范校验、双语译文行一键加 ❤️、两位/三位小数时间戳批量转换。
+
+---
+
+## 快速开始
+
+### 硬件与环境说明
+- **操作系统**：Windows 10 / 11 (x64)
+- **仅使用「官方取词 / NCM 解密 / 编辑校对 / AI 翻译」**：普通电脑即可流畅运行。
+- **使用「人声分离与模型逐字对齐」**：推荐 **NVIDIA 显卡（CUDA，≥6GB 显存）**，并预留约 **6~8GB** 磁盘空间存放模型权重；无 NVIDIA 显卡时可自动回退至 CPU 运行（速度较慢）。
+
+### 方式一：下载便携版（推荐）
+1. 前往 [Releases](https://github.com/kato-megumi-0923/Kiralrc/releases) 下载 `kiralrc-gui-v0.2.0-windows-amd64.zip` 并解压。
+2. 双击运行 `kiralrc-gui.exe`。
+3. 首次启动会自动检测本机 Python 环境；若缺少依赖或模型，前往 **「设置 → 模型与运行环境」** 点击：
+   - **一键安装/补全运行环境**（自动创建独立 `.venv` 并适配 CUDA / CPU 版 PyTorch）
+   - **一键下载基础模型**（自动拉取 `faster-whisper-large-v3` 与 `HubertFA` 中文模型；日/英 MMS 模型将在首次对齐对应语种时自动下载至 `models/` 目录）
+
+### 方式二：从源码运行
+需要 **Go 1.27+** 与 **Python 3.10 ~ 3.13**：
 
 ```bash
-# 1) 安装 CUDA 版 PyTorch（NVIDIA 显卡必须带 cu124 源，否则默认会装成 CPU 版）
+# 1. 安装 CUDA 版 PyTorch（NVIDIA 显卡请带 cu124 源；无 N 卡可去掉 --index-url）
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# 2) 安装其余 Python 依赖（支持 Python 3.10~3.13 + NumPy 2.x）
+# 2. 安装 Python 依赖
 pip install transformers faster-whisper demucs pypinyin fugashi unidic-lite pykakasi av numpy pyyaml numba mutagen scipy soundfile onnxruntime
 
-# 3) 下载基础模型
+# 3. 下载基础模型（如需额外下载可选 SOFA 权重，追加 --with-sofa）
 python scripts/fetch_models.py
-```
 
-`python -m kiralrc info` 可以检查路径和模型是否齐备。
-
-要使用 SOFA，可在 `config.toml` 的 `[defaults]` 将 `zh_aligner` 设置为 `"sofa"`，并用 `python scripts/fetch_models.py --with-sofa` 下载其权重。HubertFA 尚未安装时，已有 SOFA 权重的环境会提示回退。
-
-## 桌面端 GUI（Windows）
-
-除命令行外，项目还提供基于 Go 编写的桌面端 GUI（`kiralrc-gui.exe`），包含**曲库**、**新建对齐**、**任务队列**、**编辑与校对**、**工具箱**五个面板，支持音频试听、批量任务队列、逐字时间轴校对以及 `polyphone.toml` 多音字词表编辑。
-
-**从源码编译运行**（需要 Go 1.27+）：
-
-```bash
+# 4. 编译并启动桌面端 GUI
 go build -ldflags="-H windowsgui" -o kiralrc-gui.exe .
+./kiralrc-gui.exe
 ```
 
-### 主要功能
+---
 
-- **曲库管理**：扫描本地音乐目录并统计歌词覆盖状态（无歌词 / 整行 / 逐字），支持一键批量升级整行歌词、全网重试搜词、批量填写网易云歌曲 ID、直接 ASR 转录，以及单曲手工粘贴/导入/调用记事本编辑参考歌词。
-- **新建对齐**：支持单曲或整文件夹导入，灵活配置语种、参考 LRC、网易云 ID、强制 ASR 重定位及英文逐字粒度等选项。
-- **任务队列**：实时显示 6 步对齐流水线进度、状态与提示信息，对齐完成后可一键打开校对。
-- **编辑与校对**：内置音频播放与逐字同步高亮预览（支持专辑封面背景）、时间轴微调（`±50ms` 等）、**AI 一键歌词翻译**（支持 DeepSeek / OpenAI / Gemini / 硅基流动 / 智谱 GLM / 通义千问 / OpenRouter / 本地 Ollama）、格式校验、双语加 ❤️ 及保存/放弃修改。
-- **工具箱与设置**：提供 **Python 运行环境分层检测与一键初始化**、基础模型一键下载与管理、Apple Music Token 与 AI 翻译 API Key（Windows DPAPI 加密存储）配置、`polyphone.toml` 多音字词表编辑、中间产物缓存清理及常用工具快捷执行。
+## 输出格式与播放器兼容性
 
-## 用法
+Kiralrc 统一输出标准的 **Enhanced LRC（增强型逐字 LRC）**：
+
+```lrc
+[ti:示例曲目]
+[ar:示例歌手]
+[by:HubertFA 歌声对齐]
+[kiralrc:aligned]
+[00:06.232]<00:06.232>走<00:07.115>在<00:07.440>乡<00:07.820>间<00:08.510>
+```
+
+- 统一 **UTF-8 无 BOM**、**三位小数时间戳**（`mm:ss.SSS`），且每行末尾自带**闭合结束标签**（防止播放器在末字起唱瞬间提前切字）。
+- **完美支持**：椒盐音乐（Salt Player）、Foobar2000 逐字插件、MusicFree、Oto Music、Cloudy 等支持 Enhanced LRC 的本地播放器。
+- **不兼容提示**：网易云音乐官方 App 的本地歌词解析器仅支持传统整行 LRC，不支持 `<mm:ss.xxx>` 行内标签，直接导入会把尖括号时间戳原样显示在屏幕上。
+
+---
+
+## 进阶说明与命令行用法
+
+<details>
+<summary><b>点击展开：为什么不用纯 Whisper / WhisperX 做逐字对齐？</b></summary>
+
+本机实测对比：
+
+| 方案 | 实测表现 |
+| :--- | :--- |
+| faster-whisper 词级时间 + 均摊 | 同音字误识多，且歌声行首普遍 **偏早 0.5 ~ 1.2 秒** |
+| WhisperX（wav2vec2 语音 CTC） | 短音尚可，但 **长拖腔被严重压扁**（实测 5.27s 拖腔被压成 2.47s） |
+| **HubertFA / SOFA（中文歌声专精）** | 专为歌声训练，长音准确、句内节奏自然，与人声起音差 < 0.1s |
+| **NextFire / Echora MMS（日/英/多语歌声）** | 针对歌声与歌词微调，配合 24s 长滑窗与人声能量包络保真长音 |
+
+> 另：切勿拿网易云官方整行 LRC 当对齐校验基准——它常对应另一版母带（前导静音差 0.5~1s）。Kiralrc 统一以**本地音频分离出的人声轨能量包络**为准。
+
+</details>
+
+<details>
+<summary><b>点击展开：命令行（CLI）常用指令</b></summary>
 
 ```bash
-# 音频 → 逐字 LRC（自动搜网易云歌词；也可以 --ref 指定歌词文件）
-python -m kiralrc align "歌曲.mp3" --ti 曲名 --ar 歌手
+# 批量下载官方逐字歌词（网易云 → QQ → AMLL → 酷狗，不跑模型）
+python -m kiralrc download "D:\Music" --jobs 2
 
-# 日文
-python -m kiralrc align "song.mp3" --lang ja
+# 解密网易云 NCM 音频（保留原标签、封面与 NETEASE_ID）
+python -m kiralrc decrypt "D:\Music"
 
-# 校验格式
+# 单曲音频 → 逐字 LRC（中文默认 HubertFA；日文 --lang ja，英文 --lang en）
+python -m kiralrc align "歌曲.flac" --ti 曲名 --ar 歌手
+
+# 独立人声分离（产物保存在 work/sep/，不污染曲库）
+python -m kiralrc separate "歌曲.flac"
+
+# 格式校验 / 双语译文加 ❤️ / 两位转三位小数 / 环境自检
 python -m kiralrc validate "歌曲.lrc"
-
-# 双语歌词给翻译行加 ❤️
 python -m kiralrc hearts "歌曲.lrc"
-
-# 两位小数 → 三位
 python -m kiralrc convert "歌曲.lrc"
+python -m kiralrc info
 ```
 
-`align` 会把中间产物放在 `work/<歌名>_<hash>/`：`vocals.wav`（分离出的人声）、
-`segments/`（按句切片的 wav + 拼音 lab）、`segments/htk/words/*.lab`（对齐结果）。
-同一首歌重跑会复用已分离的人声。
+切换中文对齐器为 SOFA：在 `config.toml` 的 `[defaults]` 中将 `zh_aligner` 设为 `"sofa"`，并运行 `python scripts/fetch_models.py --with-sofa`。
 
-## 版本更新内容
+</details>
 
-以下按版本与演进阶段汇总自仓库创建以来的全部主要更新（历史坑点与设计背景另见 [`docs/known-issues.md`](docs/known-issues.md)）：
+<details>
+<summary><b>点击展开：项目结构与开源致谢</b></summary>
 
-### v0.2.0（2026-11-23）
-- **AI 歌词翻译与安全存储**：GUI 新增 OpenAI 兼容 AI 翻译功能（内置 DeepSeek / OpenAI / Gemini / 硅基流动 / 智谱 GLM / 通义千问 / OpenRouter / 本地 Ollama 预设），API Key 在 Windows 上通过 DPAPI 加密存储。
-- **双语译文识别与补全增强**：按语种文字体系精准识别双语译文对，支持逐行检测缺失译文、合并多源译文与自动补全回填。
-- **逐字参考迁移与多源搜索增强**：支持逐字参考 LRC 时间迁移与日语碰撞检测；新增可选 Apple Music 官方歌词源与 AMLL 复用网易云候选搜索；HuggingFace / Torch 模型缓存统一收拢至项目 `models/` 目录；Windows 播放器增强音频格式兼容。
-
-### 阶段四：全面切换 MMS 歌声/歌词模型 & 内嵌 SOFA（2026-11-22）
-- **内嵌 SOFA 推理**：将 SOFA 推理直接整合进 `kiralrc/sofa.py`，移除独立的 `.venv-sofa` 环境与 `tools/run_sofa.py` 老依赖。
-- **全面移除 WhisperX**：
-  - 日文（`ja`）采用 **NextFire MMS** 日语歌声模型，结合 `fugashi`（MeCab / UniDic）词法读音与人声能量包络换气低谷检测，避免切片吞入上句拖音。
-  - 英文（`en`）及其他多语种采用 **Echora-300M MMS** 多语歌词专精模型，配合 24s 长滑窗上下文、通配符边界对齐与人声能量包络长音保真。
-- **无词跳过与兜底增强**：新增 `NoLyricsError` 与 `skipped_nolyrics` 状态（GUI 队列显示「全网无词 · 已跳过」），拦截空对齐结果防止写入空 LRC，并优化 `--asr-fallback` 听写兜底分行。
-
-### 阶段三：多源歌词拉取与相似度匹配（2026-11-22）
-- **多平台顺序兜底**：接入 **网易云 → QQ音乐 → 酷狗音乐 → LRCLIB** 多源搜索回退。
-- **精准匹配与校验**：支持按歌名/歌手/时长综合打分（缺歌手时权重归一化）、自动跳过空歌词候选、按单曲网易云 ID 精准取词，并在 GUI 任务队列中按单曲隔离 `NeteaseID`。
-
-### 阶段二：Windows 桌面端 GUI 与 KI-1~KI-7 修复（2026-11-22）
-- **Go 桌面端 GUI（`kiralrc-gui.exe`）**：新增曲库管理、新建对齐、任务队列、编辑与校对、工具箱五大面板，支持音频试听、批量入队、时间轴微调与快捷剪贴板操作。
-- **已知问题修复（KI-1 ~ KI-7）**：新增人声主唱检测、剪辑版缺失行自动剔除、非中文长音能量包络保真、`polyphone.toml` 多音字自定义词表、英文 `word`/`char` 粒度切换；SOFA 跳过 `【...】` 演唱者标注；修复 GUI 单字逐字行判定与队列状态更新错位。
-
-### 阶段一：项目工程化与核心 Bug 修复（2026-11-21）
-- **架构整理与开源**：完成项目包化、统一 CLI 入口、确定 **Kiralrc** 名称，补充 MIT 许可与占位示例。
-- **核心修复**：修复多时间戳行解析、双语译文混入、文件名搜索词提取与程序构造 `Line` 丢失逐字标签的问题，并建立 `docs/known-issues.md`。
-
-## 目录
-
-```
-config.toml        路径与默认参数（模型、venv、词典、主唱检测/长音保真/粒度等）
-polyphone.toml     多音字自定义读音词表
+```text
 main.go            Windows 桌面端 GUI 入口
-internal/app/      GUI 核心界面、任务调度与音频播放器
-assets/            应用图标资源
-design/            UI 设计稿
-kiralrc/
-  cli.py           命令行入口
-  pipeline.py      端到端流程（定文本 → 定句子位置 → 分离 → 对齐 → 输出）
-  sofa.py          内嵌 SOFA 推理与结果拼装
-  jp.py            日文（NextFire MMS）与英文/多语（Echora-300M MMS）逐字对齐
-  asr.py           faster-whisper + 歌词行↔ASR 分段的单调 DP
-  audio.py         解码（PyAV）、demucs 分离、能量包络、主唱检测
-  text.py          多源抓歌词、拼音、多音字词表处理
-  format.py        LRC 解析/格式化/校验/小数位转换
-  hearts.py        双语加 ❤️
-  legacy/          早期的一次性脚本（保留作参照，不再维护）
-third_party/SOFA/  SOFA 词典与参考源码（MIT，已去 .git）
-models/            统一模型缓存根目录（CT2 whisper / SOFA / Demucs / HuggingFace MMS）
-scripts/           模型下载、环境安装、便携打包（build_release.ps1）、批量抓歌词（fetch_lyrics_dir.py）
+internal/app/      Go 桌面端界面、任务队列、音频播放器、DPAPI 安全存储与 AI 翻译
+kiralrc/           Python 核心包（官方取词、NCM 解密、HubertFA/SOFA/MMS 对齐、人声分离与校验）
+config.toml        路径与默认参数配置
+polyphone.toml     中文多音字自定义读音词表
+scripts/           模型下载（fetch_models.py）与便携打包（build_release.ps1）
+models/            本地模型与 HuggingFace / Torch 统一缓存目录（不提交 Git）
 ```
 
-## 代码来源
+**致谢与代码来源**：
+- [HubertFA v0.0.7](https://github.com/wolfgitpr/HubertFA)（Apache-2.0）：中文 ONNX 歌声强制对齐核心与推理代码（`kiralrc/_hubertfa/`）。
+- [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)（MIT）：中文拼音词典与可选歌声对齐模型（`third_party/SOFA/`）。
+- [NextFire MMS](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn) & [Echora-300M MMS](https://huggingface.co/hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner)：日/英/多语歌声歌词强制对齐模型。
+- [Demucs](https://github.com/facebookresearch/demucs)、[faster-whisper](https://github.com/SYSTRAN/faster-whisper) 与 [amll-ttml-db](https://github.com/amll-dev/amll-ttml-db)。
 
-| 部分 | 来源 | 说明 |
-|---|---|---|
-| `kiralrc/`、`tests/`、`scripts/`、`config.toml`、`polyphone.toml`、`main.go`、`internal/` | **本项目原创** | Python 对齐核心 + Go 桌面端 GUI |
-| `third_party/SOFA/` | [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)，MIT © 2023 suco | 保留词典与原版 LICENSE，推理已内嵌到 `kiralrc/sofa.py` |
-| `kiralrc/_hubertfa/` | [HubertFA v0.0.7](https://github.com/wolfgitpr/HubertFA/releases/tag/v0.0.7)，Apache-2.0 | 保留上游解码代码和许可证，权重由模型下载脚本获取 |
-| `models/` | 本地下载（不提交到 Git） | CT2 Whisper：`Systran/faster-whisper-large-v3`<br>中文：HubertFA v0.0.7 ONNX，可选 SOFA<br>MMS 歌声/歌词：`NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`、`hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner`<br>人声分离：`htdemucs` |
-| 依赖库 | PyPI | faster-whisper / demucs / transformers / PyAV / pypinyin / torch … |
-| `kiralrc/legacy/` | 本项目早期版本 | 一次性脚本，保留作参照，不再维护 |
+</details>
+
+<details>
+<summary><b>点击展开：版本更新记录</b></summary>
+
+### v0.2.0-beta（2026-11-23）
+- **优先直下官方逐字**：新增 `download` 流程与曲库直下入口，支持按标签 ID（`163 key` / `NETEASE_ID`）及精准匹配从网易云 / QQ / AMLL / 酷狗获取官方逐字歌词。
+- **中文默认切换 HubertFA v0.0.7**：ONNX 推理开箱即用，保留 SOFA 作为可选回退。
+- **NCM 加密音频解密**：内置解密工具，完整保留封面、元信息与网易云歌曲 ID。
+- **独立人声分离页**：支持分离进度展示、人声/伴奏双轨试听、首次起声定位及 FLAC / WAV / MP3 导出。
+- **AI 歌词翻译 & DPAPI 加密**：编辑页新增整首 AI 翻译，内置 8 家主流服务商与本地 Ollama 预设，API Key 经 Windows DPAPI 加密存储。
+- **曲库与体验增强**：原生读取 FLAC / MP3 标签与内嵌封面、常驻 Python Worker 复用、便携运行环境一键初始化、人声波形校验点击跳转。
+
+</details>
+
+---
 
 ## 许可
 
-本项目代码以 MIT 发布（见 `LICENSE`）。`third_party/SOFA` 为其原作者的 MIT 代码（见其 `LICENSE`），
-模型权重版权归各自作者。
-
-仓库里**不包含**任何歌曲音频或歌词文本；`examples/` 只有占位示例。
+本项目原创代码以 [MIT License](LICENSE) 开源。`kiralrc/_hubertfa/` 遵循上游 Apache-2.0 许可，`third_party/SOFA/` 遵循上游 MIT 许可，各模型权重版权归原作者所有。仓库内不包含任何受版权保护的音频或歌词文件。
