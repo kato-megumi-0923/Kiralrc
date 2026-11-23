@@ -1535,3 +1535,52 @@ func TestScrapeRowRightClickCopies(t *testing.T) {
 		t.Fatalf("复制全部信息拿到 %q，想要 %q", got, want)
 	}
 }
+
+// 搜索结果的两种形状：{items,warning} 和旧的裸数组。
+func TestParseScrapeSearch(t *testing.T) {
+	obj := `{"items":[{"source":"iTunes","title":"桃色タイフーン","song_id":0}],` +
+		`"warning":"网易云限速了，这次只有 iTunes 候选"}`
+	cands, warn, err := parseScrapeSearch([]byte(obj))
+	if err != nil || len(cands) != 1 || cands[0].Title != "桃色タイフーン" {
+		t.Fatalf("对象格式解析不对：%v %v", cands, err)
+	}
+	if warn != "网易云限速了，这次只有 iTunes 候选" {
+		t.Fatalf("告警没带出来：%q", warn)
+	}
+
+	// 老格式（数组）照旧能用
+	cands, warn, err = parseScrapeSearch([]byte(`[{"source":"网易云","title":"晴天"}]`))
+	if err != nil || len(cands) != 1 || warn != "" {
+		t.Fatalf("数组格式解析不对：%v %q %v", cands, warn, err)
+	}
+
+	// 空结果 + 告警
+	cands, warn, err = parseScrapeSearch([]byte(`{"items":[],"warning":"限速"}`))
+	if err != nil || len(cands) != 0 || warn != "限速" {
+		t.Fatalf("空结果解析不对：%v %q %v", cands, warn, err)
+	}
+}
+
+// 被网易云限速后进入冷却：切歌不再自动去搜，批量补全也先拦住。
+func TestScrapeCoolsDownAfterRateLimit(t *testing.T) {
+	a := newApp()
+	a.scrapeItems = []scrapeTrack{{Path: "a.flac", Writable: true, NeteaseID: 0}}
+	a.scrapeCoolUntil = time.Now().Add(time.Minute)
+
+	a.selectScrapeTrack(0)
+	if a.scrapeCands != nil {
+		t.Fatal("冷却期不该发起搜索")
+	}
+	if a.scrapeWarn == "" {
+		t.Fatal("冷却期要告诉用户为什么没搜")
+	}
+
+	a.toast = ""
+	a.applyScrapeByNetease()
+	if a.scrapeApplying {
+		t.Fatal("冷却期不该开始批量补全")
+	}
+	if !strings.Contains(a.toast, "冷却") {
+		t.Fatalf("批量补全应提示冷却，实际 %q", a.toast)
+	}
+}

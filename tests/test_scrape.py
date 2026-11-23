@@ -648,3 +648,41 @@ def test_resolve_by_search_skips_a_different_song(tmp_path, monkeypatch):
     assert "全对得上" in res["note"]
     info = scrape.inspect_track(p)
     assert info["year"] == "" and info["netease_id"] == 0   # 什么都没写
+
+
+def test_search_reports_rate_limit_instead_of_failing_silently(monkeypatch):
+    """网易云限速时不能只默默返回 iTunes 结果，得把原因带出去。"""
+    from kiralrc.ratelimit import RateLimited
+
+    def boom(*a, **k):
+        raise RateLimited("操作频繁")
+
+    payload = {"results": [{"trackName": "桃色タイフーン", "artistName": "春奈るな",
+                            "collectionName": "桃色タイフーン - Single",
+                            "releaseDate": "2018", "trackTimeMillis": 257000,
+                            "artworkUrl100": "https://x/100x100bb.jpg"}]}
+
+    res = scrape.search_with_note("桃色タイフーン",
+                                  netease_search=boom, netease_json=boom,
+                                  itunes_json=lambda url: payload)
+    assert [c["source"] for c in res["items"]] == ["iTunes"]
+    assert "限速" in res["warning"] and "iTunes" in res["warning"]
+
+
+def test_search_reports_rate_limit_instead_of_failing_silently(monkeypatch):
+    """网易云限速时不能只默默返回 iTunes 结果，得把原因带出去。"""
+    from kiralrc.ratelimit import RateLimited
+
+    def boom(*a, **k):
+        raise RateLimited("操作频繁")
+
+    payload = {"results": [{"trackName": "桃色タイフーン", "artistName": "春奈るな",
+                            "collectionName": "桃色タイフーン - Single",
+                            "releaseDate": "2018", "trackTimeMillis": 257000,
+                            "artworkUrl100": "https://x/100x100bb.jpg"}]}
+
+    res = scrape.search_with_note("桃色タイフーン",
+                                  netease_search=boom, netease_json=boom,
+                                  itunes_json=lambda url: payload)
+    assert [c["source"] for c in res["items"]] == ["iTunes"]
+    assert "限速" in res["warning"] and "iTunes" in res["warning"]

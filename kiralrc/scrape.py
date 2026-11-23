@@ -249,8 +249,11 @@ def _netease_candidate(song: dict) -> dict:
     }
 
 
-def netease_details(ids: list[int], netease_json=None) -> list[dict]:
-    """一次请求补齐若干首歌的 album.picUrl / publishTime。"""
+def netease_details(ids: list[int], netease_json=None, state: dict | None = None) -> list[dict]:
+    """一次请求补齐若干首歌的 album.picUrl / publishTime。
+
+    state 给了的话，被限速时记一笔 rate_limited，好让上层如实告诉用户。
+    """
     ids = [i for i in ids if i]
     if not ids:
         return []
@@ -260,6 +263,8 @@ def netease_details(ids: list[int], netease_json=None) -> list[dict]:
     try:
         data = get(url) or {}
     except tx.RateLimited:
+        if state is not None:
+            state["rate_limited"] = True
         return []
     except Exception:
         return []
@@ -268,13 +273,14 @@ def netease_details(ids: list[int], netease_json=None) -> list[dict]:
 
 
 def _netease_candidates(query, artist, title, netease_id, limit,
-                        netease_search=None, netease_json=None) -> list[dict]:
+                        netease_search=None, netease_json=None,
+                        state: dict | None = None) -> list[dict]:
     search = netease_search or tx.netease_search
     out: list[dict] = []
     seen: set[int] = set()
 
     if netease_id:
-        for song in netease_details([int(netease_id)], netease_json):
+        for song in netease_details([int(netease_id)], netease_json, state):
             cand = _netease_candidate(song)
             if cand["song_id"] and cand["song_id"] not in seen:
                 seen.add(cand["song_id"])
@@ -286,10 +292,12 @@ def _netease_candidates(query, artist, title, netease_id, limit,
             hits = search(keyword, limit=6) or []
         except tx.RateLimited:
             hits = []
+            if state is not None:
+                state["rate_limited"] = True
         except Exception:
             hits = []
         ids = [int(h["id"]) for h in hits if h.get("id") and int(h["id"]) not in seen]
-        detailed = netease_details(ids, netease_json)
+        detailed = netease_details(ids, netease_json, state)
         if not detailed:
             # 补详情失败（限速 / 接口抽风）时，至少把搜索结果的歌名歌手摆出来
             detailed = [{"id": int(h["id"]), "name": h.get("name", ""),
@@ -387,6 +395,29 @@ def _itunes_candidates(query, artist, title, itunes_json) -> list[dict]:
     return out
 
 
+def search_with_note(query: str, artist: str = "", title: str = "",
+                     netease_id: int | None = None, limit: int = 8,
+                     netease_search=None, netease_json=None,
+                     itunes_json=None) -> dict:
+    """给 CLI 用：除了候选，还告诉前端「网易云那边是不是被限速了」。
+
+    限速时静默只剩 iTunes 的结果，用户会以为「明明搜得到为什么这里没有」，
+    所以必须把原因带出去。
+    """
+    state: dict = {}
+    cands = search_candidates(query, artist=artist, title=title,
+                              netease_id=netease_id, limit=limit,
+                              netease_search=netease_search, netease_json=netease_json,
+                              itunes_json=itunes_json, state=state)
+    note = ""
+    if state.get("rate_limited"):
+        has_netease = any(c.get("source") == "网易云" for c in cands)
+        note = ("网易云限速了，这次只有 iTunes 候选；过一会儿再点「重新搜索」"
+                if not has_netease else
+                "网易云限速，候选可能不全；过一会儿可以再搜一次")
+    return {"items": cands, "warning": note}
+
+
 def _interleave(first: list[dict], second: list[dict]) -> list[dict]:
     """两个来源交替排，前 N 条里两边都有，画廊才不会一边倒。"""
     out: list[dict] = []
@@ -401,10 +432,10 @@ def _interleave(first: list[dict], second: list[dict]) -> list[dict]:
 def search_candidates(query: str, artist: str = "", title: str = "",
                       netease_id: int | None = None, limit: int = 8,
                       netease_search=None, netease_json=None,
-                      itunes_json=None) -> list[dict]:
+                      itunes_json=None, state: dict | None = None) -> list[dict]:
     """网易云 + iTunes 一起搜，返回可直接喂给画廊的候选。"""
     netease = _netease_candidates(query, artist, title, netease_id, limit,
-                                  netease_search, netease_json)
+                                  netease_search, netease_json, state)
     itunes = _itunes_candidates(query, artist, title, itunes_json)
     merged = _interleave(netease, itunes)
     if limit and limit > 0:

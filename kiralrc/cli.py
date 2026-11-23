@@ -179,10 +179,10 @@ def cmd_scrape(a) -> int:
         return 0
 
     if action == "search":
-        cands = scrape.search_candidates(
+        res = scrape.search_with_note(
             a.query or "", artist=a.artist or "", title=a.title or "",
             netease_id=tx.parse_song_id(a.netease_id), limit=a.limit)
-        print(json.dumps(cands, ensure_ascii=False), flush=True)
+        print(json.dumps(res, ensure_ascii=False), flush=True)
         return 0
 
     if action == "apply":

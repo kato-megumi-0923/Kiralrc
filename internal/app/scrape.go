@@ -239,6 +239,11 @@ func (a *app) selectScrapeTrack(idx int) {
 	a.scrapeCands = nil
 	a.scrapeCandPath = ""
 	a.scrapeQuery = scrapeDefaultQuery(it)
+	if time.Now().Before(a.scrapeCoolUntil) {
+		// 网易云刚限速过：切歌不要再去问，免得雪上加霜；手动「重新搜索」仍可试
+		a.scrapeWarn = "网易云限速冷却中，先别急着搜；稍后点「重新搜索」再试"
+		return
+	}
 	if cached, ok := a.scrapeCandCache[it.Path]; ok {
 		a.scrapeCands = cached
 		a.scrapeCandPath = it.Path
@@ -265,6 +270,7 @@ func (a *app) searchScrapeCandidates(force bool) {
 		delete(a.scrapeCandCache, it.Path)
 	}
 	a.scrapeSearching = true
+	a.scrapeWarn = ""
 	a.scrapeCandPath = it.Path
 	if force {
 		a.scrapeCands = nil
@@ -285,8 +291,9 @@ func (a *app) searchScrapeCandidates(force bool) {
 		cmd := a.pythonCmd(args...)
 		out, err := cmd.Output()
 		var cands []scrapeCandidate
+		var warn string
 		if err == nil {
-			err = json.Unmarshal(out, &cands)
+			cands, warn, err = parseScrapeSearch(out)
 		}
 		a.post(func() {
 			if a.scrapeCandPath != path {
@@ -296,6 +303,10 @@ func (a *app) searchScrapeCandidates(force bool) {
 			if err != nil {
 				a.toast = "搜索候选失败：" + err.Error()
 				return
+			}
+			a.scrapeWarn = warn
+			if strings.Contains(warn, "限速") {
+				a.scrapeCoolUntil = time.Now().Add(2 * time.Minute)
 			}
 			a.scrapeCandCache[path] = cands
 			a.scrapeCands = cands
@@ -326,6 +337,23 @@ func (a *app) scrapeSelectedCount() int {
 func (a *app) isScrapeCandidateSelected(path string, cand scrapeCandidate) bool {
 	cur, ok := a.scrapeSel[path]
 	return ok && cur == cand
+}
+
+// parseScrapeSearch 接住后端搜索结果：现在是 {items, warning}，
+// 也容忍直接给一个数组（旧格式）。
+func parseScrapeSearch(out []byte) ([]scrapeCandidate, string, error) {
+	var payload struct {
+		Items   []scrapeCandidate `json:"items"`
+		Warning string            `json:"warning"`
+	}
+	if err := json.Unmarshal(out, &payload); err == nil && (payload.Items != nil || payload.Warning != "") {
+		return payload.Items, payload.Warning, nil
+	}
+	var arr []scrapeCandidate
+	if err := json.Unmarshal(out, &arr); err != nil {
+		return nil, "", err
+	}
+	return arr, "", nil
 }
 
 // ---------- 缩略图 ----------
@@ -648,6 +676,10 @@ func (a *app) scrapeNeteaseTargets() []scrapeTrack {
 // 「歌名、歌手、专辑全对得上」的那条，对上了就按勾选的字段一次写完。
 func (a *app) applyScrapeByNetease() {
 	if a.scrapeApplying {
+		return
+	}
+	if wait := time.Until(a.scrapeCoolUntil); wait > 0 {
+		a.toast = fmt.Sprintf("网易云还在限速冷却，约 %d 秒后再试", int(wait.Seconds())+1)
 		return
 	}
 	targets := a.scrapeNeteaseTargets()
@@ -1132,6 +1164,16 @@ func (a *app) viewScrapeDetail(c *ui.Context) {
 		}
 		it := a.scrapeItems[a.scrapeCur]
 		a.viewScrapeCurrent(c, it)
+
+		if a.scrapeWarn != "" {
+			banner := ui.Row(c.Key("scrape-warn")).FillWidth().Padding(8, 12, 8, 12).
+				Radius(10).Gap(8).AlignItems(ui.Center).Background(p.warnBg)
+			banner.Children(func() {
+				ui.Icon(c, iconWarn).Size(13, 13).TextColor(p.warn).Shrink(0)
+				ui.Text(c, a.scrapeWarn).FontSize(11.5).FontWeight(600).
+					TextColor(p.warn).Grow(1).MinWidth(0).SingleLine()
+			})
+		}
 
 		if a.scrapeSearching {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
