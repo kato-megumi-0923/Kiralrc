@@ -143,20 +143,33 @@ def separate(path: str | Path, out_prefix: str | Path, model_name: str = "htdemu
 
 
 def first_sound(path: str | Path, sr: int = 8000, hop: float = 0.02,
-                ratio: float = 0.02) -> float:
-    """第一次出声音的位置（秒）：包络里第一次超过峰值一定比例的那一帧。"""
+                ratio: float = 0.10, sustain: int = 5) -> float | None:
+    """第一次真正出声音的位置（秒），整轨无声时返回 None。
+
+    demucs 出来的轨开头常有一层底噪（约为峰值的 3%），按峰值比例直接找会
+    一头撞在 0 秒。这里同时看底噪与峰值，并要求连续几帧都超过阈值。
+    """
     pcm = decode(path, sr)
     env = rms_envelope(pcm, sr, hop)
     if not len(env):
-        return 0.0
+        return None
     peak = float(env.max())
-    if peak <= 1e-6:
-        return 0.0
-    threshold = max(1e-4, peak * ratio)
+    if peak <= 1e-4:
+        return None
+    import numpy as np
+
+    floor = float(np.percentile(env, 20))
+    threshold = max(floor * 3.0, peak * ratio, 1e-3)
+    run = 0
     for i, value in enumerate(env):
         if value >= threshold:
-            return round(i * hop, 3)
-    return 0.0
+            run += 1
+            if run >= sustain:
+                start = i - sustain + 1
+                return round(start * hop, 3)
+        else:
+            run = 0
+    return None
 
 
 def transcode(src: str | Path, dst: str | Path) -> Path:

@@ -41,6 +41,70 @@ def test_purge_all_empties_the_cache(monkeypatch, tmp_path):
     assert not (tmp_path / "a_1").exists()
 
 
+def _write_tone(path, seconds, start=0.0, amp=0.3, sr=44100):
+    import numpy as np
+
+    n = int(sr * seconds)
+    pcm = np.zeros(n, dtype=np.float32)
+    begin = int(sr * start)
+    pcm[begin:] = amp * np.sin(2 * np.pi * 440 * np.arange(n - begin) / sr)
+    au.write_wav(path, pcm, sr)
+
+
+def test_first_sound_ignores_the_noise_floor(tmp_path):
+    """demucs 的轨开头有一层底噪，不能因此报 0 秒。"""
+    import numpy as np
+
+    p = tmp_path / "noisy.wav"
+    sr = 44100
+    n = sr * 6
+    pcm = (np.random.default_rng(0).normal(0, 0.02, n)).astype(np.float32)
+    pcm[int(sr * 3.5):] += 0.5 * np.sin(2 * np.pi * 440 * np.arange(n - int(sr * 3.5)) / sr)
+    au.write_wav(p, pcm, sr)
+    got = au.first_sound(p)
+    assert got is not None and 3.3 < got < 3.8, got
+
+
+def test_first_sound_is_none_when_silent(tmp_path):
+    import numpy as np
+
+    p = tmp_path / "silent.wav"
+    au.write_wav(p, np.zeros(44100, dtype=np.float32), 44100)
+    assert au.first_sound(p) is None
+
+
+def _write_tone(path, seconds, start=0.0, amp=0.3, sr=44100):
+    import numpy as np
+
+    n = int(sr * seconds)
+    pcm = np.zeros(n, dtype=np.float32)
+    begin = int(sr * start)
+    pcm[begin:] = amp * np.sin(2 * np.pi * 440 * np.arange(n - begin) / sr)
+    au.write_wav(path, pcm, sr)
+
+
+def test_first_sound_ignores_the_noise_floor(tmp_path):
+    """demucs 的轨开头有一层底噪，不能因此报 0 秒。"""
+    import numpy as np
+
+    p = tmp_path / "noisy.wav"
+    sr = 44100
+    n = sr * 6
+    pcm = (np.random.default_rng(0).normal(0, 0.02, n)).astype(np.float32)
+    pcm[int(sr * 3.5):] += 0.5 * np.sin(2 * np.pi * 440 * np.arange(n - int(sr * 3.5)) / sr)
+    au.write_wav(p, pcm, sr)
+    got = au.first_sound(p)
+    assert got is not None and 3.3 < got < 3.8, got
+
+
+def test_first_sound_is_none_when_silent(tmp_path):
+    import numpy as np
+
+    p = tmp_path / "silent.wav"
+    au.write_wav(p, np.zeros(44100, dtype=np.float32), 44100)
+    assert au.first_sound(p) is None
+
+
 def test_transcode_writes_flac_and_mp3(tmp_path):
     src = tmp_path / "tone.wav"
     with wave.open(str(src), "wb") as w:

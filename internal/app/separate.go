@@ -21,12 +21,13 @@ import (
 // 关掉 app 就清空，开着最多留三小时，设置里也能手动清。
 
 type sepStem struct {
-	Name  string // vocals / drums / bass / other
-	Label string
-	Path  string
-	Size  int64
-	First float64 // 第一次出声的位置（秒）
-	Dur   float64 // 总长（秒）
+	Name   string // vocals / drums / bass / other
+	Label  string
+	Path   string
+	Size   int64
+	First  float64 // 第一次出声的位置（秒）
+	Dur    float64 // 总长（秒）
+	Silent bool    // 整轨没声音（此时 First 无意义）
 }
 
 var sepLabels = map[string]string{
@@ -145,13 +146,13 @@ func (a *app) startSeparate(audioPath string) {
 				continue
 			}
 			var msg struct {
-				Stage    string  `json:"stage"`
-				Pct      int     `json:"pct"`
-				Stem     string  `json:"stem"`
-				Path     string  `json:"path"`
-				Size     int64   `json:"size"`
-				First    float64 `json:"first"`
-				Duration float64 `json:"duration"`
+				Stage    string   `json:"stage"`
+				Pct      int      `json:"pct"`
+				Stem     string   `json:"stem"`
+				Path     string   `json:"path"`
+				Size     int64    `json:"size"`
+				First    *float64 `json:"first"`
+				Duration float64  `json:"duration"`
 			}
 			if json.Unmarshal([]byte(line), &msg) != nil {
 				continue
@@ -161,8 +162,12 @@ func (a *app) startSeparate(audioPath string) {
 				if label == "" {
 					label = msg.Stem
 				}
-				stems = append(stems, sepStem{Name: msg.Stem, Label: label, Path: msg.Path,
-					Size: msg.Size, First: msg.First, Dur: msg.Duration})
+				one := sepStem{Name: msg.Stem, Label: label, Path: msg.Path,
+					Size: msg.Size, Dur: msg.Duration, Silent: msg.First == nil}
+				if msg.First != nil {
+					one.First = *msg.First
+				}
+				stems = append(stems, one)
 				found := append([]sepStem{}, stems...)
 				a.post(func() { a.sepStems = found })
 				continue
@@ -351,13 +356,13 @@ func (a *app) viewSeparate(c *ui.Context) {
 									pt.Fill(ui.Rect{X: r.X, Y: r.Y, W: w, H: r.H}, p.accent, 999)
 								}
 							}
-							if stemRow.First > 0 && stemRow.First < dur {
+							if !stemRow.Silent && stemRow.First < dur {
 								x := r.X + r.W*float32(stemRow.First/dur)
 								pt.Fill(ui.Rect{X: x - 1, Y: r.Y - 4, W: 2, H: r.H + 8}, p.warn, 1)
 							}
 						})
 						label := "起声 " + clockOf(stemRow.First)
-						if stemRow.First <= 0 {
+						if stemRow.Silent {
 							label = "全程无声"
 						}
 						ui.Text(c, label).Shrink(0).FontSize(11).TextColor(p.muted)

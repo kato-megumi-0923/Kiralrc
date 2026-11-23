@@ -269,7 +269,7 @@ def cmd_separate(a) -> int:
         if getattr(a, "json", False):
             print(json.dumps({"stem": name, "path": str(path),
                               "size": path.stat().st_size,
-                              "first": au.first_sound(path),
+                              "first": au.first_sound(path),   # 整轨无声时是 null
                               "duration": round(au.duration(path), 3)},
                              ensure_ascii=False), flush=True)
         else:
