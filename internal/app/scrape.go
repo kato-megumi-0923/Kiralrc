@@ -12,6 +12,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	_ "image/gif" // 内嵌封面可能是这几种，注册解码器
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"os"
@@ -566,6 +569,9 @@ func (a *app) refreshScrapeItems(paths []string) {
 			return
 		}
 		a.post(func() {
+			a.scrapeMu.Lock()
+			a.scrapeCovers = nil // 刚写过封面，内嵌图的缩略图要重解
+			a.scrapeMu.Unlock()
 			for _, f := range fresh {
 				for i := range a.scrapeItems {
 					if a.scrapeItems[i].Path != f.Path {
@@ -778,10 +784,11 @@ func (a *app) viewScrapeCurrent(c *ui.Context, it scrapeTrack) {
 	card.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
 	card.Children(func() {
 		ui.Row(c).FillWidth().Gap(14).AlignItems(ui.Center).Children(func() {
-			if bmp, _ := a.lookupCover(it.Path); bmp != nil {
+			// 只认文件里内嵌的封面：对齐时缓存下来的 cover.jpg 不算，
+			// 否则左边写着「无封面」、右边却摆着一张图，看着像 bug。
+			if bmp := a.scrapeEmbeddedCover(it.Path); bmp != nil {
 				ui.Image(c, bmp).Size(76, 76).Radius(10).Fit(ui.Cover).Shrink(0)
 			} else {
-				a.requestCovers([]string{it.Path})
 				artCover(c, hueForString(it.Path), 76, 10, iconNote)
 			}
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
@@ -921,6 +928,52 @@ func (a *app) scrapeThumbOf(url string) *ui.Bitmap {
 	a.scrapeMu.Lock()
 	defer a.scrapeMu.Unlock()
 	return a.scrapeThumbs[url]
+}
+
+// scrapeEmbeddedCover 取文件里内嵌封面的缩略图——只认内嵌的那张。
+//
+// 曲库的通用封面取图会退到 work/ 下对齐时缓存的 cover.jpg，
+// 放到这一页就成了「左边写无封面、右边却摆着一张图」；刮削要的是文件本身，
+// 所以这里绕开缓存，键里带修改时间，换过封面自然失效。
+func (a *app) scrapeEmbeddedCover(path string) *ui.Bitmap {
+	if path == "" {
+		return nil
+	}
+	mt := int64(0)
+	if info, err := os.Stat(path); err == nil {
+		mt = info.ModTime().UnixNano()
+	}
+	key := fmt.Sprintf("%s|%d", path, mt)
+	a.scrapeMu.Lock()
+	if bmp, ok := a.scrapeCovers[key]; ok {
+		a.scrapeMu.Unlock()
+		return bmp
+	}
+	a.scrapeMu.Unlock()
+
+	var bmp *ui.Bitmap
+	if thumb := embeddedCoverThumb(readEmbeddedCover(path)); thumb != nil {
+		bmp = ui.NewBitmap(thumb)
+	}
+	a.scrapeMu.Lock()
+	if a.scrapeCovers == nil {
+		a.scrapeCovers = map[string]*ui.Bitmap{}
+	}
+	a.scrapeCovers[key] = bmp // 解不出来也记下 nil，别每帧重开文件
+	a.scrapeMu.Unlock()
+	return bmp
+}
+
+// embeddedCoverThumb 解码内嵌封面并裁成 128px 方块；没有或解不动返回 nil。
+func embeddedCoverThumb(data []byte) image.Image {
+	if len(data) < 32 {
+		return nil
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	return thumbnailImage(img)
 }
 
 func (a *app) viewScrapeBar(c *ui.Context) {

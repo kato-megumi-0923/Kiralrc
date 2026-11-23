@@ -334,6 +334,7 @@ type app struct {
 	scrapeMu         sync.Mutex
 	scrapeThumbs     map[string]*ui.Bitmap
 	scrapeThumbBusy  map[string]bool
+	scrapeCovers     map[string]*ui.Bitmap // 当前曲目内嵌封面缩略图（不外挂缓存）
 	scrapeListScroll ui.ScrollState
 	scrapeCandScroll ui.ScrollState
 

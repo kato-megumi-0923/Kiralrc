@@ -17,13 +17,21 @@ import (
 )
 
 type coverIndex struct {
-	byDir  map[string]string
-	byStem map[string][]string
+	byDir map[string]string // work/<歌名>_<路径哈希> → 对齐时抽出的 cover.jpg
 }
 
+// indexCovers 只认「路径哈希对得上」的缓存目录。
+//
+// 早先还有一个「同名兜底」：哈希对不上时，若全盘只有一个同名目录就用它。
+// 但 work/ 里躺着别的曲库、别的路径留下的旧目录，同名兜底会把不相干的封面
+// 贴到这首歌上（实测库里 51 首命中，且都不是自己那次对齐的产物）。
+// 收紧之后：对不上就当没有，交给内嵌封面或占位图——宁可没图，不贴错图。
 func indexCovers() coverIndex {
-	root := filepath.Join(appRootDir(), "work")
-	index := coverIndex{make(map[string]string), make(map[string][]string)}
+	return indexCoversIn(filepath.Join(appRootDir(), "work"))
+}
+
+func indexCoversIn(root string) coverIndex {
+	index := coverIndex{make(map[string]string)}
 	entries, _ := os.ReadDir(root)
 	for _, entry := range entries {
 		// Track names may contain underscores or periods. The suffix is always the last ten hex digits.
@@ -31,11 +39,9 @@ func indexCovers() coverIndex {
 		if !entry.IsDir() || sep < 0 || len(entry.Name())-sep-1 != 10 {
 			continue
 		}
-		stem := entry.Name()[:sep]
 		path := filepath.Join(root, entry.Name(), "cover.jpg")
 		if info, err := os.Stat(path); err == nil && info.Size() > 512 {
 			index.byDir[entry.Name()] = path
-			index.byStem[stem] = append(index.byStem[stem], path)
 		}
 	}
 	return index
@@ -58,9 +64,6 @@ func (index coverIndex) thumbImage(audioPath string) image.Image {
 	name := string(stem[:min(len(stem), 40)])
 	hash := md5.Sum([]byte(resolved))
 	path := index.byDir[fmt.Sprintf("%s_%x", name, hash[:5])]
-	if path == "" && len(index.byStem[name]) == 1 {
-		path = index.byStem[name][0]
-	}
 	// 1) 对齐时抽出来的封面缓存（比音频新才用）
 	if path != "" {
 		info, err := os.Stat(path)

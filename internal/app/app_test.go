@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -1106,4 +1107,131 @@ func TestScrapeJSONContract(t *testing.T) {
 	if !summary.Summary || summary.OK != 2 || summary.Skipped != 1 {
 		t.Fatalf("apply 汇总字段映射不对：%+v", summary)
 	}
+}
+
+// 刮削页只看文件里内嵌的封面：work/ 下对齐时缓存的 cover.jpg 不算，
+// 否则会出现「左边写无封面、右边却摆着一张图」。
+func TestScrapeEmbeddedCoverIgnoresCachedArt(t *testing.T) {
+	dir := t.TempDir()
+	withCover := filepath.Join(dir, "with.flac")
+	buildFLACFixture(t, withCover, true)
+	bare := filepath.Join(dir, "bare.flac")
+	buildFLACFixture(t, bare, false)
+
+	a := newApp()
+	if a.scrapeEmbeddedCover(withCover) == nil {
+		t.Fatal("有内嵌封面却没给出缩略图")
+	}
+	if got := a.scrapeEmbeddedCover(bare); got != nil {
+		t.Fatal("文件里没有内嵌封面，不该给出图")
+	}
+	// 同一路径第二次走缓存，结果要一致（错解也要记住，别每帧重开文件）
+	if got := a.scrapeEmbeddedCover(bare); got != nil {
+		t.Fatal("缓存之后的负结果也不该变成有图")
+	}
+}
+
+// buildFLACFixture 造一个极简 FLAC：STREAMINFO +（可选）一张正面 PICTURE。
+func buildFLACFixture(t *testing.T, path string, withPicture bool) {
+	t.Helper()
+	var b bytes.Buffer
+	b.WriteString("fLaC")
+	b.Write([]byte{0x00, 0, 0, 34})   // STREAMINFO，不是最后一块
+	b.Write(make([]byte, 34))
+	if !withPicture {
+		b.Write([]byte{0x81, 0, 0, 0}) // PADDING 收尾
+		if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 1200, 1200))
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	cover := pngBuf.Bytes()
+
+	var body bytes.Buffer
+	be := func(v uint32) { body.Write(binary.BigEndian.AppendUint32(nil, v)) }
+	mime := []byte("image/png")
+	be(3) // 图片类型：正面
+	be(uint32(len(mime)))
+	body.Write(mime)
+	be(0) // 空描述
+	be(1200)
+	be(1200)
+	be(24) // 色深
+	be(0)  // 索引色数
+	be(uint32(len(cover)))
+	body.Write(cover)
+
+	data := body.Bytes()
+	b.Write([]byte{0x86, byte(len(data) >> 16), byte(len(data) >> 8), byte(len(data))}) // PICTURE 且收尾
+	b.Write(data)
+	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 封面缓存只认「路径哈希对得上」的那一份：work/ 里别的曲子留下的同名目录不能借来用。
+func TestCoverIndexOnlyUsesTheTracksOwnCache(t *testing.T) {
+	stem := "汪苏泷 - 有点甜"
+	audio := filepath.Join(t.TempDir(), stem+".flac")
+	if err := os.WriteFile(audio, []byte("fLaC"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(audio, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	name := []rune(stem)
+	dirName := func(sum [16]byte) string {
+		return fmt.Sprintf("%s_%x", string(name[:min(len(name), 40)]), sum[:5])
+	}
+	ownHash := md5.Sum([]byte(mustAbsResolved(t, audio)))
+
+	writeCover := func(root, dir string) {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		img := image.NewRGBA(image.Rect(0, 0, 400, 400))
+		f, err := os.Create(filepath.Join(root, dir, "cover.jpg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if err := png.Encode(f, img); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 自己对得上的缓存：要用
+	root := t.TempDir()
+	writeCover(root, dirName(ownHash))
+	if indexCoversIn(root).thumbImage(audio) == nil {
+		t.Fatal("哈希对得上的缓存应该被用上")
+	}
+
+	// 只有别的路径留下的同名目录：不许借
+	other := t.TempDir()
+	elsewhere := md5.Sum([]byte(`D:\别处\` + stem))
+	writeCover(other, fmt.Sprintf("%s_%x", string(name), elsewhere[:5]))
+	if indexCoversIn(other).thumbImage(audio) != nil {
+		t.Fatal("不能把别的路径的同名文件封面贴过来")
+	}
+}
+
+func mustAbsResolved(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
 }
