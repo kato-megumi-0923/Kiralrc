@@ -274,21 +274,3 @@ def test_non_rate_limit_pause_waits_before_retrying(tmp_path, monkeypatch):
     assert summary["resume_from"] == 1
 
 
-def test_non_rate_limit_pause_waits_before_retrying(tmp_path, monkeypatch):
-    """反爬挡住时没有冷却时间可等，也不能报 1 秒——否则续跑会连撞三次上限。"""
-    from kiralrc import netauth
-
-    p = make_flac(tmp_path / "a.flac", title="T")
-
-    def blocked(aid, **kw):
-        kw.get("state", {}).update({"blocked": True})
-        return {}
-
-    monkeypatch.setattr(scrape, "album_detail", blocked)
-    summary = scrape.apply_plan({"items": [
-        {"path": str(p), "album_id": 1, "resolve": "album",
-         "fields": {"netease_id": True}, "mode": "fill"},
-    ]})
-    assert netauth.cooling_for() == 0          # 不是限速
-    assert summary["paused"] and summary["retry_after"] >= 25
-    assert summary["resume_from"] == 1

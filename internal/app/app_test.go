@@ -1927,3 +1927,45 @@ func TestScrapeInspectAlbumID(t *testing.T) {
 		t.Fatalf("album_id 没落到结构体上：%+v", items[0])
 	}
 }
+
+// 切目录时上一批的缩略图/尺寸探测 goroutine 可能正好回来写：
+// 表被换掉也不能崩（assignment to entry in nil map）。
+func TestScrapeCacheWritesTolerateReset(t *testing.T) {
+	a := newApp()
+
+	// 老写法留下的现场：表是 nil，goroutine 回来写
+	a.scrapeThumbs = nil
+	a.scrapeThumbBusy = map[string]bool{"u": true}
+	a.putScrapeThumb("u", nil) // 以前直接 a.scrapeThumbs[url] = nil → panic
+	if a.scrapeThumbs == nil {
+		t.Fatal("写回后缩略图表不该还是 nil")
+	}
+	if a.scrapeThumbBusy["u"] {
+		t.Fatal("busy 标记要清掉，否则同一张图永远不再重试")
+	}
+
+	a.scrapeSizes = nil
+	a.putScrapeSize("u", 1200, 1200)
+	if got := a.scrapeSizes["u"]; got != [2]int{1200, 1200} {
+		t.Fatalf("尺寸没写进去：%v", got)
+	}
+}
+
+// 重置要换成空表而不是 nil：后台 goroutine 还会往里写。
+func TestResetScrapeCachesKeepsMapsUsable(t *testing.T) {
+	a := newApp()
+	a.scrapeThumbs = map[string]*ui.Bitmap{"x": nil}
+	a.scrapeSizes = map[string][2]int{"x": {1, 1}}
+	a.scrapeCovers = map[string]*ui.Bitmap{"x": nil}
+
+	a.resetScrapeCaches()
+	a.scrapeMu.Lock()
+	defer a.scrapeMu.Unlock()
+	if a.scrapeThumbs == nil || a.scrapeThumbBusy == nil ||
+		a.scrapeCovers == nil || a.scrapeSizes == nil || a.scrapeSizeBusy == nil {
+		t.Fatal("重置后不该出现 nil map")
+	}
+	if len(a.scrapeThumbs) != 0 || len(a.scrapeSizes) != 0 || len(a.scrapeCovers) != 0 {
+		t.Fatal("重置后应当是空的")
+	}
+}

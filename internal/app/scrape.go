@@ -216,11 +216,13 @@ func (a *app) loadScrapeItems() {
 			// 换目录 / 换勾选会带来一整批新封面：旧缩略图没人再用了，
 			// 位图不清掉会随着反复切换一路涨上去（每张 240×240 也在占显存）
 			a.scrapeMu.Lock()
-			a.scrapeThumbs = nil
-			a.scrapeThumbBusy = nil
-			a.scrapeCovers = nil
-			a.scrapeSizes = nil
-			a.scrapeSizeBusy = nil
+			// 换成空 map 而不是 nil：上一批的缩略图/尺寸探测 goroutine 可能正回来写，
+			// 写进 nil map 会直接 panic（assignment to entry in nil map）
+			a.scrapeThumbs = map[string]*ui.Bitmap{}
+			a.scrapeThumbBusy = map[string]bool{}
+			a.scrapeCovers = map[string]*ui.Bitmap{}
+			a.scrapeSizes = map[string][2]int{}
+			a.scrapeSizeBusy = map[string]bool{}
 			a.scrapeMu.Unlock()
 			a.scrapeItems = items
 			if len(items) > 0 {
@@ -229,6 +231,20 @@ func (a *app) loadScrapeItems() {
 			}
 		})
 	}()
+}
+
+// resetScrapeCaches 换目录 / 重新读取时清掉上一批的封面缓存。
+//
+// 必须换成空 map，不能置 nil：上一批的缩略图下载与尺寸探测 goroutine 可能正好
+// 回来执行 a.scrapeThumbs[url] = …，写进 nil map 会直接 panic。
+func (a *app) resetScrapeCaches() {
+	a.scrapeMu.Lock()
+	a.scrapeThumbs = map[string]*ui.Bitmap{}
+	a.scrapeThumbBusy = map[string]bool{}
+	a.scrapeCovers = map[string]*ui.Bitmap{}
+	a.scrapeSizes = map[string][2]int{}
+	a.scrapeSizeBusy = map[string]bool{}
+	a.scrapeMu.Unlock()
 }
 
 func scrapeDefaultQuery(t scrapeTrack) string {
@@ -426,14 +442,11 @@ func (a *app) requestScrapeThumb(url string) {
 			img = scrapeThumbBitmap(data)
 		}
 		a.post(func() {
-			a.scrapeMu.Lock()
-			delete(a.scrapeThumbBusy, url)
-			a.scrapeMu.Unlock()
+			var bmp *ui.Bitmap
 			if img != nil {
-				a.scrapeThumbs[url] = ui.NewBitmap(img)
-			} else {
-				a.scrapeThumbs[url] = nil // 记个负结果，别每帧重试同一个坏链
+				bmp = ui.NewBitmap(img)
 			}
+			a.putScrapeThumb(url, bmp) // 解不出来也记 nil：别每帧重试同一个坏链
 		})
 	}()
 }
@@ -483,12 +496,40 @@ func (a *app) scrapeCoverLabel(url string) string {
 	return fmt.Sprintf("%d×%d", w, h)
 }
 
+// putScrapeThumb 记下缩略图（nil 表示这张确实没有图），并把 busy 标记清掉。
+//
+// 写入端必须在锁里、且容忍 map 被换空：下载 goroutine 回来时，用户可能已经
+// 切了目录，loadScrapeItems 刚把这张表换掉。
+func (a *app) putScrapeThumb(url string, bmp *ui.Bitmap) {
+	a.scrapeMu.Lock()
+	defer a.scrapeMu.Unlock()
+	if a.scrapeThumbs == nil {
+		a.scrapeThumbs = map[string]*ui.Bitmap{}
+	}
+	delete(a.scrapeThumbBusy, url)
+	a.scrapeThumbs[url] = bmp
+}
+
+// putScrapeSize 记下封面实测像素（量不出来记 0×0，别反复试）。同样容忍表被换空。
+func (a *app) putScrapeSize(url string, w, h int) {
+	a.scrapeMu.Lock()
+	defer a.scrapeMu.Unlock()
+	if a.scrapeSizes == nil {
+		a.scrapeSizes = map[string][2]int{}
+	}
+	delete(a.scrapeSizeBusy, url)
+	a.scrapeSizes[url] = [2]int{w, h}
+}
+
 // scrapeCoverPx 返回这张图真实的像素。第一次问会顺手起个后台任务去量：
 // 只读前 512KB 就够找到 PNG 的 IHDR / JPEG 的 SOFn，不必把整张图拖下来。
 func (a *app) scrapeCoverPx(url string) (int, int, bool) {
 	a.scrapeMu.Lock()
 	if a.scrapeSizes == nil {
 		a.scrapeSizes = map[string][2]int{}
+	}
+	if a.scrapeSizeBusy == nil {
+		a.scrapeSizeBusy = map[string]bool{}
 	}
 	if size, ok := a.scrapeSizes[url]; ok {
 		a.scrapeMu.Unlock()
@@ -498,20 +539,12 @@ func (a *app) scrapeCoverPx(url string) (int, int, bool) {
 		a.scrapeMu.Unlock()
 		return 0, 0, false
 	}
-	if a.scrapeSizeBusy == nil {
-		a.scrapeSizeBusy = map[string]bool{}
-	}
 	a.scrapeSizeBusy[url] = true
 	a.scrapeMu.Unlock()
 
 	go func() {
 		w, h := probeImageSize(url)
-		a.post(func() {
-			a.scrapeMu.Lock()
-			delete(a.scrapeSizeBusy, url)
-			a.scrapeSizes[url] = [2]int{w, h} // 量不出来也记下，别反复试
-			a.scrapeMu.Unlock()
-		})
+		a.post(func() { a.putScrapeSize(url, w, h) })
 	}()
 	return 0, 0, false
 }
@@ -1082,7 +1115,7 @@ func (a *app) refreshScrapeItems(paths []string) {
 		}
 		a.post(func() {
 			a.scrapeMu.Lock()
-			a.scrapeCovers = nil // 刚写过封面，内嵌图的缩略图要重解
+			a.scrapeCovers = map[string]*ui.Bitmap{} // 刚写过封面，内嵌图的缩略图要重解
 			a.scrapeMu.Unlock()
 			for _, f := range fresh {
 				for i := range a.scrapeItems {
