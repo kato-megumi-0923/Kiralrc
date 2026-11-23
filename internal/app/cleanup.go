@@ -120,6 +120,10 @@ func (a *app) deleteCleanupFiles() {
 			}
 			a.cleanupConfirm = false
 			a.scanCleanup()
+			// 歌词被删掉了，「有词 / 无词 / 逐字就绪」都会变，曲库跟着重扫一遍
+			if len(a.libFolders) > 0 {
+				a.scanLibraryAsync()
+			}
 		})
 	}()
 }
@@ -129,8 +133,6 @@ func (a *app) deleteCleanupFiles() {
 var (
 	shell32            = syscall.NewLazyDLL("shell32.dll")
 	procSHFileOperation = shell32.NewProc("SHFileOperationW")
-	user32              = syscall.NewLazyDLL("user32.dll")
-	procMessageBoxW     = user32.NewProc("MessageBoxW")
 )
 
 type shFileOpStruct struct {
@@ -186,19 +188,6 @@ func recycleFiles(paths []string) error {
 		return fmt.Errorf("操作被取消")
 	}
 	return nil
-}
-
-// confirmDialog 系统消息框，返回是否点了「是」。
-func confirmDialog(title, text string) bool {
-	const mbYesNo, mbIconQuestion, mbTopMost = 0x00000004, 0x00000020, 0x00040000
-	t, err1 := syscall.UTF16PtrFromString(text)
-	c, err2 := syscall.UTF16PtrFromString(title)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	ret, _, _ := procMessageBoxW.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)),
-		mbYesNo|mbIconQuestion|mbTopMost)
-	return ret == 6 // IDYES
 }
 
 // ---------- 页面 ----------
