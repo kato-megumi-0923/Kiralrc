@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"io/fs"
 	"math"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -692,6 +693,7 @@ func (a *app) clearLibraryFolders() {
 	a.libFolders = nil
 	a.tracks = nil
 	a.libSelected = nil
+	resetCoverKeys()
 	a.libStats = libStats{}
 	a.libScanning = false
 	a.savePrefs()
@@ -1027,6 +1029,8 @@ func recomputeLibStats(items []trackItem) libStats {
 func (a *app) scanLibrarySync() ([]trackItem, libStats) {
 	items, cleared := readTrackBatch(walkAudioFiles(a.libFolders), a.notFoundPaths)
 	a.applyClearedNotFound(cleared)
+	a.tracks = items
+	a.pruneSelectedTracks()
 	return items, recomputeLibStats(items)
 }
 
@@ -1096,8 +1100,10 @@ func (a *app) scanLibraryAsync() {
 			}
 			end := min(start+size, len(files))
 			batch, gone := readTrackBatch(files[start:end], nfSnap)
-			items = append(items, batch...)
 			cleared = append(cleared, gone...)
+			if refresh {
+				items = append(items, batch...)
+			}
 			start = end
 
 			if refresh {
@@ -1108,17 +1114,16 @@ func (a *app) scanLibraryAsync() {
 					}
 				})
 			} else {
-				snap := append([]trackItem(nil), items...)
-				st := recomputeLibStats(snap)
-				justCleared := append([]string(nil), gone...)
+				// batch 是刚分配的新切片，可以直接交给 UI 线程；
+				// 在 UI 线程原地追加，避免每批整片复制（几万首就是 O(n²) 的内存抖动）
 				a.post(func() {
 					if !a.scanTokenCurrent(token) {
 						return
 					}
-					a.tracks = snap
-					a.libStats = st
-					a.libScanDone = len(snap)
-					a.applyClearedNotFound(justCleared)
+					a.tracks = append(a.tracks, batch...)
+					a.libStats = recomputeLibStats(a.tracks)
+					a.libScanDone = len(a.tracks)
+					a.applyClearedNotFound(gone)
 				})
 			}
 			if start < len(files) {
@@ -1138,6 +1143,8 @@ func (a *app) scanLibraryAsync() {
 				a.libScanDone = len(items)
 			}
 			a.applyClearedNotFound(cleared)
+			a.pruneSelectedTracks()
+			resetCoverKeys() // 文件可能被换过，封面键重新算
 			a.libScanning = false
 			a.libScanTime = "今天 " + nowStr
 		})
@@ -1729,25 +1736,30 @@ func (a *app) matchesQuery(tr *trackItem) bool {
 		strings.Contains(strings.ToLower(tr.File), q)
 }
 
-// statusMatchesFilter 某个状态是否属于某个 Tab。
-// 列表、Tab 上的条数都调它，规则只有一份，不会两边算出不同结果。
-func statusMatchesFilter(status string, filter int) bool {
-	isInst := status == "inst_pure" || status == "inst_ost" || status == "inst_accomp"
-	switch filter {
-	case 0:
-		return !isInst
-	case 1:
-		return status == "line_only"
-	case 2:
-		return status == "aligned" || status == "unknown"
-	case 3:
-		return isNoLyricsStatus(status)
-	case 4:
-		return isInst
-	case 5:
-		return status == "official"
+// statusFilterMask 一个状态属于哪些 Tab，用位图表示（第 f 位 = 筛选值 f）。
+// 列表判定与 Tab 计数都从这里来，规则只有一份。
+func statusFilterMask(status string) uint {
+	switch status {
+	case "official":
+		return 1<<0 | 1<<5 // 有效人声 + 官方逐字
+	case "aligned", "unknown":
+		return 1<<0 | 1<<2
+	case "line_only":
+		return 1<<0 | 1<<1
+	case "missing", "nolyrics_notfound":
+		return 1<<0 | 1<<3
+	case "inst_pure", "inst_ost", "inst_accomp":
+		return 1<<4
 	}
-	return true
+	return 1<<0
+}
+
+// statusMatchesFilter 某个状态是否属于某个 Tab。
+func statusMatchesFilter(status string, filter int) bool {
+	if filter < 0 || filter >= 6 {
+		return true
+	}
+	return statusFilterMask(status)&(1<<uint(filter)) != 0
 }
 
 func (a *app) trackMatchesFilter(tr *trackItem) bool {
@@ -1762,10 +1774,8 @@ func (a *app) filterCounts() [6]int {
 		if !a.matchesQuery(tr) {
 			continue
 		}
-		for f := 0; f < len(counts); f++ {
-			if statusMatchesFilter(tr.Status, f) {
-				counts[f]++
-			}
+		for mask := statusFilterMask(tr.Status); mask != 0; mask &= mask - 1 {
+			counts[bits.TrailingZeros(mask)]++
 		}
 	}
 	return counts
@@ -1790,6 +1800,22 @@ func (a *app) setTrackSelected(path string, sel bool) {
 		a.libSelected = map[string]bool{}
 	}
 	a.libSelected[key] = true
+}
+
+// pruneSelectedTracks 扫描收尾时丢掉已经不存在的勾选键（删了文件或换了文件夹）。
+func (a *app) pruneSelectedTracks() {
+	if len(a.libSelected) == 0 {
+		return
+	}
+	alive := make(map[string]bool, len(a.tracks))
+	for i := range a.tracks {
+		alive[normPathKey(a.tracks[i].FullPath)] = true
+	}
+	for key := range a.libSelected {
+		if !alive[key] {
+			delete(a.libSelected, key)
+		}
+	}
 }
 
 func (a *app) toggleTrackSelected(path string) {
@@ -3057,24 +3083,6 @@ func (a *app) beginEditLyricLine(idx int) {
 	a.selectEditorLine(idx)
 	a.edEditingLine = idx
 	a.edEditingText = a.edLines[idx].Text
-}
-
-func (a *app) cancelEditLyricLine() {
-	a.edEditingLine = -1
-	a.edEditingText = ""
-}
-
-func (a *app) buildCurrentLrcText() string {
-	var sb strings.Builder
-	for _, m := range a.edMetas {
-		sb.WriteString(m)
-		sb.WriteString("\n")
-	}
-	for _, ln := range a.edLines {
-		sb.WriteString(formatLrcLine(ln))
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }
 
 func (a *app) beginEditLrcSource() {

@@ -822,7 +822,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 				})
 			})
 
-			// 4 Stat Cards (hover lift + active border + click switches filter tab!)
+			// 5 张统计卡（悬停上浮、选中描边、点击切筛选）
 			ui.Row(c.Key("stats")).Gap(12).AlignItems(ui.Stretch).Children(func() {
 				nfBadge := ""
 				if st.NotFound > 0 {

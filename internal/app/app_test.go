@@ -864,3 +864,21 @@ func TestMissingCoverIsRememberedAndNotRetried(t *testing.T) {
 		t.Fatalf("已知无封面却重复提交了 %d 个", again)
 	}
 }
+
+// 扫描收尾要丢掉「文件已经不在了」的勾选，别越攒越多。
+func TestPruneDropsSelectionsForGoneFiles(t *testing.T) {
+	a := newApp()
+	alive := `C:/lib/还在.flac`
+	gone := `C:/lib/已删除.flac`
+	a.tracks = []trackItem{{FullPath: alive, Title: "还在"}}
+	a.setTrackSelected(alive, true)
+	a.setTrackSelected(gone, true)
+
+	a.pruneSelectedTracks()
+	if a.isTrackSelected(gone) {
+		t.Fatal("文件不在了，勾选该清掉")
+	}
+	if !a.isTrackSelected(alive) {
+		t.Fatal("还在的曲目不该被清")
+	}
+}

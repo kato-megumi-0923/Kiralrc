@@ -2,7 +2,6 @@ package app
 
 import (
 	"bufio"
-	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -38,20 +37,6 @@ var sepLabels = map[string]string{
 	"other":         "其他",
 }
 
-func sepCacheDir(audio string) string {
-	stem := []rune(strings.TrimSuffix(filepath.Base(audio), filepath.Ext(audio)))
-	name := string(stem[:min(len(stem), 60)])
-	name = strings.NewReplacer("<", "_", ">", "_", ":", "_", "\"", "_", "/", "_",
-		"\\", "_", "|", "_", "?", "_", "*", "_").Replace(name)
-	abs, err := filepath.Abs(audio)
-	if err != nil {
-		abs = audio
-	}
-	sum := md5.Sum([]byte(abs))
-	return filepath.Join(appRootDir(), "work", "sep", fmt.Sprintf("%s_%x", name, sum[:4]))
-}
-
-// purgeSepCache 删掉整个分离缓存目录，返回删了多少个。
 func purgeSepCache() int {
 	root := filepath.Join(appRootDir(), "work", "sep")
 	entries, err := os.ReadDir(root)

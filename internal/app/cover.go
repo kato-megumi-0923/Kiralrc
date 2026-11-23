@@ -170,21 +170,33 @@ func thumbnailImage(imageData image.Image) image.Image {
 	return thumbnail
 }
 
-func thumbnailOf(imageData image.Image) *ui.Bitmap {
-	thumb := thumbnailImage(imageData)
-	if thumb == nil {
-		return nil
-	}
-	return ui.NewBitmap(thumb)
-}
-
 // coverCacheKey 把「路径 + 修改时间」压成一个键：换了封面或重解过音频就自然失效。
+//
+// 渲染每帧都要给上百个路径取键，而取键要 os.Stat；这里记住结果，
+// 重扫曲库后 resetCoverKeys() 让它们重新算（文件可能被换过）。
 func coverCacheKey(audioPath string) string {
+	coverKeyMu.Lock()
+	key, ok := coverKeyMemo[audioPath]
+	coverKeyMu.Unlock()
+	if ok {
+		return key
+	}
 	mt := int64(0)
 	if info, err := os.Stat(audioPath); err == nil {
 		mt = info.ModTime().UnixNano()
 	}
-	return fmt.Sprintf("%s|%d", audioPath, mt)
+	key = fmt.Sprintf("%s|%d", audioPath, mt)
+	coverKeyMu.Lock()
+	coverKeyMemo[audioPath] = key
+	coverKeyMu.Unlock()
+	return key
+}
+
+// resetCoverKeys 丢掉路径→键的记忆（重扫结束后调一次）。
+func resetCoverKeys() {
+	coverKeyMu.Lock()
+	coverKeyMemo = map[string]string{}
+	coverKeyMu.Unlock()
 }
 
 // coverStore 是容量固定的封面 LRU。
@@ -271,6 +283,11 @@ func (s *coverStore) isMiss(key string) bool {
 }
 
 var coverMem = newCoverStore(400)
+
+var (
+	coverKeyMu   sync.Mutex
+	coverKeyMemo = map[string]string{}
+)
 
 // ---------- 按需加载 ----------
 
