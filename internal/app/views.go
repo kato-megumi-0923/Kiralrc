@@ -97,7 +97,7 @@ func (a *app) view(c *ui.Context) {
 			})
 
 			if a.page != pageSettings && a.envChecked && !a.envInfo.Ready {
-				banner := ui.Row(c.Key("env-setup-banner")).Absolute().Top(buttonsHeight+4).Left(38).Right(38).Height(44).
+				banner := ui.Row(c.Key("env-setup-banner")).Absolute().Top(buttonsHeight + 4).Left(38).Right(38).Height(44).
 					PaddingX(16).Radius(12).Gap(10).AlignItems(ui.Center).Background(p.warnBg)
 				banner.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.warn.Alpha(0.35), 12, 1) })
 				banner.Children(func() {
@@ -156,6 +156,8 @@ func (a *app) view(c *ui.Context) {
 			}
 			if a.toast != "" {
 				wrap := ui.Row(c.Key("global-toast-wrap")).Absolute().Top(54).Left(0).Right(0).AlignItems(ui.Center).PassThrough()
+				wrap.Transition(ui.ElementTransition{Animation: &motionToast,
+					Enter: &ui.Motion{Y: -8, Opacity: 0, Scale: 0.97}})
 				wrap.Children(func() {
 					ui.Box(c).Grow(1).PassThrough()
 					pill := ui.Row(c.Key("global-toast")).Padding(9, 14, 9, 14).Gap(10).Radius(12).AlignItems(ui.Center).Background(p.raised)
@@ -264,7 +266,7 @@ func (a *app) viewSidebar(c *ui.Context) {
 		for _, item := range navItems {
 			it := item
 			sel := a.page == it.kind
-			row := ui.ButtonBase(c.Key("nav-"+it.label)).Height(36).Radius(9).Label(it.label).Selected(sel).FocusRing(false)
+			row := ui.ButtonBase(c.Key("nav-" + it.label)).Height(36).Radius(9).Label(it.label).Selected(sel).FocusRing(false)
 			bg := ui.Transparent
 			if row.Hovered() && !sel {
 				bg = p.hover
@@ -322,7 +324,7 @@ func (a *app) viewSidebar(c *ui.Context) {
 			for _, rc := range a.recents {
 				r := rc
 				activeRec := a.page == pageEditor && a.edFile == r.File
-				btn := ui.ButtonBase(c.Key("rec-"+r.Path)).FillWidth().Height(33).PaddingX(10).Gap(9).Radius(8).
+				btn := ui.ButtonBase(c.Key("rec-" + r.Path)).FillWidth().Height(33).PaddingX(10).Gap(9).Radius(8).
 					AlignItems(ui.Center).Justify(ui.Start).Label(r.Name).Selected(activeRec).FocusRing(false)
 				bg := ui.Transparent
 				if activeRec {
@@ -665,7 +667,8 @@ func (a *app) viewLibrary(c *ui.Context) {
 				a.viewLibraryEmpty(c)
 				return
 			}
-			if a.libScanning {
+			// 已有列表时，刷新只在标题旁提示一句，不要整页换成扫描卡片
+			if a.libScanning && len(a.tracks) == 0 {
 				ui.Column(c).Gap(2).Children(func() {
 					ui.Text(c, strings.Join(a.libFolders, " · ")+" · 正在扫描…").FontSize(11.5).FontWeight(600).TextColor(p.muted)
 					ui.Text(c, "曲库").FontSize(28).FontWeight(800)
@@ -690,7 +693,11 @@ func (a *app) viewLibrary(c *ui.Context) {
 
 			ui.Row(c).AlignItems(ui.End).Gap(8).Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
-					ui.Text(c, strings.Join(a.libFolders, " · ")+" · 上次扫描 "+a.libScanTime).FontSize(11.5).FontWeight(600).TextColor(p.muted)
+					trail := "上次扫描 " + a.libScanTime
+					if a.libScanning {
+						trail = fmt.Sprintf("正在刷新… %d/%d", a.libScanDone, a.libScanAll)
+					}
+					ui.Text(c, strings.Join(a.libFolders, " · ")+" · "+trail).FontSize(11.5).FontWeight(600).TextColor(p.muted)
 					ui.Text(c, "曲库").FontSize(28).FontWeight(800)
 				})
 				if pillButton(c.Key("lib-refresh-top"), iconRefresh, "刷新", p.surface2, p.text).Clicked() {
@@ -1678,7 +1685,10 @@ func (a *app) viewQueue(c *ui.Context) {
 					})
 
 					// 6-stage horizontal stepper
-					stages := []struct{ idx int; t, d string }{
+					stages := []struct {
+						idx  int
+						t, d string
+					}{
 						{1, "1. 定歌词文本", "检索 / 读取歌词"},
 						{2, "2. 定每句位置", "时间戳 / ASR 定位"},
 						{3, "3. 人声分离", "htdemucs 分离"},
@@ -1865,7 +1875,7 @@ func (a *app) viewEditor(c *ui.Context) {
 					} else {
 						const hold = 1800 * time.Millisecond
 						const speed = 34.0 // px/s
-						slide := time.Duration(float64(run)/speed*float64(time.Second))
+						slide := time.Duration(float64(run) / speed * float64(time.Second))
 						if slide < 400*time.Millisecond {
 							slide = 400 * time.Millisecond
 						}
@@ -1889,7 +1899,7 @@ func (a *app) viewEditor(c *ui.Context) {
 							c.AnimationFrame()
 						}
 						mBox.Children(func() {
-							ui.Text(c, title).Width(tw + 8).Shrink(0).FontSize(13).FontWeight(700).NoWrap().Translate(-off, 0)
+							ui.Text(c, title).Width(tw+8).Shrink(0).FontSize(13).FontWeight(700).NoWrap().Translate(-off, 0)
 						})
 					}
 					ui.Text(c, a.edSub).FontSize(11).TextColor(p.muted).SingleLine()
@@ -2218,138 +2228,138 @@ func (a *app) viewEditor(c *ui.Context) {
 						}
 						// Layer 2 (front): karaoke lyrics — rendered AFTER coverWrap as Absolute so text ALWAYS paints crisp on top!
 						ui.Column(c.Key("ed-pv-fg")).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().Gap(12).Children(func() {
-						if a.edSelectedLine > 0 {
-							ui.Text(c, a.edLines[a.edSelectedLine-1].Text).FontSize(17).FontWeight(600).TextColor(p.faint).SingleLine()
-						}
-						// Active character-by-character karaoke line (dynamically adapts wrap width to actual stage pixel width on window resize!)
-						charFontSize := float32(30)
-						if len(a.edGlyphs) > 20 {
-							charFontSize = 24
-						}
-						stageW := previewArea.LayoutBounds().W
-						if stageW < 120 {
-							stageW = 560
-						}
-						cellPx := float64(charFontSize) + 8.0
-						if a.edShowPinyin && cellPx < 39.0 {
-							cellPx = 39.0
-						}
-						maxRowUnits := max(6.0, float64(stageW-36)/cellPx)
+							if a.edSelectedLine > 0 {
+								ui.Text(c, a.edLines[a.edSelectedLine-1].Text).FontSize(17).FontWeight(600).TextColor(p.faint).SingleLine()
+							}
+							// Active character-by-character karaoke line (dynamically adapts wrap width to actual stage pixel width on window resize!)
+							charFontSize := float32(30)
+							if len(a.edGlyphs) > 20 {
+								charFontSize = 24
+							}
+							stageW := previewArea.LayoutBounds().W
+							if stageW < 120 {
+								stageW = 560
+							}
+							cellPx := float64(charFontSize) + 8.0
+							if a.edShowPinyin && cellPx < 39.0 {
+								cellPx = 39.0
+							}
+							maxRowUnits := max(6.0, float64(stageW-36)/cellPx)
 
-						glyphWidthUnits := func(s string) float64 {
-							rs := []rune(s)
-							if len(rs) == 0 {
-								return 0.5
-							}
-							total := 0.0
-							for _, ch := range rs {
-								if ch < 128 {
-									total += 0.65
-								} else {
-									total += 1.0
+							glyphWidthUnits := func(s string) float64 {
+								rs := []rune(s)
+								if len(rs) == 0 {
+									return 0.5
 								}
-							}
-							return total
-						}
-						var glyphRows [][]int
-						var curRow []int
-						rowUnits := 0.0
-						for gi, g := range a.edGlyphs {
-							w := glyphWidthUnits(g.Ch)
-							isSpace := strings.TrimSpace(g.Ch) == ""
-							if len(curRow) > 0 && rowUnits+w > maxRowUnits {
-								// Try to wrap cleanly at the last space in curRow so English words don't break mid-word
-								splitAt := -1
-								for k := len(curRow) - 1; k >= 0; k-- {
-									if strings.TrimSpace(a.edGlyphs[curRow[k]].Ch) == "" {
-										splitAt = k
-										break
+								total := 0.0
+								for _, ch := range rs {
+									if ch < 128 {
+										total += 0.65
+									} else {
+										total += 1.0
 									}
 								}
-								if splitAt > 0 {
-									glyphRows = append(glyphRows, curRow[:splitAt])
-									tail := append([]int(nil), curRow[splitAt+1:]...)
-									curRow = tail
-									rowUnits = 0
-									for _, ti := range curRow {
-										rowUnits += glyphWidthUnits(a.edGlyphs[ti].Ch)
+								return total
+							}
+							var glyphRows [][]int
+							var curRow []int
+							rowUnits := 0.0
+							for gi, g := range a.edGlyphs {
+								w := glyphWidthUnits(g.Ch)
+								isSpace := strings.TrimSpace(g.Ch) == ""
+								if len(curRow) > 0 && rowUnits+w > maxRowUnits {
+									// Try to wrap cleanly at the last space in curRow so English words don't break mid-word
+									splitAt := -1
+									for k := len(curRow) - 1; k >= 0; k-- {
+										if strings.TrimSpace(a.edGlyphs[curRow[k]].Ch) == "" {
+											splitAt = k
+											break
+										}
 									}
-								} else {
-									glyphRows = append(glyphRows, curRow)
-									curRow = nil
-									rowUnits = 0
+									if splitAt > 0 {
+										glyphRows = append(glyphRows, curRow[:splitAt])
+										tail := append([]int(nil), curRow[splitAt+1:]...)
+										curRow = tail
+										rowUnits = 0
+										for _, ti := range curRow {
+											rowUnits += glyphWidthUnits(a.edGlyphs[ti].Ch)
+										}
+									} else {
+										glyphRows = append(glyphRows, curRow)
+										curRow = nil
+										rowUnits = 0
+									}
 								}
+								if isSpace && len(curRow) == 0 {
+									continue
+								}
+								curRow = append(curRow, gi)
+								rowUnits += w
 							}
-							if isSpace && len(curRow) == 0 {
-								continue
+							if len(curRow) > 0 {
+								glyphRows = append(glyphRows, curRow)
 							}
-							curRow = append(curRow, gi)
-							rowUnits += w
-						}
-						if len(curRow) > 0 {
-							glyphRows = append(glyphRows, curRow)
-						}
 
-						ui.Column(c.Key("pv-chars")).Gap(6).AlignItems(ui.Center).Children(func() {
-							for rIdx, rowIdxs := range glyphRows {
-								ri, idxs := rIdx, rowIdxs
-								ui.Row(c.Key(fmt.Sprintf("pv-row-%d", ri))).Gap(2).AlignItems(ui.End).Children(func() {
-									for _, gIdx := range idxs {
-										idx := gIdx
-										glyph := a.edGlyphs[idx]
-										sung := idx <= a.edSelectedChar
-										isCur := idx == a.edSelectedChar
-										if a.edPlaying {
-											sung = a.edPlayhead >= glyph.Start
-											isCur = a.edPlayhead >= glyph.Start && a.edPlayhead < glyph.End
-										}
-										isSpace := strings.TrimSpace(glyph.Ch) == ""
-										padX := float32(2)
-										if isSpace {
-											padX = 4
-										}
-										cBtn := ui.ButtonBase(c.Key(fmt.Sprintf("pvc-%d", idx))).Padding(3, padX, 3, padX).Radius(8).
-											Column().AlignItems(ui.Center).Gap(1).Background(ui.Transparent).Label(glyph.Ch).FocusRing(false)
-										cPose := ui.Pose{}
-										if isCur || cBtn.Hovered() {
-											cPose.Y = -3
-											cPose.Scale = 1.06
-										}
-										cBtn.AnimatePose(cPose, ui.Snappy)
-										col := p.faint
-										if sung {
-											col = p.accent
-										}
-										// Show timestamp above character (avoid repeating identical timestamps on every letter of an English word)
-										showTime := a.edShowPinyin && !isSpace
-										if showTime && idx > 0 && math.Abs(glyph.Start-a.edGlyphs[idx-1].Start) < 0.005 && strings.TrimSpace(a.edGlyphs[idx-1].Ch) != "" {
-											showTime = false
-										}
-										cBtn.Children(func() {
-											if showTime {
-												sub := glyph.Pinyin
-												if sub == "" {
-													sub = fmt.Sprintf("%.2fs", glyph.Start)
-												}
-												ui.Text(c, sub).FontSize(10).TextColor(col).SingleLine()
+							ui.Column(c.Key("pv-chars")).Gap(6).AlignItems(ui.Center).Children(func() {
+								for rIdx, rowIdxs := range glyphRows {
+									ri, idxs := rIdx, rowIdxs
+									ui.Row(c.Key(fmt.Sprintf("pv-row-%d", ri))).Gap(2).AlignItems(ui.End).Children(func() {
+										for _, gIdx := range idxs {
+											idx := gIdx
+											glyph := a.edGlyphs[idx]
+											sung := idx <= a.edSelectedChar
+											isCur := idx == a.edSelectedChar
+											if a.edPlaying {
+												sung = a.edPlayhead >= glyph.Start
+												isCur = a.edPlayhead >= glyph.Start && a.edPlayhead < glyph.End
 											}
-											ui.Text(c, glyph.Ch).FontSize(charFontSize).FontWeight(800).TextColor(col).SingleLine()
-										})
-										if cBtn.Clicked() {
-											a.edSelectedChar = idx
-											a.seekPlayback(glyph.Start)
+											isSpace := strings.TrimSpace(glyph.Ch) == ""
+											padX := float32(2)
+											if isSpace {
+												padX = 4
+											}
+											cBtn := ui.ButtonBase(c.Key(fmt.Sprintf("pvc-%d", idx))).Padding(3, padX, 3, padX).Radius(8).
+												Column().AlignItems(ui.Center).Gap(1).Background(ui.Transparent).Label(glyph.Ch).FocusRing(false)
+											cPose := ui.Pose{}
+											if isCur || cBtn.Hovered() {
+												cPose.Y = -3
+												cPose.Scale = 1.06
+											}
+											cBtn.AnimatePose(cPose, ui.Snappy)
+											col := p.faint
+											if sung {
+												col = p.accent
+											}
+											// Show timestamp above character (avoid repeating identical timestamps on every letter of an English word)
+											showTime := a.edShowPinyin && !isSpace
+											if showTime && idx > 0 && math.Abs(glyph.Start-a.edGlyphs[idx-1].Start) < 0.005 && strings.TrimSpace(a.edGlyphs[idx-1].Ch) != "" {
+												showTime = false
+											}
+											cBtn.Children(func() {
+												if showTime {
+													sub := glyph.Pinyin
+													if sub == "" {
+														sub = fmt.Sprintf("%.2fs", glyph.Start)
+													}
+													ui.Text(c, sub).FontSize(10).TextColor(col).SingleLine()
+												}
+												ui.Text(c, glyph.Ch).FontSize(charFontSize).FontWeight(800).TextColor(col).SingleLine()
+											})
+											if cBtn.Clicked() {
+												a.edSelectedChar = idx
+												a.seekPlayback(glyph.Start)
+											}
 										}
-									}
-								})
+									})
+								}
+							})
+							if curLine.Translation != "" {
+								ui.Text(c, curLine.Translation).FontSize(15.5).FontWeight(600).TextColor(p.muted).SingleLine()
+							}
+							if a.edSelectedLine+1 < len(a.edLines) {
+								ui.Text(c, a.edLines[a.edSelectedLine+1].Text).FontSize(16.5).FontWeight(600).TextColor(p.faint).SingleLine()
 							}
 						})
-						if curLine.Translation != "" {
-							ui.Text(c, curLine.Translation).FontSize(15.5).FontWeight(600).TextColor(p.muted).SingleLine()
-						}
-						if a.edSelectedLine+1 < len(a.edLines) {
-							ui.Text(c, a.edLines[a.edSelectedLine+1].Text).FontSize(16.5).FontWeight(600).TextColor(p.faint).SingleLine()
-						}
-					})
 					})
 				}
 
@@ -2509,25 +2519,25 @@ func (a *app) viewEditor(c *ui.Context) {
 					scroll := ui.Scroll(c.Key("ed-issue-scroll")).Grow(1).Basis(0).MinHeight(0).FillWidth().Clip()
 					scroll.Children(func() {
 						ui.Column(c).FillWidth().Gap(6).Children(func() {
-								for ii, iss := range a.edIssues {
-									var line int
-									if _, err := fmt.Sscanf(iss, "[人声] 第 %d 行", &line); err == nil && line > 0 && line <= len(a.edLines) {
-										btn := ui.ButtonBase(c.Key(fmt.Sprintf("iss-%d", ii))).Label(iss).FillWidth().Padding(8, 10, 8, 10).
-											Radius(10).Background(p.surface).AlignItems(ui.Center).Justify(ui.Start).FocusRing(false)
-										btn.Children(func() {
-											ui.Text(c, iss).Grow(1).MinWidth(0).FontSize(11.5).TextColor(p.text)
-										})
-										if btn.Clicked() {
-											a.selectEditorLine(line - 1)
-											a.seekPlayback(a.edLines[line-1].Start)
-										}
-										continue
-									}
-									ic := ui.Box(c.Key(fmt.Sprintf("iss-%d", ii))).FillWidth().Padding(8, 10, 8, 10).Radius(10).Background(p.surface)
-									ic.Children(func() {
-										ui.Text(c, iss).FontSize(11.5).TextColor(p.text)
+							for ii, iss := range a.edIssues {
+								var line int
+								if _, err := fmt.Sscanf(iss, "[人声] 第 %d 行", &line); err == nil && line > 0 && line <= len(a.edLines) {
+									btn := ui.ButtonBase(c.Key(fmt.Sprintf("iss-%d", ii))).Label(iss).FillWidth().Padding(8, 10, 8, 10).
+										Radius(10).Background(p.surface).AlignItems(ui.Center).Justify(ui.Start).FocusRing(false)
+									btn.Children(func() {
+										ui.Text(c, iss).Grow(1).MinWidth(0).FontSize(11.5).TextColor(p.text)
 									})
+									if btn.Clicked() {
+										a.selectEditorLine(line - 1)
+										a.seekPlayback(a.edLines[line-1].Start)
+									}
+									continue
 								}
+								ic := ui.Box(c.Key(fmt.Sprintf("iss-%d", ii))).FillWidth().Padding(8, 10, 8, 10).Radius(10).Background(p.surface)
+								ic.Children(func() {
+									ui.Text(c, iss).FontSize(11.5).TextColor(p.text)
+								})
+							}
 						})
 					})
 				}
