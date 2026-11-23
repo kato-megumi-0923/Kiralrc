@@ -502,3 +502,49 @@ def test_apply_fetches_at_the_chosen_size(tmp_path, monkeypatch):
                       "candidate": candidate(song_id=1, cover_url="https://p1.music.126.net/b.jpg"),
                       "fields": {"cover": True}, "mode": "overwrite", "cover_size": 0})
     assert seen[0] == "https://p1.music.126.net/b.jpg"
+
+
+def test_cover_only_overwrite_keeps_every_other_field(tmp_path, monkeypatch):
+    """只勾「高清封面」+「覆盖选中」：其余字段一个都不许动。"""
+    p = make_flac(tmp_path / "a.flac", title="晴天", cover=png_bytes(300, 300),
+                  extra={"artist": "周杰伦", "album": "叶惠美", "date": "2003",
+                         "NETEASE_ID": "186016"})
+    before = scrape.inspect_track(p)
+    assert before["netease_id"] == 186016 and before["year"] == "2003"
+
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1600, 1600))
+    res = scrape.apply_one({
+        "path": str(p),
+        "candidate": candidate(title="别的标题", artist="别人", album="别的专辑",
+                               year="1999", song_id=999, cover_url="https://x/big.png"),
+        "fields": {"cover": True}, "mode": "overwrite",
+    })
+
+    assert res["changed"] == ["cover"]
+    after = scrape.inspect_track(p)
+    for key in ("title", "artist", "album", "year", "netease_id"):
+        assert after[key] == before[key], f"{key} 被改了：{before[key]} → {after[key]}"
+    assert (after["cover_w"], after["cover_h"]) == (1600, 1600)
+
+
+def test_cover_only_overwrite_keeps_every_other_field(tmp_path, monkeypatch):
+    """只勾「高清封面」+「覆盖选中」：其余字段一个都不许动。"""
+    p = make_flac(tmp_path / "a.flac", title="晴天", cover=png_bytes(300, 300),
+                  extra={"artist": "周杰伦", "album": "叶惠美", "date": "2003",
+                         "NETEASE_ID": "186016"})
+    before = scrape.inspect_track(p)
+    assert before["netease_id"] == 186016 and before["year"] == "2003"
+
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1600, 1600))
+    res = scrape.apply_one({
+        "path": str(p),
+        "candidate": candidate(title="别的标题", artist="别人", album="别的专辑",
+                               year="1999", song_id=999, cover_url="https://x/big.png"),
+        "fields": {"cover": True}, "mode": "overwrite",
+    })
+
+    assert res["changed"] == ["cover"]
+    after = scrape.inspect_track(p)
+    for key in ("title", "artist", "album", "year", "netease_id"):
+        assert after[key] == before[key], f"{key} 被改了：{before[key]} → {after[key]}"
+    assert (after["cover_w"], after["cover_h"]) == (1600, 1600)
