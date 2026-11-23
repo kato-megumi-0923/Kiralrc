@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import io
 import os
+import sys
 import wave
 from pathlib import Path
 
@@ -59,9 +61,37 @@ def write_wav(path: str | Path, data: np.ndarray, sr: int = 44100) -> None:
         w.writeframes(pcm.tobytes())
 
 
+class _TqdmTap(io.TextIOBase):
+    """demucs 的进度条是往 stderr 写 \r + 百分比的，抠出来转成回调。"""
+
+    PAT = None
+
+    def __init__(self, sink):
+        import re
+        if _TqdmTap.PAT is None:
+            _TqdmTap.PAT = re.compile(r"(\d{1,3})%")
+        self.sink = sink
+        self.last = -1
+
+    def write(self, text):
+        for m in _TqdmTap.PAT.finditer(text):
+            pct = int(m.group(1))
+            if pct != self.last:
+                self.last = pct
+                self.sink(pct)
+        return len(text)
+
+    def flush(self):
+        pass
+
+
 def separate(path: str | Path, out_prefix: str | Path, model_name: str = "htdemucs",
-             sr: int = 44100, device: str | None = None) -> dict[str, Path]:
-    """demucs 分离，返回 {stem: wav 路径}。权重首次运行会下载（需能访问 fbaipublicfiles）。"""
+             sr: int = 44100, device: str | None = None,
+             on_progress=None) -> dict[str, Path]:
+    """demucs 分离，返回 {stem: wav 路径}。权重首次运行会下载（需能访问 fbaipublicfiles）。
+
+    on_progress(stage, pct)：stage 是 decode / model / separate / write，pct 是 0–100。
+    """
     import torch
     from demucs.apply import apply_model
     from demucs.pretrained import get_model
@@ -69,24 +99,60 @@ def separate(path: str | Path, out_prefix: str | Path, model_name: str = "htdemu
     out_prefix = Path(out_prefix)
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
+    def report(stage: str, pct: int) -> None:
+        if on_progress:
+            on_progress(stage, max(0, min(100, pct)))
+
+    report("decode", 0)
     wav = decode_stereo(path, sr)
+    report("model", 0)
     model = get_model(model_name)
     model.eval()
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     ref = wav.mean(0)
     x = torch.from_numpy((wav - ref.mean()) / (ref.std() + 1e-8))
+    tap = _TqdmTap(lambda pct: report("separate", pct))
+    real_stderr = sys.stderr
     with torch.no_grad():
-        src = apply_model(model, x[None], device=device, shifts=1, split=True,
-                          overlap=0.25, progress=False)[0]
+        try:
+            sys.stderr = tap                      # 让 tqdm 的进度落进回调
+            src = apply_model(model, x[None], device=device, shifts=1, split=True,
+                              overlap=0.25, progress=True)[0]
+        finally:
+            sys.stderr = real_stderr
+    report("separate", 100)
     src = src * ref.std() + ref.mean()
 
     result = {}
+    report("write", 0)
     for i, name in enumerate(model.sources):
         p = out_prefix.with_name(f"{out_prefix.name}_{name}.wav")
         write_wav(p, src[i].numpy(), sr)
         result[name] = p
+    report("write", 100)
     return result
+
+
+def transcode(src: str | Path, dst: str | Path) -> Path:
+    """按目标扩展名转码（wav / flac / mp3 / m4a），分出来的音轨导出时用。"""
+    import av
+
+    dst = Path(dst)
+    codec = {".flac": "flac", ".mp3": "libmp3lame", ".wav": "pcm_s16le",
+             ".m4a": "aac", ".aac": "aac"}.get(dst.suffix.lower())
+    if codec is None:
+        raise ValueError(f"不支持的导出格式：{dst.suffix}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(src)) as inp, av.open(str(dst), "w") as out:
+        istream = inp.streams.audio[0]
+        ostream = out.add_stream(codec, rate=istream.rate)
+        for frame in inp.decode(istream):
+            for packet in ostream.encode(frame):
+                out.mux(packet)
+        for packet in ostream.encode(None):
+            out.mux(packet)
+    return dst
 
 
 def duration(path: str | Path) -> float:

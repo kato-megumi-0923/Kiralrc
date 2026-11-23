@@ -28,6 +28,7 @@ const (
 	pageQueue
 	pageEditor
 	pageTools
+	pageSeparate
 	pageSettings
 )
 
@@ -171,6 +172,11 @@ type app struct {
 	// 1. 曲库（默认未添加文件夹，用户点击添加后再扫描）
 	libFolders        []string
 	downloading       bool // 正在批量下载歌词
+	sepAudio          string
+	sepRunning        bool
+	sepStage          string
+	sepPct            int
+	sepStems          []sepStem
 	downloadDone      int
 	downloadAll       int
 	downloadNote      string
@@ -1328,7 +1334,7 @@ func (a *app) runToolInteractive(toolCmd string) {
 			if err != nil || p == "" {
 				return
 			}
-			a.runKiralrcCLI("separate", p)
+			a.startSeparate(p)   // 直接进分离页看进度
 		}()
 	default:
 		a.runKiralrcCLI("info")
@@ -3310,5 +3316,7 @@ func Run() error {
 			a.scanLibraryAsync()
 		}
 	})
-	return mygo.App.Run()
+	err := mygo.App.Run()
+	purgeSepCache()   // 分离的临时音轨跟着程序一起走
+	return err
 }

@@ -89,6 +89,8 @@ func (a *app) view(c *ui.Context) {
 					a.viewEditor(c)
 				case pageTools:
 					a.viewTools(c)
+				case pageSeparate:
+					a.viewSeparate(c)
 				case pageSettings:
 					a.viewSettings(c)
 				}
@@ -3442,6 +3444,15 @@ func (a *app) viewSettings(c *ui.Context) {
 							}
 							a.runKiralrcCLI("clean", "--days", days)
 						}
+					}
+				})
+				ui.Row(c).Height(56).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).Grow(1).Gap(1).Children(func() {
+						ui.Text(c, "人声分离缓存").FontSize(13.5).FontWeight(600)
+						ui.Text(c, "work/sep 下的分离音轨 · 关掉程序自动清空，开着最多留三小时").FontSize(12).TextColor(p.muted)
+					})
+					if pillButton(c.Key("set-clear-sep"), nil, "清除分离缓存", p.surface2, p.text).Clicked() {
+						a.clearSepCache()
 					}
 				})
 			})

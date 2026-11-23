@@ -242,12 +242,43 @@ def cmd_convert(a) -> int:
 
 
 def cmd_separate(a) -> int:
+    import json
+
+    from . import audio as au
+    from . import cache
+
+    src = Path(a.audio)
+    out_dir = Path(a.out) if a.out else cache.sep_dir(src)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prefix = out_dir / cache.safe_stem(src)
+
+    seen = {"stage": "", "pct": -1}
+
+    def report(stage: str, pct: int) -> None:
+        if seen["stage"] == stage and seen["pct"] == pct:
+            return
+        seen["stage"], seen["pct"] = stage, pct
+        if getattr(a, "json", False):
+            print(json.dumps({"stage": stage, "pct": pct}), flush=True)
+        elif not a.quiet:
+            print(f"[{stage}] {pct}%", flush=True)
+
+    cache.purge()                       # 顺手清掉过期的
+    res = au.separate(src, prefix, device=a.device, on_progress=report)
+    for name, path in res.items():
+        if getattr(a, "json", False):
+            print(json.dumps({"stem": name, "path": str(path),
+                              "size": path.stat().st_size}, ensure_ascii=False), flush=True)
+        else:
+            print(f"[ok] {name}: {path}")
+    return 0
+
+
+def cmd_export_stem(a) -> int:
     from . import audio as au
 
-    out = Path(a.out) if a.out else Path(a.audio).with_suffix("")
-    res = au.separate(a.audio, out)
-    for k, v in res.items():
-        print(f"[ok] {k}: {v}")
+    dst = au.transcode(a.src, a.dst)
+    print(dst)
     return 0
 
 
@@ -449,6 +480,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_fetch_lyrics)
 
+    p = sub.add_parser("export-stem", help="把分出来的音轨转成 wav / flac / mp3")
+    p.add_argument("src")
+    p.add_argument("dst")
+    p.set_defaults(func=cmd_export_stem)
+
     p = sub.add_parser("decrypt", help="解开网易云 NCM（保留歌名/歌手/封面/网易云 ID）")
     p.add_argument("paths", nargs="+", help="文件或目录，目录会递归")
     p.add_argument("--out", help="输出目录，默认放在原文件旁边")
@@ -483,9 +519,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("files", nargs="+")
     p.set_defaults(func=cmd_convert)
 
-    p = sub.add_parser("separate", help="demucs 人声分离")
+    p = sub.add_parser("separate", help="demucs 人声分离（默认写到 work/sep，不碰曲库）")
     p.add_argument("audio")
-    p.add_argument("--out")
+    p.add_argument("--out", help="输出目录，默认 work/sep/<歌名>_<哈希>")
+    p.add_argument("--device", help="cpu / cuda，默认自动")
+    p.add_argument("--json", action="store_true", help="按行输出进度 JSON")
+    p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_separate)
 
     p = sub.add_parser("fetch", help="从网易云抓歌词")
