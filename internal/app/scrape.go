@@ -987,12 +987,75 @@ func (a *app) viewScrapeRow(c *ui.Context, idx int) {
 			})
 		})
 	})
+	row.ContextMenu(func(m *ui.Menu) {
+		title, artist := scrapeTitleOf(it), strings.TrimSpace(it.Artist)
+		album := strings.TrimSpace(it.Album)
+		if m.Item("复制歌名").Disabled(title == "").Chosen() {
+			c.WriteClipboard(title)
+			a.notifyCopy("歌名", title)
+		}
+		if m.Item("复制歌手").Disabled(artist == "").Chosen() {
+			c.WriteClipboard(artist)
+			a.notifyCopy("歌手", artist)
+		}
+		if m.Item("复制专辑").Disabled(album == "").Chosen() {
+			c.WriteClipboard(album)
+			a.notifyCopy("专辑", album)
+		}
+		m.Separator()
+		if m.Item("复制全部信息").Chosen() {
+			c.WriteClipboard(scrapeClipAll(it))
+			a.notifyCopy("全部信息", "")
+		}
+	})
 	if row.Clicked() {
 		a.selectScrapeTrack(idx)
 		if a.win != nil {
 			a.win.Invalidate()
 		}
 	}
+}
+
+// scrapeTitleOf 有标签就用标签，没有就用文件名。
+func scrapeTitleOf(t scrapeTrack) string {
+	if title := strings.TrimSpace(t.Title); title != "" {
+		return title
+	}
+	return strings.TrimSuffix(t.Name, filepath.Ext(t.Name))
+}
+
+// scrapeClipAll 「复制全部信息」的内容：第一行「歌名 - 歌手」可以直接粘进搜索框，
+// 下面几行带标签，方便存到别处。
+func scrapeClipAll(t scrapeTrack) string {
+	var b strings.Builder
+	b.WriteString(scrapeTitleOf(t))
+	if artist := strings.TrimSpace(t.Artist); artist != "" {
+		b.WriteString(" - " + artist)
+	}
+	b.WriteString("\n")
+	if album := strings.TrimSpace(t.Album); album != "" {
+		b.WriteString("专辑：" + album + "\n")
+	}
+	if t.Year != "" {
+		b.WriteString("年份：" + t.Year + "\n")
+	}
+	if t.NeteaseID > 0 {
+		b.WriteString("ID：" + strconv.Itoa(t.NeteaseID) + "\n")
+	}
+	b.WriteString("路径：" + t.Path)
+	return b.String()
+}
+
+// notifyCopy 复制完给个轻提示（菜单回调在下一次 build 里跑，改 toast 即可）。
+func (a *app) notifyCopy(what, detail string) {
+	if detail == "" {
+		a.toast = "已复制" + what
+		return
+	}
+	if runes := []rune(detail); len(runes) > 24 {
+		detail = string(runes[:24]) + "…"
+	}
+	a.toast = "已复制" + what + "：" + detail
 }
 
 // scrapeFilterChip 左栏顶部的筛选胶囊：标签 + 条数。
@@ -1110,11 +1173,9 @@ func (a *app) viewScrapeCurrent(c *ui.Context, it scrapeTrack) {
 				artCover(c, hueForString(it.Path), 76, 10, iconNote)
 			}
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				title := strings.TrimSpace(it.Title)
-				if title == "" {
-					title = strings.TrimSuffix(it.Name, filepath.Ext(it.Name))
-				}
-				ui.Text(c, title).FontSize(16).FontWeight(750).SingleLine()
+				title := scrapeTitleOf(it)
+				// 歌名/歌手/专辑/文件名都能用鼠标选中复制（右键有「复制」）
+				ui.Text(c, title).FontSize(16).FontWeight(750).SingleLine().Selectable()
 				sub := strings.TrimSpace(it.Artist)
 				if it.Album != "" {
 					if sub != "" {
@@ -1122,7 +1183,7 @@ func (a *app) viewScrapeCurrent(c *ui.Context, it scrapeTrack) {
 					}
 					sub += it.Album
 				}
-				ui.Text(c, sub).FontSize(12).TextColor(p.muted).SingleLine()
+				ui.Text(c, sub).FontSize(12).TextColor(p.muted).SingleLine().Selectable()
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					if it.CoverW > 0 {
 						statusPill(c, fmt.Sprintf("%d×%d", it.CoverW, it.CoverH), p.surface2, p.muted)
@@ -1143,7 +1204,7 @@ func (a *app) viewScrapeCurrent(c *ui.Context, it scrapeTrack) {
 						statusPill(c, "只读格式", p.errBg, p.err)
 					}
 				})
-				ui.Text(c, it.Name).FontSize(11).TextColor(p.faint).SingleLine()
+				ui.Text(c, it.Name).FontSize(11).TextColor(p.faint).SingleLine().Selectable()
 			})
 		})
 

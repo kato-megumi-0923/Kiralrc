@@ -1462,3 +1462,76 @@ func TestScrapePlanCarriesResolveFlag(t *testing.T) {
 		t.Fatalf("按网易云补全不该带候选或 ID：%s", data)
 	}
 }
+
+// 左栏右键「复制全部信息」的排版：第一行能直接粘进搜索框，其余带标签。
+func TestScrapeClipAllFormat(t *testing.T) {
+	track := scrapeTrack{
+		Path: `E:/cloudy music\a.flac`, Name: "a.flac", Title: "月がきれい",
+		Artist: "東山奈央", Album: "月がきれい (アニメ盤)", Year: "2009", NeteaseID: 278148,
+	}
+	want := "月がきれい - 東山奈央\n专辑：月がきれい (アニメ盤)\n年份：2009\nID：278148\n" +
+		`路径：E:/cloudy music\a.flac`
+	if got := scrapeClipAll(track); got != want {
+		t.Fatalf("复制内容不对：\n%q\nwant\n%q", got, want)
+	}
+
+	// 没有标签的曲目：歌名退回文件名，空的专辑/年份/ID 不占行
+	bare := scrapeTrack{Path: `E:/m/b.flac`, Name: "b.flac"}
+	if got := scrapeTitleOf(bare); got != "b" {
+		t.Fatalf("没有标签时应退回文件名，拿到 %q", got)
+	}
+	if got := scrapeClipAll(bare); got != "b\n"+`路径：E:/m/b.flac` {
+		t.Fatalf("空字段不该占行：%q", got)
+	}
+}
+
+// 左栏右键菜单：真开一次菜单、点「复制歌手」，看剪贴板里是什么。
+func TestScrapeRowRightClickCopies(t *testing.T) {
+	a := newApp()
+	path := filepath.Join(t.TempDir(), "月がきれい.flac")
+	a.scrapeItems = []scrapeTrack{{
+		Path: path, Name: "月がきれい.flac", Title: "月がきれい", Artist: "東山奈央",
+		Album: "月がきれい (アニメ盤)", Year: "2009", NeteaseID: 278148,
+		Writable: true, CoverW: 800, CoverH: 800,
+	}}
+	a.scrapeCur = 0
+	a.page = pageScrape
+
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+
+	if err := tt.RightClick("月がきれい"); err != nil {
+		t.Fatalf("右键点不到那一行：%v", err)
+	}
+	tt.Frame()
+	labels := tt.Menu()
+	want := []string{"复制歌名", "复制歌手", "复制专辑", "-", "复制全部信息"}
+	if len(labels) != len(want) {
+		t.Fatalf("菜单项不对：%v", labels)
+	}
+	for i := range want {
+		if labels[i] != want[i] {
+			t.Fatalf("第 %d 项是 %q，想要 %q（全量：%v）", i, labels[i], want[i], labels)
+		}
+	}
+
+	if err := tt.ChooseMenuItem("复制歌手"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := tt.Clipboard(); got != "東山奈央" {
+		t.Fatalf("复制歌手拿到 %q", got)
+	}
+
+	if err := tt.RightClick("月がきれい"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.ChooseMenuItem("复制全部信息"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got, want := tt.Clipboard(), scrapeClipAll(a.scrapeItems[0]); got != want {
+		t.Fatalf("复制全部信息拿到 %q，想要 %q", got, want)
+	}
+}
