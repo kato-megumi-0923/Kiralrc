@@ -17,3 +17,5 @@ __pycache__/
 *.exe~
 /dist/
 /context*.md
+# 源码打包产物（临时给人看的，不进仓库）
+/docs/kiralrc-src-*.md
