@@ -44,6 +44,7 @@ class Decrypted:
     album: str = ""
     song_id: int = 0
     cover: bytes = b""
+    tag_error: str = ""     # 标签没写进去时的原因（音频本身是好的）
 
 
 def looks_encrypted(path: str | Path) -> bool:
@@ -193,7 +194,7 @@ def decrypt_ncm(path: str | Path, out_dir: str | Path | None = None,
                      song_id=int(meta.get("musicId") or 0),
                      cover=cover)
     if write_tags:
-        _write_tags(info, meta)
+        info.tag_error = _write_tags(info, meta)
     return info
 
 
@@ -286,8 +287,11 @@ def _join_meta(value) -> str:
     return ""
 
 
-def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
-    """歌名、歌手、专辑、时长、封面，以及网易云的一整套字段。"""
+def _write_tags(info: Decrypted, meta: dict | None = None) -> str:
+    """歌名、歌手、专辑、时长、封面，以及网易云的一整套字段。
+
+    返回空串表示写好；否则返回失败原因（音频已经解出来了，不该当成整体失败）。
+    """
     extras = meta_tags(meta or {})
     duration = _duration_ms((meta or {}).get("duration"))
     try:
@@ -337,9 +341,9 @@ def _write_tags(info: Decrypted, meta: dict | None = None) -> None:
                 pic.data = info.cover
                 audio.add_picture(pic)
             audio.save()
-    except Exception:
-        # 标签写不进去不该让音频白解一遍
-        pass
+    except Exception as exc:      # 标签写不进去不该让音频白解一遍，但要让人知道
+        return f"{type(exc).__name__}: {exc}"
+    return ""
 
 
 def _read_netease_id(path: Path) -> int:

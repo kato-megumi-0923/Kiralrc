@@ -103,3 +103,15 @@ def test_wavecheck_flags_squeezed_tail_but_not_spaced_tail(monkeypatch, tmp_path
     issues = wavecheck.check(fmt.Lrc(lines=[squeezed]), vocals)
     assert len(issues) == 1 and "第 1 行" in issues[0] and "尾字挤压" in issues[0]
     assert wavecheck.check(fmt.Lrc(lines=[spaced]), vocals) == []
+
+
+def test_write_is_atomic_and_leaves_no_tmp(tmp_path):
+    """写歌词先落临时文件再替换，中途崩了也不该留半截 .lrc 或 .tmp。"""
+    from kiralrc import format as fmt
+
+    target = tmp_path / "song.lrc"
+    lrc = fmt.parse("[00:01.00]第一句\n[00:02.00]第二句\n")
+    fmt.write(target, lrc)
+    assert target.exists()
+    assert not list(tmp_path.glob("*.tmp")), list(tmp_path.iterdir())
+    assert "第一句" in target.read_text(encoding="utf-8")

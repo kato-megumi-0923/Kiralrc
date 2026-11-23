@@ -8,8 +8,10 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 LINE_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{1,3})\](.*)$")
 TAG_RE = re.compile(r"<(\d{2}):(\d{2}\.\d{1,3})>")
@@ -140,8 +142,17 @@ def _append_line(lrc: Lrc, start: float, body: str) -> None:
 
 def write(path: str | Path, lrc: Lrc, newline: str = "\n") -> None:
     data = newline.join(lrc.metas + [ln.render() for ln in lrc.lines]) + newline
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(data)
+    _write_atomic(Path(path), data)
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """先写同目录的临时文件再替换：中途崩了也不会留下半截歌词。"""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def convert_decimals(path: str | Path) -> int:
@@ -150,8 +161,7 @@ def convert_decimals(path: str | Path) -> int:
     text = raw.decode("utf-8")
     new, n = TS2_RE.subn(r"\g<1>0\g<2>", text)
     if n:
-        with open(path, "wb") as f:
-            f.write(new.encode("utf-8"))
+        _write_atomic(Path(path), new)
     return n
 
 

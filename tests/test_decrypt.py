@@ -214,3 +214,39 @@ def test_an_existing_file_without_id_is_not_clobbered(tmp_path):
     info = decrypt.decrypt_ncm(src)
     assert info.path.name != manual.name
     assert manual.read_bytes()[:4] == b"fLaC"
+
+
+def test_tag_failure_is_reported_but_audio_kept(tmp_path):
+    """标签写不进去（比如文件只读）时，音频要留住，并且如实报出原因。"""
+    import os
+    import stat
+
+    src = tmp_path / "ro.ncm"
+    src.write_bytes(build_ncm(META))
+
+    real_write = decrypt._write_tags
+
+    def failing(info, meta=None):
+        return real_write(info, meta)      # 先正常写一遍，拿到音频
+
+    # 让目标文件在写标签前变成只读，模拟写不进去
+    original = decrypt._write_tags
+
+    def blocked(info, meta=None):
+        try:
+            os.chmod(info.path, stat.S_IREAD)
+        except OSError:
+            pass
+        return original(info, meta)
+
+    decrypt._write_tags = blocked
+    try:
+        info = decrypt.decrypt_ncm(src)
+    finally:
+        decrypt._write_tags = original
+        if info.path.exists():
+            os.chmod(info.path, stat.S_IWRITE)
+
+    assert info.path.exists()
+    assert info.path.stat().st_size > 0
+    assert info.tag_error, "写标签失败却没报出来"

@@ -154,6 +154,10 @@ def cmd_decrypt(a) -> int:
             if not a.quiet:
                 print(f"[ok] {p.name} → {info.path.name}  {info.title} / {info.artist}"
                       f"{'  id=' + str(info.song_id) if info.song_id else ''}")
+                if info.tag_error:      # 音频出来了，但标签没写进去
+                    print(f"  [标签未写入] {info.tag_error}")
+                if info.tag_error:      # 音频出来了，但标签没写进去
+                    print(f"  [标签未写入] {info.tag_error}")
         except decrypt.NotEncrypted as e:
             bad += 1
             print(f"[skip] {e}")
