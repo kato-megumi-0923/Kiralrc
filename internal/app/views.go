@@ -3430,7 +3430,7 @@ func (a *app) viewSettings(c *ui.Context) {
 				ui.Row(c).Height(56).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(1).Children(func() {
 						ui.Text(c, "中间产物缓存").FontSize(13.5).FontWeight(600)
-						ui.Text(c, "work/ 下的人声轨与切片 · 对应 kiralrc clean --days N").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "对齐过程中留下的人声轨与切片，清理后不影响已保存的 LRC").FontSize(12).TextColor(p.muted)
 					})
 					ui.Text(c, a.setCacheSummary).FontSize(12).TextColor(p.muted)
 					segmented(c, &a.setCleanDays, "7 天前", "30 天前", "全部")
@@ -3449,8 +3449,11 @@ func (a *app) viewSettings(c *ui.Context) {
 				ui.Row(c).Height(56).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(1).Children(func() {
 						ui.Text(c, "人声分离缓存").FontSize(13.5).FontWeight(600)
-						ui.Text(c, "work/sep 下的分离音轨 · 关掉程序自动清空，开着最多留三小时").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "分离出来的人声与伴奏 · 关掉程序自动清空，开着最多留三小时").FontSize(12).TextColor(p.muted)
 					})
+					if pillButton(c.Key("set-open-sep"), nil, "打开目录", p.surface2, p.text).Clicked() {
+						a.revealSepCache()
+					}
 					if pillButton(c.Key("set-clear-sep"), nil, "清除分离缓存", p.surface2, p.text).Clicked() {
 						a.clearSepCache()
 					}

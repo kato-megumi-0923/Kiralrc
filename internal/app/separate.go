@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -88,6 +89,18 @@ func purgeOldSepCache() int {
 		}
 	}
 	return n
+}
+
+// revealSepCache 在资源管理器里打开分离缓存，省得人去找路径。
+func (a *app) revealSepCache() {
+	dir := filepath.Join(appRootDir(), "work", "sep")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		a.toast = "打不开目录：" + err.Error()
+		return
+	}
+	if err := exec.Command("explorer.exe", dir).Start(); err != nil {
+		a.toast = "打不开目录：" + err.Error()
+	}
 }
 
 func (a *app) clearSepCache() {
@@ -284,7 +297,7 @@ func (a *app) viewSeparate(c *ui.Context) {
 				w := r.W * float32(a.sepPct) / 100
 				pt.Fill(ui.Rect{X: r.X, Y: r.Y, W: w, H: r.H}, p.accent, 999)
 			})
-			ui.Text(c, "音轨只写到 work/sep，不会进曲库；关掉程序即清空，开着最多留三小时。").
+			ui.Text(c, "音轨只留在分离缓存里，不进曲库；关掉程序即清空，开着最多留三小时。").
 				FontSize(11.5).TextColor(p.muted)
 		})
 
