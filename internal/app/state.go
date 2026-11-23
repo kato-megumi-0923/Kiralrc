@@ -326,6 +326,7 @@ type app struct {
 	scrapeSearching  bool
 	scrapeWarn       string    // 这次搜索的告警（比如网易云限速），显示在右栏
 	scrapeCoolUntil  time.Time // 网易云限速后的冷却截止时间
+	scrapeAuth       string    // 这次搜索用的身份（Cloudy 登录态 / 匿名）
 	scrapeLoading    bool
 	scrapeSel        map[string]scrapeCandidate // 路径 → 已确认的候选
 	scrapeFields     [5]bool                    // 封面/年份/ID/专辑/标题歌手

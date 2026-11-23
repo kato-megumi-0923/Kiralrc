@@ -34,7 +34,10 @@ CREDIT_RE = re.compile(r"^\s*(作词|作曲|编曲|制作|出品|监制|混音|�
 
 
 def _get_json(url: str, tries: int = 3, timeout: int = 20):
-    for _ in range(tries):
+    from . import netauth
+
+    netauth.ensure(HEADERS)   # 有 Cloudy 的登录态就带上，配额比匿名高
+    for _ in range(tries + 1):
         try:
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -50,6 +53,10 @@ def _get_json(url: str, tries: int = 3, timeout: int = 20):
         # 网易云把"问得太勤"也放在 200 响应的 code 里
         if isinstance(data, dict) and data.get("code") in (405, 418, 429):
             raise RateLimited(data.get("message") or data.get("msg") or "网易云限速")
+        # 301 是"需要登录"：多半是 Cookie 过期了，摘掉退回匿名再试一次
+        if isinstance(data, dict) and data.get("code") == 301 and "Cookie" in HEADERS:
+            netauth.forget(HEADERS)
+            continue
         return data
     return None
 

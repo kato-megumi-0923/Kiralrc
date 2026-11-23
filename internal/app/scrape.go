@@ -146,13 +146,21 @@ func (a *app) openScrapeTracks(paths []string) {
 }
 
 func (a *app) scrapeSubtitle() string {
-	if a.scrapeDir != "" {
-		return a.scrapeDir
+	base := ""
+	switch {
+	case a.scrapeDir != "":
+		base = a.scrapeDir
+	case len(a.scrapePaths) > 0:
+		base = fmt.Sprintf("曲库勾选 %d 首", len(a.scrapePaths))
 	}
-	if len(a.scrapePaths) > 0 {
-		return fmt.Sprintf("曲库勾选 %d 首", len(a.scrapePaths))
+	if a.scrapeAuth == "" {
+		return base
 	}
-	return ""
+	// 搜过一次之后就知道这次用的是哪种身份了：Cloudy 登录态的配额比匿名高
+	if base == "" {
+		return "网易云 " + a.scrapeAuth
+	}
+	return base + " · 网易云 " + a.scrapeAuth
 }
 
 // loadScrapeItems 让 Python 读一遍现状。目录大时这一步要几百毫秒，后台跑。
@@ -290,10 +298,9 @@ func (a *app) searchScrapeCandidates(force bool) {
 		}
 		cmd := a.pythonCmd(args...)
 		out, err := cmd.Output()
-		var cands []scrapeCandidate
-		var warn string
+		var res scrapeSearchResult
 		if err == nil {
-			cands, warn, err = parseScrapeSearch(out)
+			res, err = parseScrapeSearch(out)
 		}
 		a.post(func() {
 			if a.scrapeCandPath != path {
@@ -304,13 +311,14 @@ func (a *app) searchScrapeCandidates(force bool) {
 				a.toast = "搜索候选失败：" + err.Error()
 				return
 			}
-			a.scrapeWarn = warn
-			if strings.Contains(warn, "限速") {
+			a.scrapeWarn = res.Warning
+			a.scrapeAuth = res.Auth
+			if strings.Contains(res.Warning, "限速") {
 				a.scrapeCoolUntil = time.Now().Add(2 * time.Minute)
 			}
-			a.scrapeCandCache[path] = cands
-			a.scrapeCands = cands
-			for _, c := range cands {
+			a.scrapeCandCache[path] = res.Items
+			a.scrapeCands = res.Items
+			for _, c := range res.Items {
 				a.requestScrapeThumb(c.ThumbURL)
 			}
 		})
@@ -339,21 +347,30 @@ func (a *app) isScrapeCandidateSelected(path string, cand scrapeCandidate) bool 
 	return ok && cur == cand
 }
 
-// parseScrapeSearch 接住后端搜索结果：现在是 {items, warning}，
+// scrapeSearchResult 是后端一次搜索的回报。
+type scrapeSearchResult struct {
+	Items   []scrapeCandidate
+	Warning string // 比如网易云限速
+	Auth    string // 这次用的是哪种身份：Cloudy 登录态 / 匿名
+}
+
+// parseScrapeSearch 接住后端搜索结果：现在是 {items, warning, auth}，
 // 也容忍直接给一个数组（旧格式）。
-func parseScrapeSearch(out []byte) ([]scrapeCandidate, string, error) {
+func parseScrapeSearch(out []byte) (scrapeSearchResult, error) {
 	var payload struct {
 		Items   []scrapeCandidate `json:"items"`
 		Warning string            `json:"warning"`
+		Auth    string            `json:"auth"`
 	}
-	if err := json.Unmarshal(out, &payload); err == nil && (payload.Items != nil || payload.Warning != "") {
-		return payload.Items, payload.Warning, nil
+	if err := json.Unmarshal(out, &payload); err == nil &&
+		(payload.Items != nil || payload.Warning != "" || payload.Auth != "") {
+		return scrapeSearchResult{payload.Items, payload.Warning, payload.Auth}, nil
 	}
 	var arr []scrapeCandidate
 	if err := json.Unmarshal(out, &arr); err != nil {
-		return nil, "", err
+		return scrapeSearchResult{}, err
 	}
-	return arr, "", nil
+	return scrapeSearchResult{Items: arr}, nil
 }
 
 // ---------- 缩略图 ----------

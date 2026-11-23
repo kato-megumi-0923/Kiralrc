@@ -183,6 +183,7 @@ func seedScrapeDemo(a *app) {
 	a.scrapeItems = items
 	a.scrapeCur = 0
 	a.scrapeQuery = "届かない恋 上原れな"
+	a.scrapeAuth = "Cloudy 登录态"
 	a.scrapeCands = cands
 	a.scrapeCandPath = items[0].Path
 	a.scrapeSel = map[string]scrapeCandidate{items[0].Path: cands[1]}

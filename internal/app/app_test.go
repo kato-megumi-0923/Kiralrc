@@ -1539,25 +1539,28 @@ func TestScrapeRowRightClickCopies(t *testing.T) {
 // 搜索结果的两种形状：{items,warning} 和旧的裸数组。
 func TestParseScrapeSearch(t *testing.T) {
 	obj := `{"items":[{"source":"iTunes","title":"桃色タイフーン","song_id":0}],` +
-		`"warning":"网易云限速了，这次只有 iTunes 候选"}`
-	cands, warn, err := parseScrapeSearch([]byte(obj))
-	if err != nil || len(cands) != 1 || cands[0].Title != "桃色タイフーン" {
-		t.Fatalf("对象格式解析不对：%v %v", cands, err)
+		`"warning":"网易云限速了，这次只有 iTunes 候选","auth":"Cloudy 登录态"}`
+	res, err := parseScrapeSearch([]byte(obj))
+	if err != nil || len(res.Items) != 1 || res.Items[0].Title != "桃色タイフーン" {
+		t.Fatalf("对象格式解析不对：%+v %v", res, err)
 	}
-	if warn != "网易云限速了，这次只有 iTunes 候选" {
-		t.Fatalf("告警没带出来：%q", warn)
+	if res.Warning != "网易云限速了，这次只有 iTunes 候选" {
+		t.Fatalf("告警没带出来：%q", res.Warning)
+	}
+	if res.Auth != "Cloudy 登录态" {
+		t.Fatalf("身份没带出来：%q", res.Auth)
 	}
 
 	// 老格式（数组）照旧能用
-	cands, warn, err = parseScrapeSearch([]byte(`[{"source":"网易云","title":"晴天"}]`))
-	if err != nil || len(cands) != 1 || warn != "" {
-		t.Fatalf("数组格式解析不对：%v %q %v", cands, warn, err)
+	res, err = parseScrapeSearch([]byte(`[{"source":"网易云","title":"晴天"}]`))
+	if err != nil || len(res.Items) != 1 || res.Warning != "" {
+		t.Fatalf("数组格式解析不对：%+v %v", res, err)
 	}
 
 	// 空结果 + 告警
-	cands, warn, err = parseScrapeSearch([]byte(`{"items":[],"warning":"限速"}`))
-	if err != nil || len(cands) != 0 || warn != "限速" {
-		t.Fatalf("空结果解析不对：%v %q %v", cands, warn, err)
+	res, err = parseScrapeSearch([]byte(`{"items":[],"warning":"限速"}`))
+	if err != nil || len(res.Items) != 0 || res.Warning != "限速" {
+		t.Fatalf("空结果解析不对：%+v %v", res, err)
 	}
 }
 

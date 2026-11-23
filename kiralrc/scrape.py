@@ -395,6 +395,14 @@ def _itunes_candidates(query, artist, title, itunes_json) -> list[dict]:
     return out
 
 
+def _auth_name() -> str:
+    try:
+        from . import netauth
+        return netauth.describe()
+    except Exception:
+        return ""
+
+
 def search_with_note(query: str, artist: str = "", title: str = "",
                      netease_id: int | None = None, limit: int = 8,
                      netease_search=None, netease_json=None,
@@ -415,7 +423,7 @@ def search_with_note(query: str, artist: str = "", title: str = "",
         note = ("网易云限速了，这次只有 iTunes 候选；过一会儿再点「重新搜索」"
                 if not has_netease else
                 "网易云限速，候选可能不全；过一会儿可以再搜一次")
-    return {"items": cands, "warning": note}
+    return {"items": cands, "warning": note, "auth": _auth_name()}
 
 
 def _interleave(first: list[dict], second: list[dict]) -> list[dict]:

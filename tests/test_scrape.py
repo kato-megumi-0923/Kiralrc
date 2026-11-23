@@ -686,3 +686,61 @@ def test_search_reports_rate_limit_instead_of_failing_silently(monkeypatch):
                                   itunes_json=lambda url: payload)
     assert [c["source"] for c in res["items"]] == ["iTunes"]
     assert "限速" in res["warning"] and "iTunes" in res["warning"]
+
+
+# ---------- 借 Cloudy 的登录态 ----------
+
+def test_netauth_env_cookie_overrides_and_forgets(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.setattr(netauth, "_cookie", None)
+    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc; __csrf=def")
+    headers = {}
+
+    assert netauth.ensure(headers)
+    assert headers["Cookie"] == "MUSIC_U=abc; __csrf=def"
+    assert netauth.describe() == "环境变量 Cookie"
+
+    # Cookie 过期时摘掉，退回匿名
+    netauth.forget(headers)
+    assert "Cookie" not in headers
+    assert netauth.netease_cookie() == ""
+
+
+def test_netauth_skips_cloudy_when_disabled(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.setattr(netauth, "_cookie", None)
+    monkeypatch.delenv("KIRALRC_NETEASE_COOKIE", raising=False)
+    monkeypatch.setenv("KIRALRC_NO_CLOUDY_AUTH", "1")
+    assert netauth.cloudy_cookie() == ""
+    assert netauth.describe() == "匿名"
+
+
+# ---------- 借 Cloudy 的登录态 ----------
+
+def test_netauth_env_cookie_overrides_and_forgets(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.setattr(netauth, "_cookie", None)
+    monkeypatch.setenv("KIRALRC_NETEASE_COOKIE", "MUSIC_U=abc; __csrf=def")
+    headers = {}
+
+    assert netauth.ensure(headers)
+    assert headers["Cookie"] == "MUSIC_U=abc; __csrf=def"
+    assert netauth.describe() == "环境变量 Cookie"
+
+    # Cookie 过期时摘掉，退回匿名
+    netauth.forget(headers)
+    assert "Cookie" not in headers
+    assert netauth.netease_cookie() == ""
+
+
+def test_netauth_skips_cloudy_when_disabled(monkeypatch):
+    from kiralrc import netauth
+
+    monkeypatch.setattr(netauth, "_cookie", None)
+    monkeypatch.delenv("KIRALRC_NETEASE_COOKIE", raising=False)
+    monkeypatch.setenv("KIRALRC_NO_CLOUDY_AUTH", "1")
+    assert netauth.cloudy_cookie() == ""
+    assert netauth.describe() == "匿名"

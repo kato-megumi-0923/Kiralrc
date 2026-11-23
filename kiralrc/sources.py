@@ -58,7 +58,14 @@ from .ratelimit import RateLimited  # noqa: E402  （与 text 共用同一个异
 
 
 def _get(url: str, timeout: int = 20) -> bytes:
-    req = urllib.request.Request(url, headers=HEADERS)
+    headers = HEADERS
+    if "music.163.com" in url:
+        # 登录态只发给网易云：这个 HEADERS 也用在 QQ/酷狗/AMLL 上，别把 Cookie 泄漏出去
+        from . import netauth
+
+        headers = dict(HEADERS)
+        netauth.ensure(headers)
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
