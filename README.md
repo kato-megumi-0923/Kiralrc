@@ -180,6 +180,8 @@ models/            本地模型与 HuggingFace / Torch 统一缓存目录（不�
 ```
 
 **致谢与代码来源**：
+- [MyGo](https://github.com/nya-owo/mygo)（MIT）：Go 原生桌面 UI 框架，窗口、绘制、控件与音频输出都由它支撑（`internal/app/` 全部界面代码）。
+- [mewkiz/flac](https://github.com/mewkiz/flac)、[hajimehoshi/go-mp3](https://github.com/hajimehoshi/go-mp3)（均为 MIT）：曲库扫描时直读 FLAC / MP3 标签。
 - [HubertFA v0.0.7](https://github.com/wolfgitpr/HubertFA)（Apache-2.0）：中文 ONNX 歌声强制对齐核心与推理代码（`kiralrc/_hubertfa/`）。
 - [qiuqiao/SOFA](https://github.com/qiuqiao/SOFA)（MIT）：中文拼音词典与可选歌声对齐模型（`third_party/SOFA/`）。
 - [NextFire MMS](https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn) & [Echora-300M MMS](https://huggingface.co/hcX02/echora-mms-300m-multilingual-lyrics-forced-aligner)：日/英/多语歌声歌词强制对齐模型。
