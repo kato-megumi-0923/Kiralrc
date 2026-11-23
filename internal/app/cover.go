@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"image"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,20 @@ func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 	if cached := cachedCover(audioPath); cached != nil {
 		return cached
 	}
+	// 3) 上次解码过的小图：直接读，省下解 600KB 大图的时间
+	if thumbPath := coverThumbPath(audioPath); thumbPath != "" {
+		if file, err := os.Open(thumbPath); err == nil {
+			imageData, _, err := image.Decode(file)
+			file.Close()
+			if err == nil {
+				if bmp := thumbnailOf(imageData); bmp != nil {
+					coverCache.Store(coverCacheKey(audioPath), bmp)
+					return bmp
+				}
+			}
+		}
+	}
+	// 4) 都没有才去解音频里的内嵌封面，解完顺手存一份 JPEG
 	data := readEmbeddedCover(audioPath)
 	if data == nil {
 		return nil
@@ -85,11 +100,53 @@ func (index coverIndex) thumbnail(audioPath string) *ui.Bitmap {
 	}
 	bmp := thumbnailOf(imageData)
 	coverCache.Store(coverCacheKey(audioPath), bmp)
+	saveCoverThumb(audioPath, imageData)
 	return bmp
 }
 
-// thumbnailOf 居中裁成正方形再缩到 128。
-func thumbnailOf(imageData image.Image) *ui.Bitmap {
+// coverThumbPath 缩略图缓存在 work/covers 下，键是「路径 + 修改时间」，
+// 换过封面或重解过音频，键就变了，旧文件自然失效。
+func coverThumbPath(audioPath string) string {
+	abs, err := filepath.Abs(audioPath)
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(audioPath)
+	if err != nil {
+		return ""
+	}
+	sum := md5.Sum([]byte(fmt.Sprintf("%s|%d", abs, info.ModTime().UnixNano())))
+	return filepath.Join(appRootDir(), "work", "covers", fmt.Sprintf("%x.jpg", sum[:8]))
+}
+
+func saveCoverThumb(audioPath string, imageData image.Image) {
+	path := coverThumbPath(audioPath)
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	thumb := thumbnailImage(imageData)
+	if thumb == nil {
+		return
+	}
+	tmp := path + ".tmp"
+	file, err := os.Create(tmp)
+	if err != nil {
+		return
+	}
+	if err := jpeg.Encode(file, thumb, &jpeg.Options{Quality: 88}); err != nil {
+		file.Close()
+		os.Remove(tmp)
+		return
+	}
+	file.Close()
+	_ = os.Rename(tmp, path)
+}
+
+// thumbnailImage 居中裁成正方形再缩到 128。
+func thumbnailImage(imageData image.Image) image.Image {
 	bounds := imageData.Bounds()
 	size := min(bounds.Dx(), bounds.Dy())
 	if size <= 0 {
@@ -98,7 +155,15 @@ func thumbnailOf(imageData image.Image) *ui.Bitmap {
 	x, y := bounds.Min.X+(bounds.Dx()-size)/2, bounds.Min.Y+(bounds.Dy()-size)/2
 	thumbnail := image.NewRGBA(image.Rect(0, 0, 128, 128))
 	draw.ApproxBiLinear.Scale(thumbnail, thumbnail.Bounds(), imageData, image.Rect(x, y, x+size, y+size), draw.Src, nil)
-	return ui.NewBitmap(thumbnail)
+	return thumbnail
+}
+
+func thumbnailOf(imageData image.Image) *ui.Bitmap {
+	thumb := thumbnailImage(imageData)
+	if thumb == nil {
+		return nil
+	}
+	return ui.NewBitmap(thumb)
 }
 
 var coverCache sync.Map // 路径+修改时间 → *ui.Bitmap
