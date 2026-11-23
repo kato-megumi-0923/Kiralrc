@@ -219,10 +219,15 @@ func (a *app) viewSidebar(c *ui.Context) {
 			})
 			ui.Text(c, "Kiralrc").FontSize(15.5).FontWeight(800).SingleLine()
 			ui.Box(c).Grow(1)
-			// BETA 用小胶囊标一下，别像版本号似的跟在名字后面
-			beta := ui.Row(c).Padding(7, 7, 6, 7).Radius(999).Background(p.surface2)
-			beta.Children(func() {
-				ui.Text(c, "BETA").FontSize(9.5).FontWeight(800).TextColor(p.muted).SingleLine()
+			// BETA 胶囊，右上角挂个上标样的版本号
+			holder := ui.Box(c)
+			holder.Children(func() {
+				beta := ui.Row(c).Padding(7, 7, 6, 7).Radius(999).Background(p.surface2)
+				beta.Children(func() {
+					ui.Text(c, "BETA").FontSize(9.5).FontWeight(800).TextColor(p.muted).SingleLine()
+				})
+				ui.Text(c, "v"+appVersion).Absolute().Right(1).Top(-7).FontSize(8).
+					FontWeight(700).TextColor(p.faint).SingleLine()
 			})
 		})
 
@@ -3463,9 +3468,6 @@ func (a *app) viewSettings(c *ui.Context) {
 					}
 				})
 
-				ui.Row(c).Margin(0, 4, 0, 0).Children(func() {
-					ui.Text(c, "Kiralrc v"+appVersion).FontSize(11.5).TextColor(p.faint).SingleLine()
-				})
 			})
 		})
 	})
