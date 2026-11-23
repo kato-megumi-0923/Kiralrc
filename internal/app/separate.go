@@ -24,13 +24,16 @@ type sepStem struct {
 	Label string
 	Path  string
 	Size  int64
+	First float64 // 第一次出声的位置（秒）
+	Dur   float64 // 总长（秒）
 }
 
 var sepLabels = map[string]string{
-	"vocals": "人声",
-	"drums":  "鼓",
-	"bass":   "贝斯",
-	"other":  "其他",
+	"vocals":        "人声",
+	"accompaniment": "伴奏",
+	"drums":         "鼓",
+	"bass":          "贝斯",
+	"other":         "其他",
 }
 
 func sepCacheDir(audio string) string {
@@ -129,11 +132,13 @@ func (a *app) startSeparate(audioPath string) {
 				continue
 			}
 			var msg struct {
-				Stage string `json:"stage"`
-				Pct   int    `json:"pct"`
-				Stem  string `json:"stem"`
-				Path  string `json:"path"`
-				Size  int64  `json:"size"`
+				Stage    string  `json:"stage"`
+				Pct      int     `json:"pct"`
+				Stem     string  `json:"stem"`
+				Path     string  `json:"path"`
+				Size     int64   `json:"size"`
+				First    float64 `json:"first"`
+				Duration float64 `json:"duration"`
 			}
 			if json.Unmarshal([]byte(line), &msg) != nil {
 				continue
@@ -143,7 +148,8 @@ func (a *app) startSeparate(audioPath string) {
 				if label == "" {
 					label = msg.Stem
 				}
-				stems = append(stems, sepStem{Name: msg.Stem, Label: label, Path: msg.Path, Size: msg.Size})
+				stems = append(stems, sepStem{Name: msg.Stem, Label: label, Path: msg.Path,
+					Size: msg.Size, First: msg.First, Dur: msg.Duration})
 				found := append([]sepStem{}, stems...)
 				a.post(func() { a.sepStems = found })
 				continue
@@ -225,6 +231,15 @@ func (a *app) exportStem(stem sepStem) {
 	}()
 }
 
+// clockOf 把秒数写成 m:ss，给「起声」这类标注用。
+func clockOf(sec float64) string {
+	if sec <= 0 {
+		return "0:00"
+	}
+	total := int(sec + 0.5)
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
 func sizeText(n int64) string {
 	switch {
 	case n >= 1<<20:
@@ -275,43 +290,120 @@ func (a *app) viewSeparate(c *ui.Context) {
 
 		// 结果
 		if len(a.sepStems) == 0 {
-			ui.Text(c, "分离完成后，这里会出现人声、鼓、贝斯、其他四条音轨。").
+			ui.Text(c, "分离完成后，这里会出现人声与伴奏两条音轨。").
 				FontSize(12.5).TextColor(p.muted)
 			return
 		}
 		ui.Column(c).Gap(8).Children(func() {
 			for _, item := range a.sepStems {
 				stemRow := item
-				row := ui.Row(c.Key("sep-"+stemRow.Name)).FillWidth().Height(64).Padding(16, 20, 16, 20).
-					Gap(14).Radius(14).AlignItems(ui.Center).Background(p.surface)
+				playing := a.sepPlaying == stemRow.Name
+				row := ui.Column(c.Key("sep-"+stemRow.Name)).FillWidth().Padding(14, 20, 12, 20).
+					Gap(9).Radius(14).Background(p.surface)
 				row.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
 				row.Children(func() {
-					ui.Text(c, stemRow.Label).Width(64).Shrink(0).FontSize(14).FontWeight(700)
-					ui.Text(c, sizeText(stemRow.Size)).Width(90).Shrink(0).FontSize(12.5).TextColor(p.muted)
-					ui.Text(c, filepath.Base(stemRow.Path)).Grow(1).MinWidth(0).FontSize(12).
-						TextColor(p.faint).SingleLine()
-					if pillButton(c.Key("sep-play-"+stemRow.Name), iconPlay, "试听", p.surface2, p.text).Clicked() {
-						a.previewStem(stemRow)
-					}
-					if pillButton(c.Key("sep-export-"+stemRow.Name), iconDownload, "导出", p.accent, p.onAccent).Clicked() {
-						a.exportStem(stemRow)
-					}
+					ui.Row(c).AlignItems(ui.Center).Gap(14).Children(func() {
+						ui.Text(c, stemRow.Label).Width(64).Shrink(0).FontSize(14).FontWeight(700)
+						ui.Text(c, sizeText(stemRow.Size)).Width(90).Shrink(0).FontSize(12.5).TextColor(p.muted)
+						ui.Text(c, filepath.Base(stemRow.Path)).Grow(1).MinWidth(0).FontSize(12).
+							TextColor(p.faint).SingleLine()
+						playLabel, playIcon := "试听", iconPlay
+						if playing && !a.sepPaused {
+							playLabel, playIcon = "暂停", iconPause
+						} else if playing && a.sepPaused {
+							playLabel, playIcon = "继续", iconPlay
+						}
+						if pillButton(c.Key("sep-play-"+stemRow.Name), playIcon, playLabel, p.surface2, p.text).Clicked() {
+							a.previewStem(stemRow)
+						}
+						if pillButton(c.Key("sep-export-"+stemRow.Name), iconDownload, "导出", p.accent, p.onAccent).Clicked() {
+							a.exportStem(stemRow)
+						}
+					})
+					// 进度条：浅底 + 已播放段，竖线标出第一次出声的位置
+					ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+						bar := ui.Box(c).Grow(1).MinWidth(0).Height(4).Radius(999).Background(p.surface2)
+						bar.Draw(func(pt *ui.Painter, r ui.Rect) {
+							dur := stemRow.Dur
+							if dur <= 0 {
+								return
+							}
+							if playing {
+								pos, _ := a.player.Position()
+								if pos > 0 {
+									w := r.W * float32(pos/dur)
+									if w > r.W {
+										w = r.W
+									}
+									pt.Fill(ui.Rect{X: r.X, Y: r.Y, W: w, H: r.H}, p.accent, 999)
+								}
+							}
+							if stemRow.First > 0 && stemRow.First < dur {
+								x := r.X + r.W*float32(stemRow.First/dur)
+								pt.Fill(ui.Rect{X: x - 1, Y: r.Y - 4, W: 2, H: r.H + 8}, p.warn, 1)
+							}
+						})
+						label := "起声 " + clockOf(stemRow.First)
+						if stemRow.First <= 0 {
+							label = "全程无声"
+						}
+						ui.Text(c, label).Shrink(0).FontSize(11).TextColor(p.muted)
+					})
 				})
 			}
 		})
 	})
 }
 
-// previewStem 试听一条音轨（直接喂给播放器，不做临时转码）。
+// previewStem 试听：同一行再点一次暂停，再点一次继续。
 func (a *app) previewStem(stem sepStem) {
 	if a.player == nil || a.win == nil {
 		return
 	}
+	if a.sepPlaying == stem.Name {
+		if a.sepPaused {
+			a.sepPaused = false
+			_ = a.player.Play()
+			a.pollStem(stem.Name)
+		} else {
+			a.sepPaused = true
+			_ = a.player.Pause()
+		}
+		a.win.Invalidate()
+		return
+	}
+	name := stem.Name
 	go func() {
 		if _, err := a.player.Load(stem.Path); err != nil {
 			a.post(func() { a.toast = "试听失败：" + err.Error() })
 			return
 		}
 		_ = a.player.Play()
+		a.post(func() {
+			a.sepPlaying = name
+			a.sepPaused = false
+		})
+		a.pollStem(name)
+	}()
+}
+
+// pollStem 播放期间每 120ms 重绘一次进度条，停了就收尾。
+func (a *app) pollStem(name string) {
+	go func() {
+		last := -1.0
+		for a.player.Playing() {
+			pos, _ := a.player.Position()
+			if pos != last {
+				last = pos
+				a.post(func() { a.win.Invalidate() })
+			}
+			time.Sleep(120 * time.Millisecond)
+		}
+		a.post(func() {
+			if a.sepPlaying == name && !a.sepPaused {
+				a.sepPlaying = ""
+			}
+			a.win.Invalidate()
+		})
 	}()
 }

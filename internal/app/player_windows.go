@@ -231,6 +231,16 @@ func (p *audioPlayer) Load(path string) (float64, error) {
 	return p.dur, nil
 }
 
+// Playing 是否正在出声。
+func (p *audioPlayer) Playing() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pl == nil {
+		return false
+	}
+	return p.pl.Playing()
+}
+
 func (p *audioPlayer) Play() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

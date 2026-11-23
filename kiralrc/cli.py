@@ -264,11 +264,14 @@ def cmd_separate(a) -> int:
             print(f"[{stage}] {pct}%", flush=True)
 
     cache.purge()                       # 顺手清掉过期的
-    res = au.separate(src, prefix, device=a.device, on_progress=report)
+    res = au.separate(src, prefix, device=a.device, on_progress=report, combine_others=True)
     for name, path in res.items():
         if getattr(a, "json", False):
             print(json.dumps({"stem": name, "path": str(path),
-                              "size": path.stat().st_size}, ensure_ascii=False), flush=True)
+                              "size": path.stat().st_size,
+                              "first": au.first_sound(path),
+                              "duration": round(au.duration(path), 3)},
+                             ensure_ascii=False), flush=True)
         else:
             print(f"[ok] {name}: {path}")
     return 0

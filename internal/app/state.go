@@ -177,6 +177,8 @@ type app struct {
 	sepStage          string
 	sepPct            int
 	sepStems          []sepStem
+	sepPlaying        string // 正在试听哪条轨
+	sepPaused         bool
 	downloadDone      int
 	downloadAll       int
 	downloadNote      string

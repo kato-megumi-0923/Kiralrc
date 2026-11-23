@@ -87,7 +87,7 @@ class _TqdmTap(io.TextIOBase):
 
 def separate(path: str | Path, out_prefix: str | Path, model_name: str = "htdemucs",
              sr: int = 44100, device: str | None = None,
-             on_progress=None) -> dict[str, Path]:
+             on_progress=None, combine_others: bool = False) -> dict[str, Path]:
     """demucs 分离，返回 {stem: wav 路径}。权重首次运行会下载（需能访问 fbaipublicfiles）。
 
     on_progress(stage, pct)：stage 是 decode / model / separate / write，pct 是 0–100。
@@ -124,14 +124,39 @@ def separate(path: str | Path, out_prefix: str | Path, model_name: str = "htdemu
     report("separate", 100)
     src = src * ref.std() + ref.mean()
 
+    # 只要人声与伴奏时，其余几轨相加就是伴奏，不必留中间文件
+    if combine_others and "vocals" in model.sources:
+        vi = model.sources.index("vocals")
+        accompaniment = src.sum(0) - src[vi]
+        pairs = [("vocals", src[vi]), ("accompaniment", accompaniment)]
+    else:
+        pairs = [(name, src[i]) for i, name in enumerate(model.sources)]
+
     result = {}
     report("write", 0)
-    for i, name in enumerate(model.sources):
+    for i, (name, data) in enumerate(pairs):
         p = out_prefix.with_name(f"{out_prefix.name}_{name}.wav")
-        write_wav(p, src[i].numpy(), sr)
+        write_wav(p, data.numpy(), sr)
         result[name] = p
     report("write", 100)
     return result
+
+
+def first_sound(path: str | Path, sr: int = 8000, hop: float = 0.02,
+                ratio: float = 0.02) -> float:
+    """第一次出声音的位置（秒）：包络里第一次超过峰值一定比例的那一帧。"""
+    pcm = decode(path, sr)
+    env = rms_envelope(pcm, sr, hop)
+    if not len(env):
+        return 0.0
+    peak = float(env.max())
+    if peak <= 1e-6:
+        return 0.0
+    threshold = max(1e-4, peak * ratio)
+    for i, value in enumerate(env):
+        if value >= threshold:
+            return round(i * hop, 3)
+    return 0.0
 
 
 def transcode(src: str | Path, dst: str | Path) -> Path:
