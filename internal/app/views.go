@@ -960,7 +960,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 					if pillButton(c.Key("lib-download-lyrics"), iconDownload, fmt.Sprintf("下载歌词（%d 首）", selCount), p.surface2, p.text).Clicked() {
 						a.downloadLyricsOf(selTracks)
 					}
-					if pillButton(c.Key("lib-start-align"), iconPlay, fmt.Sprintf("开始对齐歌词（%d 首）", selCount), p.accent, p.onAccent).Clicked() {
+					if pillButton(c.Key("lib-start-align"), iconPlay, fmt.Sprintf("对齐歌词（%d 首）", selCount), p.accent, p.onAccent).Clicked() {
 						a.enqueueFromLibrary()
 						a.navigate(pageQueue, 1)
 					}
