@@ -804,7 +804,8 @@ func (a *app) refreshScrapeItems(paths []string) {
 
 func (a *app) viewScrape(c *ui.Context) {
 	p := a.pal
-	col := ui.Column(c).Fill().Padding(pageGap, 38, 108, 38).Gap(12)
+	// 底部不留 108px：这一页没有浮动播放条压着，留白只会把底栏顶到半空
+	col := ui.Column(c).Fill().Padding(pageGap, 38, 20, 38).Gap(12)
 	col.Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
 			if pillButton(c.Key("scrape-back"), iconPrev, "返回工具箱", p.surface2, p.text).Clicked() {
