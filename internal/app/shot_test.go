@@ -149,9 +149,9 @@ func seedScrapeDemo(a *app) {
 	items := []scrapeTrack{
 		{Name: "届かない恋.flac", Title: "届かない恋", Artist: "上原れな", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK"},
 		{Name: "幸せな記憶.flac", Title: "幸せな記憶", Artist: "上原れな", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK",
-			Year: "2011", CoverW: 1200, CoverH: 1200},
+			Year: "2011", CoverW: 1200, CoverH: 1200, AlbumID: 2781646},
 		{Name: "Twinkle Snow.flac", Title: "Twinkle Snow", Artist: "津田朱里", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK",
-			Year: "2011", NeteaseID: 28718123, CoverW: 300, CoverH: 300},
+			Year: "2011", NeteaseID: 28718123, CoverW: 300, CoverH: 300, AlbumID: 2781646},
 		{Name: "answer.flac", Title: "answer", Artist: "上原れな", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK",
 			Writable: false},
 		{Name: "POWDER SNOW.flac", Title: "POWDER SNOW", Artist: "米澤円", Album: "WHITE ALBUM 2 ORIGINAL SOUNDTRACK",

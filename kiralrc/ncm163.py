@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import base64
 import json
 
@@ -155,6 +157,7 @@ def encrypt_ecb(data: bytes, key: bytes = _KEY) -> bytes:
     return bytes(out)
 
 
+@lru_cache(maxsize=1024)   # 一首歌的 163 key 会被问两次（歌曲 ID、专辑 ID），别解两遍
 def music_info(value: str | None) -> dict | None:
     """`163 key(Don't modify):…`（或裸 Base64）→ 歌曲信息；解不出就 None。"""
     if not value:

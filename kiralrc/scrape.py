@@ -256,6 +256,70 @@ def _m4a_meta(audio) -> dict:
     return out
 
 
+def _album_id_from_tags(tags) -> int:
+    """从已经读出来的标签里取专辑 ID（163 key 里的 albumId，或明文 NETEASE_ALBUM_ID）。"""
+    if not tags:
+        return 0
+    plain = 0
+    encrypted: list[str] = []
+    for label, texts in tx.tag_strings(tags):
+        if "ALBUM_ID" in label.upper():
+            for text in texts:
+                digits = re.search(r"\d+", text)
+                if digits and not plain:
+                    plain = int(digits.group(0))
+            continue
+        for text in texts:
+            if "163 key" in text:
+                encrypted.append(text)
+        if "163 key" in label.upper():
+            encrypted.extend(t for t in texts if t not in encrypted)
+    if plain:
+        return plain
+    from . import ncm163
+
+    for text in encrypted:
+        info = ncm163.music_info(text) or {}
+        try:
+            aid = int(info.get("albumId") or 0)
+        except Exception:
+            aid = 0
+        if aid > 0:
+            return aid
+        album = info.get("album")
+        if isinstance(album, dict):
+            try:
+                aid = int(album.get("id") or 0)
+            except Exception:
+                aid = 0
+            if aid > 0:
+                return aid
+    return 0
+
+
+def album_id_of(path: str | Path) -> int:
+    """文件里记着的网易云**专辑** ID。
+
+    两个来源：Kiralrc 解 NCM 时写的 NETEASE_ALBUM_ID，和 Cloudy/网易云客户端写的
+    163 key（里面的 albumId）。都没有就 0。
+    """
+    try:
+        from mutagen import File as MutagenFile
+
+        audio = MutagenFile(str(path))
+        tags = getattr(audio, "tags", None) if audio is not None else None
+    except Exception:
+        tags = None
+    if not tags:
+        try:
+            from mutagen.id3 import ID3
+
+            tags = ID3(str(path))
+        except Exception:
+            return 0
+    return _album_id_from_tags(tags)
+
+
 def inspect_track(path: str | Path) -> dict:
     """读一首歌的现有标签、年份、网易云 ID 与正面封面分辨率。"""
     p = Path(path)
@@ -266,7 +330,7 @@ def inspect_track(path: str | Path) -> dict:
         "format": WRITABLE.get(ext, ext.lstrip(".")),
         "writable": ext in WRITABLE,
         "title": "", "artist": "", "album": "", "year": "",
-        "netease_id": 0, "cover_w": 0, "cover_h": 0,
+        "netease_id": 0, "album_id": 0, "cover_w": 0, "cover_h": 0,
     }
     try:
         info["netease_id"] = int(tx.netease_id_of(p) or 0)
@@ -294,6 +358,24 @@ def inspect_track(path: str | Path) -> dict:
             meta = _id3_meta(getattr(audio, "tags", None))
     except Exception:
         meta = {"title": "", "artist": "", "album": "", "year": "", "cover": b""}
+
+    # 专辑 ID 复用刚读到的标签，不再为它多开一次文件
+    try:
+        tags = getattr(audio, "tags", None) if audio is not None else None
+        if not tags and ext == ".mp3":
+            tags = _id3_tags(p)
+        info["album_id"] = _album_id_from_tags(tags)
+    except Exception:
+        info["album_id"] = 0
+
+    # 专辑 ID 复用刚读到的标签，不再为它多开一次文件
+    try:
+        tags = getattr(audio, "tags", None) if audio is not None else None
+        if not tags and ext == ".mp3":
+            tags = _id3_tags(p)
+        info["album_id"] = _album_id_from_tags(tags)
+    except Exception:
+        info["album_id"] = 0
 
     info.update({k: meta[k] for k in ("title", "artist", "album", "year")})
     w, h = image_size(meta["cover"])
@@ -325,6 +407,15 @@ def _pic_url(url: str, size: int = 0) -> str:
     return f"{url}?param={size}y{size}"
 
 
+def _publish_year(publish) -> str:
+    if not publish:
+        return ""
+    try:
+        return _dt.datetime.fromtimestamp(int(publish) / 1000).strftime("%Y")
+    except Exception:
+        return ""
+
+
 def _netease_candidate(song: dict) -> dict:
     album = song.get("album") or song.get("al") or {}
     artists = song.get("artists") or song.get("ar") or []
@@ -333,13 +424,7 @@ def _netease_candidate(song: dict) -> dict:
         name = a.get("name") if isinstance(a, dict) else str(a)
         if name:
             names.append(str(name))
-    publish = album.get("publishTime") or 0
-    year = ""
-    if publish:
-        try:
-            year = _dt.datetime.fromtimestamp(int(publish) / 1000).strftime("%Y")
-        except Exception:
-            year = ""
+    year = _publish_year(album.get("publishTime"))
     pic = album.get("picUrl") or album.get("blurPicUrl") or ""
     return {
         "source": "网易云",
@@ -376,6 +461,70 @@ def netease_details(ids: list[int], netease_json=None, state: dict | None = None
         return []
     songs = data.get("songs") or []
     return [s for s in songs if isinstance(s, dict)]
+
+
+ALBUM_RETRY = 3                      # 反爬（code -462）是随机的：同一张专辑多要两次就好
+ALBUM_BLOCKED_CODES = {-462, -460, 400}
+
+
+ALBUM_RETRY = 3                      # 反爬（code -462）是随机的：同一张专辑多要两次就好
+ALBUM_BLOCKED_CODES = {-462, -460, 400}
+
+
+def album_detail(album_id: int, album_json=None, state: dict | None = None) -> dict:
+    """一张专辑的曲目表、封面与年份（每张专辑只查一次）。
+
+    返回 {} 表示没取到：
+    - 被限速（405/418/429）→ state["rate_limited"]，交给上层走同一套冷却；
+    - 被反爬挡住（code -462，随机出现）→ state["blocked"]，属于「等会儿再来」。
+    """
+    aid = int(album_id or 0)
+    if aid <= 0:
+        return {}
+    get = album_json or tx._get_json
+    url = f"https://music.163.com/api/album/{aid}?ext=true"
+
+    album: dict = {}
+    songs: list = []
+    last_code = None
+    for attempt in range(ALBUM_RETRY):
+        try:
+            data = get(url) or {}
+        except tx.RateLimited:
+            if state is not None:
+                state["rate_limited"] = True
+            return {}
+        except Exception:
+            data = {}
+        album = data.get("album") or {}
+        songs = data.get("songs") or album.get("songs") or []
+        if album and songs:
+            break
+        last_code = data.get("code")
+        if last_code in ALBUM_BLOCKED_CODES or not data:
+            time.sleep(1.2)          # 反爬：换个时间点再要一次
+            continue
+        break
+
+    if not album or not songs:
+        if state is not None and last_code in ALBUM_BLOCKED_CODES:
+            state["blocked"] = True
+        return {}
+
+    tracks = []
+    for song in songs:
+        if not isinstance(song, dict):
+            continue
+        song = dict(song)
+        song.setdefault("album", album)   # 曲目里通常不带专辑信息，补上再算候选
+        tracks.append(_netease_candidate(song))
+    return {
+        "id": aid,
+        "name": str(album.get("name") or ""),
+        "year": _publish_year(album.get("publishTime")),
+        "cover_url": _pic_url(album.get("picUrl") or ""),
+        "tracks": tracks,
+    }
 
 
 def _netease_candidates(query, artist, title, netease_id, limit,
@@ -602,7 +751,7 @@ def artist_set(text: str) -> frozenset[str]:
     return frozenset(p for p in (tx._fold(x) for x in _ARTIST_SPLIT.split(str(text or ""))) if p)
 
 
-def strict_match(local: dict, cand: dict) -> bool:
+def strict_match(local: dict, cand: dict, check_album: bool = True) -> bool:
     """歌名、版本、歌手、专辑都对上才算同一首（有时长再对一次时长）。
 
     比之前严的地方：
@@ -621,9 +770,12 @@ def strict_match(local: dict, cand: dict) -> bool:
     if a1 and a1 != a2:
         return False
 
-    alb1, alb2 = fold(local.get("album", "")), fold(cand.get("album", ""))
-    if alb1 and alb1 != alb2:
-        return False
+    if check_album:
+        # 按专辑 ID 分组时专辑名可能两边写法不同（本地标签 vs 网易云正式名），
+        # 已经确认是同一张专辑就不必再卡这一项
+        alb1, alb2 = fold(local.get("album", "")), fold(cand.get("album", ""))
+        if alb1 and alb1 != alb2:
+            return False
 
     d1 = int(local.get("duration") or 0)
     d2 = int(cand.get("duration") or 0)
@@ -634,13 +786,14 @@ def strict_match(local: dict, cand: dict) -> bool:
     return True
 
 
-def find_unique_match(local: dict, cands: list[dict]) -> tuple[dict, str]:
+def find_unique_match(local: dict, cands: list[dict],
+                      check_album: bool = True) -> tuple[dict, str]:
     """在候选里找唯一一条对得上的。
 
     返回 (候选, 原因)：原因 "" 表示命中，"none" 没对上，"ambiguous" 有多条
     都对得上（不同录音版本）——这种留给用户手选，绝不替他挑第一条。
     """
-    hits = [c for c in cands if strict_match(local, c)]
+    hits = [c for c in cands if strict_match(local, c, check_album)]
     if not hits:
         return {}, "none"
     if len({int(c.get("song_id") or 0) for c in hits}) > 1:
@@ -840,13 +993,25 @@ _RESOLVE_NOTES = {
     "error": "网易云搜索失败，稍后再试",
 }
 
+_ALBUM_NOTES = {
+    "rate_limited": "网易云限速，先暂停",
+    "ambiguous": "这张专辑里有多条都对得上（不同版本），请手动挑一条",
+    "error": "专辑曲目取不到，稍后再试",
+}
+
 
 def _resolve_note(reason: str) -> str:
     return _RESOLVE_NOTES.get(reason, "网易云没搜到歌名/歌手/专辑全对得上的")
 
 
+def _album_note(reason: str) -> str:
+    return _ALBUM_NOTES.get(reason, "这张专辑里没有歌名/歌手/时长都对得上的")
+
+
 def apply_one(item: dict, by_id: dict | None = None,
-              search_cache: dict | None = None) -> dict:
+              search_cache: dict | None = None,
+              albums: dict | None = None,
+              covers: dict | None = None) -> dict:
     """写一首。返回 {path, ok, changed, note, readonly}。
 
     计划里没带 candidate、只带了 netease_id 时，用 by_id 里预取到的那条
@@ -878,7 +1043,22 @@ def apply_one(item: dict, by_id: dict | None = None,
             local["netease_id"] = 0
 
     if not cand:
-        if str(item.get("resolve") or "") == "netease":
+        kind = str(item.get("resolve") or "")
+        if kind == "album":
+            # 「按专辑补全」：候选来自这张专辑的曲目表，不再搜
+            entry = (albums or {}).get(int(item.get("album_id") or 0)) or {}
+            tracks = entry.get("tracks") or []
+            if not tracks:
+                res["note"] = "专辑曲目没取到（可能被限速）"
+                res["skipped"] = True
+                return res
+            cand, reason = find_unique_match(local, tracks, check_album=False)
+            if not cand:
+                res["note"] = _album_note(reason)
+                res["skipped"] = True
+                res["needs_pick"] = reason == "ambiguous"
+                return res
+        elif kind == "netease":
             # 「按网易云补全」：拿本地歌名/歌手去搜，只认唯一一条全对得上的
             cand, reason = resolve_by_search(local, path, search_cache)
             if not cand:
@@ -907,7 +1087,13 @@ def apply_one(item: dict, by_id: dict | None = None,
     if want.get("cover_url"):
         cover_url = resize_cover_url(str(want.pop("cover_url")),
                                     int(item.get("cover_size") or 0))
-        data = _download(cover_url)
+        # 同一张专辑的封面只下一次：covers 按最终 URL 缓存（下载失败也缓存，别反复试）
+        if covers is not None and cover_url in covers:
+            data = covers[cover_url]
+        else:
+            data = _download(cover_url)
+            if covers is not None:
+                covers[cover_url] = data
         problem = cover_problem(data)
         if problem:
             # CDN 出错常回一张 HTML（200 + text/html，字节数还不小）：
@@ -966,9 +1152,14 @@ def apply_plan(plan, on_item=None) -> dict:
     计划里只给 netease_id 的条目（「按 ID 批量补全」走这条路）：先把所有 ID
     一次请求补齐（同批重复的 ID 只问一次），再逐首写——一首一个请求会被限速。
 
+    带 album_id 的条目（「按专辑补全」）走另一条路：轮到这张专辑时取一次曲目表，
+    之后同专辑的每首都在表里按 歌名/版本/歌手/时长 唯一确认；封面按 URL 共享，
+    整张专辑只下载一次。
+
     限速在这里统一兜住：第一次吃到 405/418/429 就停手，剩下的记成「暂停」并带上
     retry_after，交给调用方等冷却结束再从 resume_from 续跑；没跑到的条目也要
-    报一条结果，进度条才不会停在半路。
+    报一条结果，进度条才不会停在半路。专辑查询用的是同一套冷却，所以暂停点
+    会落在「当前这张专辑的第一首」上。
     """
     items = plan.get("items") if isinstance(plan, dict) else plan
     items = [it for it in (items or []) if isinstance(it, dict)]
@@ -1004,17 +1195,51 @@ def apply_plan(plan, on_item=None) -> dict:
 
     ok = failed = skipped = picks = 0
     last_search = 0.0
-    search_cache: dict[tuple[str, str], tuple[dict, str]] = {}
+    search_cache: dict[tuple, list] = {}
+    albums: dict[int, dict] = {}
+    album_fail: dict[int, str] = {}
+    covers: dict[str, bytes] = {}
+
+    def ensure_album(aid: int) -> str:
+        """取一次专辑（曲目表 + 封面地址）；返回 "" 表示可用。"""
+        if aid in albums or aid in album_fail:
+            return album_fail.get(aid, "")
+        state: dict = {}
+        try:
+            info = album_detail(aid, state=state)
+        except tx.RateLimited:
+            state["rate_limited"] = True
+            info = {}
+        except Exception:
+            info = {}
+        if not info:
+            why = "rate_limited" if state.get("rate_limited") else "error"
+            album_fail[aid] = why
+            return why
+        albums[aid] = info
+        return ""
+
     for i, item in enumerate(items, 1):
         if netauth.cooling_for() > 0:
             return pause("网易云限速，已暂停", i, ok, skipped, failed, picks)
+
+        album_id = int(item.get("album_id") or 0)
+        if album_id and str(item.get("resolve") or "") == "album":
+            why = ensure_album(album_id)
+            if why == "rate_limited":
+                # 这张专辑没取到，它和后面的都算待处理，续跑从这首开始
+                return pause("网易云限速，专辑曲目没取完，已暂停", i, ok, skipped, failed, picks)
+            if why:
+                # 反爬/接口抽风：也按暂停处理，等会儿从这张专辑重来（别把歌永久跳过）
+                return pause(f"专辑 {album_id} 的曲目表没取到，等会儿重试", i, ok, skipped, failed, picks)
+
         if str(item.get("resolve") or "") == "netease":
             gap = time.monotonic() - last_search
             if gap < RESOLVE_GAP:
                 time.sleep(RESOLVE_GAP - gap)   # 一首一次搜索，别把网易云问急了
             last_search = time.monotonic()
 
-        res = apply_one(item, by_id, search_cache)
+        res = apply_one(item, by_id, search_cache, albums, covers)
 
         if netauth.cooling_for() > 0 and not res["ok"]:
             # 这一首没办成、而且是限速造成的：它算「待处理」，从本首续跑。

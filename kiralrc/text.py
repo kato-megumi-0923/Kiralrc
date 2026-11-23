@@ -149,6 +149,49 @@ def netease_id_from_downloads(path: str | Path) -> int | None:
     return _downloads_index().get(_path_tail(str(path)))
 
 
+def tag_texts(value) -> list[str]:
+    """标签值的文本列表。
+
+    别对 ID3 帧直接 str()：APIC 的 __repr__ 会把整张封面打进字符串里，
+    一个 3MB 的封面能拖慢几十毫秒。帧只取 .text。
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        out: list[str] = []
+        for item in value:
+            out.extend(tag_texts(item))
+        return out
+    if isinstance(value, (bytes, bytearray)):
+        return []
+    text = getattr(value, "text", None)
+    if isinstance(text, list):
+        return [str(x) for x in text]
+    if text is not None:
+        return [str(text)]
+    if getattr(value, "data", None) is not None:
+        return []                      # APIC / PRIV 这类二进制帧：没有文本可读，别 str()
+    return [str(value)]
+
+
+def tag_strings(tags) -> list[tuple[str, list[str]]]:
+    """(键名 + 描述, 文本值)：一次遍历供 ID / 专辑 ID 共用。"""
+    out: list[tuple[str, list[str]]] = []
+    if not tags:
+        return out
+    try:
+        for key in tags.keys():
+            raw = tags[key]
+            label = str(key)
+            desc = str(getattr(raw, "desc", "") or "")
+            if desc:
+                label += " " + desc
+            out.append((label, tag_texts(raw)))
+    except Exception:
+        return out
+    return out
+
+
 def netease_id_from_file(path: str | Path) -> int | None:
     """音频标签里的网易云 ID，先解 163 key，再看 Cloudy 写的明文标签。
 
@@ -175,17 +218,16 @@ def netease_id_from_file(path: str | Path) -> int | None:
         return None
     encrypted: list[str] = []
     plain = None
-    try:
-        for key in tags.keys():
-            raw = tags[key]
-            for text in (raw if isinstance(raw, list) else [raw]):
-                text = str(text)
-                if "163 key" in text:
-                    encrypted.append(text)
-                elif "NETEASE_ID" in str(key).upper():
-                    plain = plain or text
-    except Exception:
-        return None
+    for label, texts in tag_strings(tags):
+        if "NETEASE_ID" in label.upper():
+            if texts and not plain:
+                plain = texts[0]
+            continue
+        for text in texts:
+            if "163 key" in text:
+                encrypted.append(text)
+        if "163 key" in label.upper():          # TXXX 的 desc 里写着 163 key，值就是密文
+            encrypted.extend(t for t in texts if t not in encrypted)
     for text in encrypted:
         sid = ncm163.music_id(text)
         if sid:

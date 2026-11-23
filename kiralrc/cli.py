@@ -185,6 +185,21 @@ def cmd_scrape(a) -> int:
         print(json.dumps(res, ensure_ascii=False), flush=True)
         return 0
 
+    if action == "album":
+        album_id = tx.parse_song_id(getattr(a, "album_id", ""))
+        if not album_id:
+            print("请给出专辑 ID（纯数字或链接里的 id）")
+            return 2
+        state: dict = {}
+        info = scrape.album_detail(album_id, state=state)
+        if not info:
+            print(json.dumps({"album_id": album_id, "error": "专辑取不到",
+                              "rate_limited": bool(state.get("rate_limited"))},
+                             ensure_ascii=False))
+            return 1
+        print(json.dumps(info, ensure_ascii=False), flush=True)
+        return 0
+
     if action == "apply":
         try:
             plan = scrape.load_plan(a.plan)
@@ -557,6 +572,9 @@ def main(argv: list[str] | None = None) -> int:
     pa = sp.add_parser("apply", help="按计划 JSON 逐首写回，边写边输出进度 JSON")
     pa.add_argument("plan")
     pa.set_defaults(func=cmd_scrape)
+    pal = sp.add_parser("album", help="按网易云专辑 ID 取一次曲目表（调试用）")
+    pal.add_argument("album_id", help="专辑 ID，或 albums.163.com/<id> 这样的链接")
+    pal.set_defaults(func=cmd_scrape)
 
     p = sub.add_parser("clean", help="清理 work/ 中间产物缓存（默认仅清 30 天前，全清需加 --all）")
     p.add_argument("--days", type=float, default=30.0, help="仅清理超过 N 天的缓存（默认 30 天）")

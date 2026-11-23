@@ -40,6 +40,7 @@ type scrapeTrack struct {
 	Album     string `json:"album"`
 	Year      string `json:"year"`
 	NeteaseID int    `json:"netease_id"`
+	AlbumID   int    `json:"album_id"` // 网易云专辑 ID（163 key 或 NETEASE_ALBUM_ID）
 	CoverW    int    `json:"cover_w"`
 	CoverH    int    `json:"cover_h"`
 
@@ -62,8 +63,9 @@ type scrapePlanItem struct {
 	Path      string           `json:"path"`
 	Candidate *scrapeCandidate `json:"candidate,omitempty"`  // 指针才好 omitempty
 	NeteaseID int              `json:"netease_id,omitempty"` // 不给候选时按它去取
+	AlbumID   int              `json:"album_id,omitempty"`   // 按专辑补全：整张专辑只查一次
 	CoverSize int              `json:"cover_size,omitempty"` // 0 原图，1200 请求 1200
-	Resolve   string           `json:"resolve,omitempty"`    // "netease"：后端自己搜（只认全对上的）
+	Resolve   string           `json:"resolve,omitempty"`    // "netease" 搜 / "album" 专辑曲目表
 	Fields    map[string]bool  `json:"fields"`
 	Mode      string           `json:"mode"`
 }
@@ -654,6 +656,56 @@ func (a *app) scrapeByIDTargets() []scrapeTrack {
 		out = append(out, t)
 	}
 	return out
+}
+
+// scrapeAlbumTargets 「按专辑补全」的目标：当前筛选里带专辑 ID、可写、
+// 没写过（覆盖选中时除外）、也没手工挑过候选的曲目。
+func (a *app) scrapeAlbumTargets() []scrapeTrack {
+	out := make([]scrapeTrack, 0, len(a.scrapeItems))
+	for _, idx := range a.scrapeVisible() {
+		t := a.scrapeItems[idx]
+		if t.AlbumID <= 0 || !t.Writable {
+			continue
+		}
+		if t.WriteState == "done" && a.scrapeMode == 0 {
+			continue
+		}
+		if _, picked := a.scrapeSel[t.Path]; picked {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// scrapeAlbumCount 这批曲目覆盖多少张专辑（按钮上要显示「N 张 / M 首」）。
+func scrapeAlbumCount(items []scrapeTrack) int {
+	seen := make(map[int]bool, len(items))
+	for _, t := range items {
+		seen[t.AlbumID] = true
+	}
+	return len(seen)
+}
+
+// applyScrapeByAlbum 按专辑补全：每张专辑只取一次曲目表、下一张封面，
+// 同专辑里的每首按 歌名/版本/歌手/时长 唯一确认后才写。
+func (a *app) applyScrapeByAlbum() {
+	if a.scrapeApplying || a.scrapeBlockedByCooldown() {
+		return
+	}
+	targets := a.scrapeAlbumTargets()
+	if len(targets) == 0 {
+		a.toast = "当前筛选里没有带专辑 ID 的曲目"
+		return
+	}
+	fields, mode := a.scrapeFieldMap(), a.scrapeModeName()
+	a.scrapeResumeTries = 0
+	plan := make([]scrapePlanItem, 0, len(targets))
+	for _, t := range targets {
+		plan = append(plan, scrapePlanItem{Path: t.Path, AlbumID: t.AlbumID, Resolve: "album",
+			CoverSize: a.scrapeCoverSize(), Fields: fields, Mode: mode})
+	}
+	a.runScrapePlan(plan)
 }
 
 // scrapeIDTotal 当前筛选里带 NETEASE_ID 且可写的曲目总数（不管写没写过），
@@ -1559,6 +1611,19 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			ui.Text(c, hint).FontSize(11.5).TextColor(p.muted).Grow(1).MinWidth(0).SingleLine()
 
 			segmented(c.Key("scrape-mode"), &a.scrapeMode, "仅补缺失", "覆盖选中")
+
+			// 有专辑 ID 的走专辑分组：一张专辑查一次、封面下一次，比逐首搜省得多。
+			// 没有专辑 ID 就不显示，别白占底栏。
+			if albums := a.scrapeAlbumTargets(); len(albums) > 0 {
+				bg, fg := p.surface2, p.text
+				if a.scrapeApplying {
+					bg, fg = p.surface2, p.faint
+				}
+				label := fmt.Sprintf("按专辑（%d 张 %d 首）", scrapeAlbumCount(albums), len(albums))
+				if scrapeActionPill(c, "scrape-byalbum", label, bg, fg).Clicked() && !a.scrapeApplying {
+					a.applyScrapeByAlbum()
+				}
+			}
 
 			// 三颗紧凑按钮：按 ID / 按网易云 / 写入。0 首的都灰着，别让它们凭空消失。
 			byID := len(a.scrapeByIDTargets())

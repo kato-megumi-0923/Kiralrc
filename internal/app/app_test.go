@@ -1845,3 +1845,73 @@ func TestScrapeResumeStopsAfterRepeatedRateLimits(t *testing.T) {
 		t.Fatalf("要告诉用户已经停手，实际 %q", a.toast)
 	}
 }
+
+// 「按专辑补全」只挑：有专辑 ID、可写、没写过（覆盖选中除外）、没手工挑过。
+func TestScrapeAlbumTargets(t *testing.T) {
+	a := newApp()
+	a.scrapeItems = []scrapeTrack{
+		{Path: "a.flac", Writable: true, AlbumID: 100},
+		{Path: "b.flac", Writable: true, AlbumID: 100},
+		{Path: "c.flac", Writable: true},                // 没有专辑 ID
+		{Path: "d.flac", Writable: false, AlbumID: 101}, // 只读
+		{Path: "e.flac", Writable: true, AlbumID: 102, WriteState: "done"},
+		{Path: "f.flac", Writable: true, AlbumID: 103},
+	}
+	a.scrapeSel = map[string]scrapeCandidate{"f.flac": {Source: "iTunes"}}
+
+	got := a.scrapeAlbumTargets()
+	if len(got) != 2 || got[0].Path != "a.flac" || got[1].Path != "b.flac" {
+		t.Fatalf("按专辑的目标挑错了：%+v", got)
+	}
+	if n := scrapeAlbumCount(got); n != 1 {
+		t.Fatalf("两首同属一张专辑，应算 1 张，拿到 %d", n)
+	}
+
+	// 覆盖选中：写过的也要重来
+	a.scrapeMode = 1
+	got = a.scrapeAlbumTargets()
+	if len(got) != 3 || scrapeAlbumCount(got) != 2 {
+		t.Fatalf("覆盖选中下应含已写入的：%+v（%d 张）", got, scrapeAlbumCount(got))
+	}
+}
+
+// 计划里要明确写 album_id + resolve=album，后端才知道去取专辑曲目表。
+func TestScrapePlanCarriesAlbum(t *testing.T) {
+	a := newApp()
+	a.scrapeItems = []scrapeTrack{{Path: "a.flac", Writable: true, AlbumID: 16953}}
+	a.scrapeMode = 0
+	plan := []scrapePlanItem{{Path: "a.flac", AlbumID: 16953, Resolve: "album",
+		Fields: map[string]bool{"netease_id": true}, Mode: "fill"}}
+	data, err := json.Marshal(map[string]any{"items": plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload.Items) != 1 {
+		t.Fatalf("计划 JSON 解不动：%s", data)
+	}
+	item := payload.Items[0]
+	if item["album_id"] != float64(16953) || item["resolve"] != "album" {
+		t.Fatalf("计划里少了专辑信息：%s", data)
+	}
+	for _, key := range []string{"candidate", "netease_id"} {
+		if _, ok := item[key]; ok {
+			t.Fatalf("按专辑的计划不该带 %s：%s", key, data)
+		}
+	}
+}
+
+// 检查输出里的 album_id 要能落到 scrapeTrack 上（inspect → 界面 → 计划）。
+func TestScrapeInspectAlbumID(t *testing.T) {
+	var items []scrapeTrack
+	line := `[{"path":"E://m//a.flac","name":"a.flac","writable":true,` +
+		`"title":"晴天","album_id":16953,"netease_id":167870,"cover_w":1200,"cover_h":1200}]`
+	if err := json.Unmarshal([]byte(line), &items); err != nil {
+		t.Fatalf("inspect 输出解不动：%v", err)
+	}
+	if items[0].AlbumID != 16953 {
+		t.Fatalf("album_id 没落到结构体上：%+v", items[0])
+	}
+}

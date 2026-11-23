@@ -498,44 +498,9 @@ def test_cover_only_overwrite_keeps_every_other_field(tmp_path, monkeypatch):
     assert (after["cover_w"], after["cover_h"]) == (1600, 1600)
 
 
-def test_cover_only_overwrite_keeps_every_other_field(tmp_path, monkeypatch):
-    """只勾「高清封面」+「覆盖选中」：其余字段一个都不许动。"""
-    p = make_flac(tmp_path / "a.flac", title="晴天", cover=png_bytes(300, 300),
-                  extra={"artist": "周杰伦", "album": "叶惠美", "date": "2003",
-                         "NETEASE_ID": "186016"})
-    before = scrape.inspect_track(p)
-    assert before["netease_id"] == 186016 and before["year"] == "2003"
-
-    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1600, 1600))
-    res = scrape.apply_one({
-        "path": str(p),
-        "candidate": candidate(title="别的标题", artist="别人", album="别的专辑",
-                               year="1999", song_id=999, cover_url="https://x/big.png"),
-        "fields": {"cover": True}, "mode": "overwrite",
-    })
-
-    assert res["changed"] == ["cover"]
-    after = scrape.inspect_track(p)
-    for key in ("title", "artist", "album", "year", "netease_id"):
-        assert after[key] == before[key], f"{key} 被改了：{before[key]} → {after[key]}"
-    assert (after["cover_w"], after["cover_h"]) == (1600, 1600)
-
-
 
 
 # ---------- 严格匹配：版本、完整艺人、时长 ----------
-
-@pytest.fixture(autouse=True)
-def _fresh_netauth():
-    """每个用例都从「没登录态、没冷却」开始，别互相带。"""
-    from kiralrc import netauth
-
-    netauth.reset()
-    netauth.clear_cooldown()
-    yield
-    netauth.reset()
-    netauth.clear_cooldown()
-
 
 def test_strict_match_keeps_version_tags():
     local = {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269}
@@ -859,84 +824,6 @@ def test_search_cache_keeps_candidates_not_the_pick(tmp_path, monkeypatch):
 
     assert first["song_id"] == 11 and second["song_id"] == 22
     assert len(asked) == 1        # 查了一次，候选复用，但匹配各算各的
-
-
-def test_paused_batch_resumes_from_the_song_that_hit_the_limit(tmp_path, monkeypatch):
-    """第一首就被限速：resume_from 必须指着它，否则它永远不会被重试。"""
-    from kiralrc import netauth
-    from kiralrc.ratelimit import RateLimited
-
-    p = make_flac(tmp_path / "only.flac", title="Only")
-
-    def boom(*a, **k):
-        netauth.record_rate_limit(15)
-        raise RateLimited("操作频繁")
-
-    monkeypatch.setattr(scrape, "_netease_candidates", boom)
-    seen = []
-    summary = scrape.apply_plan({"items": [
-        {"path": str(p), "resolve": "netease", "fields": {"year": True}, "mode": "fill"},
-    ]}, on_item=lambda i, t, r: seen.append(i))
-
-    assert summary["paused"] and summary["resume_from"] == 1
-    assert seen == [1]          # 报了一条，且没把这首算成已完成
-    assert scrape.inspect_track(p)["year"] == ""
-
-
-def test_search_cache_keeps_candidates_not_the_pick(tmp_path, monkeypatch):
-    """同名同歌手不同专辑：缓存候选列表，第二首要按自己的专辑重新匹配。"""
-    a = make_flac(tmp_path / "a.flac", title="晴天",
-                  extra={"artist": "周杰伦", "album": "叶惠美"})
-    b = make_flac(tmp_path / "b.flac", title="晴天",
-                  extra={"artist": "周杰伦", "album": "范特西"})
-    on_album1 = candidate(song_id=11, title="晴天", artist="周杰伦", album="叶惠美", year="2003")
-    on_album2 = candidate(song_id=22, title="晴天", artist="周杰伦", album="范特西", year="2001")
-    asked = []
-
-    def search(*args, **kwargs):
-        asked.append(1)
-        return [on_album1, on_album2]
-
-    monkeypatch.setattr(scrape, "_netease_candidates", search)
-
-    cache: dict = {}
-    first, _ = scrape.resolve_by_search(scrape._local_meta(a, ".flac"), a, cache)
-    second, _ = scrape.resolve_by_search(scrape._local_meta(b, ".flac"), b, cache)
-
-    assert first["song_id"] == 11 and second["song_id"] == 22
-    assert len(asked) == 1        # 查了一次，候选复用，但匹配各算各的
-
-
-def test_resume_from_paused_point_retries_the_failed_song(tmp_path, monkeypatch):
-    """模拟前端的续跑：从 resume_from 接上，被限速那首必须再试一次、且只多试这一次。"""
-    from kiralrc import netauth
-    from kiralrc.ratelimit import RateLimited
-
-    paths = [make_flac(tmp_path / f"{n}.flac", title=n.upper(), extra={"artist": n})
-             for n in ("a", "b", "c")]
-    plan = [{"path": str(p), "resolve": "netease",
-             "fields": {"year": True}, "mode": "fill"} for p in paths]
-
-    seen = []
-
-    def search(query, *args, **kwargs):
-        seen.append(query)
-        if len(seen) == 1:
-            netauth.record_rate_limit(5)
-            raise RateLimited("操作频繁")
-        return []
-
-    monkeypatch.setattr(scrape, "_netease_candidates", search)
-
-    first = scrape.apply_plan({"items": plan})
-    assert first["paused"] and first["resume_from"] == 1
-
-    netauth.clear_cooldown()
-    rest = plan[first["resume_from"] - 1:]
-    second = scrape.apply_plan({"items": rest})
-    assert not second.get("paused")
-
-    assert seen == ["A a", "A a", "B b", "C c"]   # 第一首正好重试一次
 
 
 def test_resume_from_paused_point_retries_the_failed_song(tmp_path, monkeypatch):
