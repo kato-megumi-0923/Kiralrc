@@ -934,23 +934,6 @@ func (a *app) viewScrapeList(c *ui.Context) {
 			})
 		}
 
-		// 没有 NETEASE_ID 的那些：按歌名/歌手去网易云搜，全对上了才写
-		ne := len(a.scrapeNeteaseTargets())
-		neBg, neFg := p.surface2, p.text
-		if ne == 0 || a.scrapeApplying {
-			neBg, neFg = p.surface2, p.faint
-		}
-		neRow := ui.Row(c).FillWidth().Children(func() {
-			if pillButton(c.Key("scrape-byne"), iconSearch,
-				fmt.Sprintf("按网易云补全（%d 首）", ne), neBg, neFg).
-				Grow(1).Clicked() && ne > 0 && !a.scrapeApplying {
-				a.applyScrapeByNetease()
-			}
-		})
-		neRow.Shrink(0)
-		ui.Text(c, "歌名 / 歌手 / 专辑全对上才写，只认网易云").
-			FontSize(10.5).TextColor(p.faint).SingleLine().Shrink(0)
-
 		if a.scrapeLoading {
 			ui.Text(c, "正在读取标签…").FontSize(12.5).TextColor(p.muted)
 		} else if len(a.scrapeItems) == 0 {
@@ -1330,10 +1313,10 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 		})
 
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
-			hint := "只写勾选的字段；「仅补缺失」不动已有的值，也不碰 163 key 与封底图。"
+			hint := "只写勾选的字段；不动已有值，也不碰 163 key 与封底图"
 			if !a.scrapeApplying && a.scrapeMode == 0 {
 				if total := a.scrapeIDTotal(); total > 0 && len(a.scrapeByIDTargets()) == 0 {
-					hint = fmt.Sprintf("带 NETEASE_ID 的 %d 首都写过了；切「覆盖选中」可以按 ID 重写一遍", total)
+					hint = fmt.Sprintf("带 ID 的 %d 首都写过了，切「覆盖选中」可重写", total)
 				}
 			}
 			if a.scrapeApplying {
@@ -1343,20 +1326,28 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 
 			segmented(c.Key("scrape-mode"), &a.scrapeMode, "仅补缺失", "覆盖选中")
 
-			// 文件里已经有网易云 ID 的，不用一张张挑：按 ID 取那首歌的信息直接写。
-			// 0 首时按钮照样在（灰掉），否则会被当成「这个模式没有这功能」。
+			// 三颗紧凑按钮：按 ID / 按网易云 / 写入。0 首的都灰着，别让它们凭空消失。
 			byID := len(a.scrapeByIDTargets())
-			bg, fg := p.surface2, p.text
+			byNE := len(a.scrapeNeteaseTargets())
+			byIDBg, byIDFg := p.surface2, p.text
 			if byID == 0 || a.scrapeApplying {
-				bg, fg = p.surface2, p.faint
+				byIDBg, byIDFg = p.surface2, p.faint
 			}
-			if pillButton(c.Key("scrape-byid"), iconLink,
-				fmt.Sprintf("按 ID 补全（%d 首）", byID), bg, fg).Clicked() && byID > 0 && !a.scrapeApplying {
+			if scrapeActionPill(c, "scrape-byid", fmt.Sprintf("按 ID（%d 首）", byID),
+				byIDBg, byIDFg).Clicked() && byID > 0 && !a.scrapeApplying {
 				a.applyScrapeByID()
+			}
+			byNEBg, byNEFg := p.surface2, p.text
+			if byNE == 0 || a.scrapeApplying {
+				byNEBg, byNEFg = p.surface2, p.faint
+			}
+			if scrapeActionPill(c, "scrape-byne", fmt.Sprintf("按网易云（%d 首）", byNE),
+				byNEBg, byNEFg).Clicked() && byNE > 0 && !a.scrapeApplying {
+				a.applyScrapeByNetease()
 			}
 
 			n := a.scrapeSelectedCount()
-			label := fmt.Sprintf("写入已确认（%d 首）", n)
+			label := fmt.Sprintf("写入（%d 首）", n)
 			applyBg, applyFg := p.accent, p.onAccent
 			if n == 0 || a.scrapeApplying {
 				applyBg, applyFg = p.surface2, p.faint
@@ -1364,11 +1355,32 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 					label = fmt.Sprintf("写入中 %d/%d", a.scrapeDone, a.scrapeTotal)
 				}
 			}
-			if pillButton(c.Key("scrape-apply"), iconCheck, label, applyBg, applyFg).Clicked() && n > 0 && !a.scrapeApplying {
+			if scrapeActionPill(c, "scrape-apply", label, applyBg, applyFg).Clicked() && n > 0 && !a.scrapeApplying {
 				a.applyScrape()
 			}
 		})
 	})
+}
+
+// scrapeActionPill 底栏那三颗动作按钮：比 pillButton 小一圈（28 高、11.5 字、无图标），
+// 三个并排才塞得下。
+func scrapeActionPill(c *ui.Context, key, label string, bg, fg ui.Color) ui.Element {
+	b := ui.ButtonBase(c.Key(key)).Height(28).PaddingX(10).Radius(999).Center().
+		Label(label).FocusRing(false)
+	fill := bg
+	if b.Hovered() {
+		fill = bg.Mix(ui.RGB(255, 255, 255), 0.12)
+	}
+	b.Background(b.AnimateColor("bg", fill, ui.Animation{Duration: 120 * time.Millisecond}))
+	pose := ui.Pose{}
+	if b.Pressed() {
+		pose.Scale = 0.96
+	}
+	b.AnimatePose(pose, ui.Snappy).Shrink(0)
+	b.Children(func() {
+		ui.Text(c, label).FontSize(11.5).FontWeight(700).TextColor(fg).SingleLine()
+	})
+	return b
 }
 
 // scrapeQualityToggle 封面档位：原图（大）或 1200（体积小）。
