@@ -282,7 +282,7 @@ func (a *app) viewSeparate(c *ui.Context) {
 		ui.Column(c).Gap(8).Children(func() {
 			for _, item := range a.sepStems {
 				stemRow := item
-				row := ui.Row(c.Key("sep-"+stemRow.Name)).FillWidth().Height(64).Padding(16, 0, 16, 0).
+				row := ui.Row(c.Key("sep-"+stemRow.Name)).FillWidth().Height(64).Padding(16, 20, 16, 20).
 					Gap(14).Radius(14).AlignItems(ui.Center).Background(p.surface)
 				row.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
 				row.Children(func() {
