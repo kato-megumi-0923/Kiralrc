@@ -3302,7 +3302,7 @@ func Run() error {
 	a := newApp()
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:           "Kiralrc · 逐字歌词对齐",
+			Title:           "Kiralrc",
 			Width:           1360,
 			Height:          860,
 			MinWidth:        1040,
@@ -3312,7 +3312,7 @@ func Run() error {
 			BackgroundColor: "light-dark(#ffffff, #141416)",
 			Content:         ui.View(a.view),
 		})
-		applyWindowIcon("Kiralrc · 逐字歌词对齐")
+		applyWindowIcon("Kiralrc")
 		a.refreshBackendInfo()
 		if len(a.libFolders) > 0 {
 			a.scanLibraryAsync()
