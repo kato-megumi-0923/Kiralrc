@@ -9,7 +9,7 @@ Push-Location $Root
 
 try {
     Write-Host "[1/3] 编译 kiralrc-gui.exe ..."
-    go build -ldflags="-H windowsgui" -o kiralrc-gui.exe .
+    go build -ldflags="-H windowsgui -X kiralrc-gui/internal/app.appVersion=$Version" -o kiralrc-gui.exe .
 
     $Stage = Join-Path $Root "dist\stage-v$Version"
     $ZipPath = Join-Path $Root "dist\kiralrc-gui-v$Version-windows-amd64.zip"

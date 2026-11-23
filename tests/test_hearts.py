@@ -52,15 +52,27 @@ def test_bilingual_reference_dedup(tmp_path):
     """双语歌词里译文和原词共用时间戳，不能被当成独立歌词行。"""
     from kiralrc import text as tx
 
+    # 原词要有假名才算日文；纯汉字的「日文第一句」会被当成中文，本来就分辨不出
     body = "\n".join([
-        "[00:01.00]日文第一句",
-        "[00:01.00]中文翻译一",
-        "[00:05.00]日文第二句",
-        "[00:05.01]中文翻译二",
-        "[00:09.00]日文第三句",
+        "[00:01.00]君の名前を呼ぶ",
+        "[00:01.00]呼唤你的名字",
+        "[00:05.00]風が吹いてる",
+        "[00:05.01]风吹过来",
+        "[00:09.00]また会おうね",
     ])
-    assert tx.lines_with_times(body) == [(1.0, "日文第一句"), (5.0, "日文第二句"),
-                                        (9.0, "日文第三句")]
+    assert tx.lines_with_times(body) == [(1.0, "君の名前を呼ぶ"), (5.0, "風が吹いてる"),
+                                        (9.0, "また会おうね")]
+
+
+def test_two_chinese_lines_a_breath_apart_are_not_merged():
+    """同语种、只差几十毫秒的两句是两句，不能当译文吞掉。"""
+    from kiralrc import text as tx
+
+    body = "\n".join([
+        "[00:05.00]第一句中文",
+        "[00:05.02]第二句中文",
+    ])
+    assert tx.lines_with_times(body) == [(5.0, "第一句中文"), (5.02, "第二句中文")]
 
 
 def test_query_from_filename():

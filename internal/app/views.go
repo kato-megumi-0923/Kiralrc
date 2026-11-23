@@ -3462,6 +3462,10 @@ func (a *app) viewSettings(c *ui.Context) {
 						a.clearSepCache()
 					}
 				})
+
+				ui.Row(c).Margin(0, 4, 0, 0).Children(func() {
+					ui.Text(c, "Kiralrc v"+appVersion).FontSize(11.5).TextColor(p.faint).SingleLine()
+				})
 			})
 		})
 	})
