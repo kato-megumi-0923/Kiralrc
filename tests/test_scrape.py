@@ -380,3 +380,79 @@ def test_apply_plan_streams_every_item_and_summarizes(tmp_path):
     assert all(s[1] == 2 for s in seen)
     assert summary["total"] == 2 and summary["ok"] == 1
     assert summary["skipped"] == 1 and summary["failed"] == 0   # wav 是跳过，不算失败
+
+
+# ---------- 按 ID 批量补全 ----------
+
+def test_apply_by_id_fetches_song_detail_once(tmp_path, monkeypatch):
+    """只给 netease_id 的计划：一次请求补齐后按 ID 的信息写，封面按 ID 拉高清。"""
+    p = make_flac(tmp_path / "a.flac")
+    song = {"id": 555, "name": "晴天", "duration": 269000,
+            "artists": [{"name": "周杰伦"}],
+            "album": {"name": "叶惠美", "picUrl": "https://x/a.jpg",
+                      "publishTime": 1059552000000}}
+    asked = []
+    monkeypatch.setattr(scrape, "netease_details",
+                        lambda ids, netease_json=None: asked.append(list(ids)) or [song])
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
+
+    summary = scrape.apply_plan({"items": [{
+        "path": str(p), "netease_id": 555,
+        "fields": {"cover": True, "year": True, "netease_id": True},
+        "mode": "fill",
+    }]})
+
+    assert asked == [[555]]                     # 只请求一次，不是一首一次
+    assert summary["ok"] == 1 and summary["failed"] == 0
+    info = scrape.inspect_track(p)
+    assert info["netease_id"] == 555
+    assert info["year"] == "2003"
+    assert (info["cover_w"], info["cover_h"]) == (1200, 1200)
+
+
+def test_apply_by_id_skips_when_detail_is_missing(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac")
+    monkeypatch.setattr(scrape, "netease_details", lambda ids, netease_json=None: [])
+    res = scrape.apply_one({"path": str(p), "netease_id": 999,
+                            "fields": {"year": True}, "mode": "fill"}, {})
+    assert res["skipped"] and not res["ok"]
+    assert "ID" in res["note"]
+    assert scrape.inspect_track(p)["year"] == ""   # 什么都没写进去
+
+
+# ---------- 按 ID 批量补全 ----------
+
+def test_apply_by_id_fetches_song_detail_once(tmp_path, monkeypatch):
+    """只给 netease_id 的计划：一次请求补齐后按 ID 的信息写，封面按 ID 拉高清。"""
+    p = make_flac(tmp_path / "a.flac")
+    song = {"id": 555, "name": "晴天", "duration": 269000,
+            "artists": [{"name": "周杰伦"}],
+            "album": {"name": "叶惠美", "picUrl": "https://x/a.jpg",
+                      "publishTime": 1059552000000}}
+    asked = []
+    monkeypatch.setattr(scrape, "netease_details",
+                        lambda ids, netease_json=None: asked.append(list(ids)) or [song])
+    monkeypatch.setattr(scrape, "_download", lambda url, timeout=30: png_bytes(1200, 1200))
+
+    summary = scrape.apply_plan({"items": [{
+        "path": str(p), "netease_id": 555,
+        "fields": {"cover": True, "year": True, "netease_id": True},
+        "mode": "fill",
+    }]})
+
+    assert asked == [[555]]                     # 只请求一次，不是一首一次
+    assert summary["ok"] == 1 and summary["failed"] == 0
+    info = scrape.inspect_track(p)
+    assert info["netease_id"] == 555
+    assert info["year"] == "2003"
+    assert (info["cover_w"], info["cover_h"]) == (1200, 1200)
+
+
+def test_apply_by_id_skips_when_detail_is_missing(tmp_path, monkeypatch):
+    p = make_flac(tmp_path / "a.flac")
+    monkeypatch.setattr(scrape, "netease_details", lambda ids, netease_json=None: [])
+    res = scrape.apply_one({"path": str(p), "netease_id": 999,
+                            "fields": {"year": True}, "mode": "fill"}, {})
+    assert res["skipped"] and not res["ok"]
+    assert "ID" in res["note"]
+    assert scrape.inspect_track(p)["year"] == ""   # 什么都没写进去

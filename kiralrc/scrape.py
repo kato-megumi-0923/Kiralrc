@@ -539,8 +539,12 @@ WRITERS = {".flac": _write_flac, ".mp3": _write_mp3, ".m4a": _write_m4a,
            ".mp4": _write_m4a}
 
 
-def apply_one(item: dict) -> dict:
-    """写一首。返回 {path, ok, changed, note, readonly}。"""
+def apply_one(item: dict, by_id: dict | None = None) -> dict:
+    """写一首。返回 {path, ok, changed, note, readonly}。
+
+    计划里没带 candidate、只带了 netease_id 时，用 by_id 里预取到的那条
+    （apply_plan 会一次性把所有 ID 补齐，省得一首一个请求）。
+    """
     path = Path(str(item.get("path") or ""))
     cand = item.get("candidate") or {}
     fields = item.get("fields") or {}
@@ -557,6 +561,15 @@ def apply_one(item: dict) -> dict:
         res["note"] = "只读跳过：这个格式不支持稳定写标签"
         res["readonly"] = True
         return res
+
+    if not cand:
+        # 计划里没带候选（Go 侧「按 ID 补全」发来的就是这样）：按 ID 取那首歌
+        want_id = int(item.get("netease_id") or 0)
+        cand = (by_id or {}).get(want_id) or {}
+        if not cand:
+            res["note"] = "按 NETEASE_ID 没取到这首歌（可能被限速）"
+            res["skipped"] = True
+            return res
 
     local = _local_meta(path, ext)
     if not local.get("netease_id"):
@@ -594,13 +607,26 @@ def apply_one(item: dict) -> dict:
 
 
 def apply_plan(plan, on_item=None) -> dict:
-    """按计划逐首写。on_item(i, total, result) 用来往外报进度。"""
+    """按计划逐首写。on_item(i, total, result) 用来往外报进度。
+
+    计划里只给 netease_id 的条目（「按 ID 批量补全」走这条路）：先把所有 ID
+    一次请求补齐，再逐首写——一首一个请求会被网易云限速。
+    """
     items = plan.get("items") if isinstance(plan, dict) else plan
     items = [it for it in (items or []) if isinstance(it, dict)]
     total = len(items)
+
+    by_id: dict[int, dict] = {}
+    ids = sorted({int(it.get("netease_id") or 0) for it in items} - {0})
+    for start in range(0, len(ids), 100):        # URL 别太长，分批问
+        for song in netease_details(ids[start:start + 100]):
+            cand = _netease_candidate(song)
+            if cand["song_id"]:
+                by_id[cand["song_id"]] = cand
+
     ok = failed = skipped = 0
     for i, item in enumerate(items, 1):
-        res = apply_one(item)
+        res = apply_one(item, by_id)
         if res["ok"]:
             ok += 1
         elif res.get("skipped") or res.get("readonly"):

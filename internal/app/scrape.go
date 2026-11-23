@@ -60,10 +60,11 @@ type scrapeCandidate struct {
 }
 
 type scrapePlanItem struct {
-	Path      string          `json:"path"`
-	Candidate scrapeCandidate `json:"candidate"`
-	Fields    map[string]bool `json:"fields"`
-	Mode      string          `json:"mode"`
+	Path      string           `json:"path"`
+	Candidate *scrapeCandidate `json:"candidate,omitempty"`  // 指针才好 omitempty
+	NeteaseID int              `json:"netease_id,omitempty"` // 不给候选时按它去取
+	Fields    map[string]bool  `json:"fields"`
+	Mode      string           `json:"mode"`
 }
 
 // ---------- 快捷筛选 ----------
@@ -425,27 +426,71 @@ func cleanupScrapeThumbs() {
 
 // ---------- 写回 ----------
 
-func (a *app) scrapePlan() []scrapePlanItem {
-	fields := map[string]bool{
+func (a *app) scrapeFieldMap() map[string]bool {
+	return map[string]bool{
 		"cover":        a.scrapeFields[0],
 		"year":         a.scrapeFields[1],
 		"netease_id":   a.scrapeFields[2],
 		"album":        a.scrapeFields[3],
 		"title_artist": a.scrapeFields[4],
 	}
-	mode := "fill"
+}
+
+func (a *app) scrapeModeName() string {
 	if a.scrapeMode == 1 {
-		mode = "overwrite"
+		return "overwrite"
 	}
+	return "fill"
+}
+
+func (a *app) scrapePlan() []scrapePlanItem {
+	fields, mode := a.scrapeFieldMap(), a.scrapeModeName()
 	plan := make([]scrapePlanItem, 0, len(a.scrapeSel))
 	for _, it := range a.scrapeItems {
 		cand, ok := a.scrapeSel[it.Path]
 		if !ok {
 			continue
 		}
-		plan = append(plan, scrapePlanItem{Path: it.Path, Candidate: cand, Fields: fields, Mode: mode})
+		plan = append(plan, scrapePlanItem{Path: it.Path, Candidate: &cand, Fields: fields, Mode: mode})
 	}
 	return plan
+}
+
+// scrapeByIDTargets 能「按 ID 批量补全」的曲目：文件里已经有 NETEASE_ID、
+// 还没手工挑过候选、也还没写过。只按当前筛选里的曲目算。
+func (a *app) scrapeByIDTargets() []scrapeTrack {
+	out := make([]scrapeTrack, 0, len(a.scrapeItems))
+	for _, idx := range a.scrapeVisible() {
+		t := a.scrapeItems[idx]
+		if t.NeteaseID <= 0 || !t.Writable || t.WriteState == "done" {
+			continue
+		}
+		if _, picked := a.scrapeSel[t.Path]; picked {
+			continue // 已经手工挑过的走「写入已确认」，别混着来
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// applyScrapeByID 不再逐首挑候选：文件里已经有网易云 ID，就按 ID 取那首歌的
+// 封面/年份/专辑，直接套用当前勾选的字段与策略写进去。
+func (a *app) applyScrapeByID() {
+	if a.scrapeApplying {
+		return
+	}
+	targets := a.scrapeByIDTargets()
+	if len(targets) == 0 {
+		a.toast = "当前筛选里没有带 NETEASE_ID 的曲目"
+		return
+	}
+	fields, mode := a.scrapeFieldMap(), a.scrapeModeName()
+	plan := make([]scrapePlanItem, 0, len(targets))
+	for _, t := range targets {
+		plan = append(plan, scrapePlanItem{Path: t.Path, NeteaseID: t.NeteaseID,
+			Fields: fields, Mode: mode})
+	}
+	a.runScrapePlan(plan)
 }
 
 func (a *app) applyScrape() {
@@ -457,6 +502,11 @@ func (a *app) applyScrape() {
 		a.toast = "还没有确认任何候选"
 		return
 	}
+	a.runScrapePlan(plan)
+}
+
+// runScrapePlan 把计划落到临时文件，跑 python apply，边跑边接进度。
+func (a *app) runScrapePlan(plan []scrapePlanItem) {
 	payload := map[string]any{"items": plan}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -1047,6 +1097,18 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			ui.Text(c, hint).FontSize(11.5).TextColor(p.muted).Grow(1).MinWidth(0).SingleLine()
 
 			segmented(c.Key("scrape-mode"), &a.scrapeMode, "仅补缺失", "覆盖选中")
+
+			// 文件里已经有网易云 ID 的，不用一张张挑：按 ID 取那首歌的信息直接写
+			if byID := len(a.scrapeByIDTargets()); byID > 0 {
+				bg, fg := p.surface2, p.text
+				if a.scrapeApplying {
+					bg, fg = p.surface2, p.faint
+				}
+				if pillButton(c.Key("scrape-byid"), iconLink,
+					fmt.Sprintf("按 ID 补全（%d 首）", byID), bg, fg).Clicked() && !a.scrapeApplying {
+					a.applyScrapeByID()
+				}
+			}
 
 			n := a.scrapeSelectedCount()
 			label := fmt.Sprintf("写入已确认（%d 首）", n)

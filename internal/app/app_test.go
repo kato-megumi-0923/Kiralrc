@@ -1245,3 +1245,54 @@ func mustAbsResolved(t *testing.T, path string) string {
 	}
 	return abs
 }
+
+// 「按 ID 批量补全」只挑：有 ID、可写、没写过、也没手工挑过候选的曲目。
+func TestScrapeByIDTargets(t *testing.T) {
+	a := newApp()
+	a.scrapeItems = []scrapeTrack{
+		{Path: "a.flac", Writable: true, NeteaseID: 11, CoverW: 1200, CoverH: 1200},
+		{Path: "b.flac", Writable: true, NeteaseID: 0, CoverW: 1200, CoverH: 1200},
+		{Path: "c.flac", Writable: false, NeteaseID: 13, CoverW: 1200, CoverH: 1200},
+		{Path: "d.flac", Writable: true, NeteaseID: 14, WriteState: "done", CoverW: 1200, CoverH: 1200},
+		{Path: "e.flac", Writable: true, NeteaseID: 15, CoverW: 1200, CoverH: 1200},
+		{Path: "f.flac", Writable: true, NeteaseID: 16, CoverW: 300, CoverH: 300},
+	}
+	a.scrapeSel = map[string]scrapeCandidate{"e.flac": {Source: "iTunes"}}
+
+	got := a.scrapeByIDTargets()
+	if len(got) != 2 || got[0].Path != "a.flac" || got[1].Path != "f.flac" {
+		t.Fatalf("按 ID 补全的目标挑错了：%+v", got)
+	}
+
+	// 跟随当前筛选：低清只剩 f
+	a.scrapeFilter = 2
+	got = a.scrapeByIDTargets()
+	if len(got) != 1 || got[0].Path != "f.flac" {
+		t.Fatalf("筛选后目标不对：%+v", got)
+	}
+}
+
+// 计划里没有候选时不要塞一个空 candidate 进去，Python 那边靠“有没有 candidate”决定按 ID 取。
+func TestScrapePlanJSONOmitsEmptyCandidate(t *testing.T) {
+	cand := scrapeCandidate{Source: "网易云", Title: "晴天", SongID: 11}
+	withCand, err := json.Marshal(scrapePlanItem{Path: "a", Candidate: &cand,
+		Fields: map[string]bool{"cover": true}, Mode: "fill"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(withCand), `"candidate"`) {
+		t.Fatalf("有候选却没写进计划：%s", withCand)
+	}
+
+	byID, err := json.Marshal(scrapePlanItem{Path: "a", NeteaseID: 7,
+		Fields: map[string]bool{"cover": true}, Mode: "fill"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(byID), `"candidate"`) {
+		t.Fatalf("按 ID 的计划不该带空候选：%s", byID)
+	}
+	if !strings.Contains(string(byID), `"netease_id":7`) {
+		t.Fatalf("按 ID 的计划少了 netease_id：%s", byID)
+	}
+}
