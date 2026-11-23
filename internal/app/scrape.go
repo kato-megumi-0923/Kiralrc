@@ -556,6 +556,39 @@ func (a *app) scrapePlan() []scrapePlanItem {
 	return plan
 }
 
+// scrapeVisiblePos 某条在当前筛选里排第几；不在这份列表里返回 -1。
+func (a *app) scrapeVisiblePos(idx int) int {
+	for pos, i := range a.scrapeVisible() {
+		if i == idx {
+			return pos
+		}
+	}
+	return -1
+}
+
+// scrapeFollowWritten 写完一首后：它要是从当前列表里消失了（比如从低清升到高清），
+// 就把选中挪到同一位置上的下一首，好接着处理；列表空了或它还在就什么都不做。
+func (a *app) scrapeFollowWritten() {
+	path, pos := a.scrapeFollowPath, a.scrapeFollowPos
+	a.scrapeFollowPath, a.scrapeFollowPos = "", -1
+	if path == "" || pos < 0 {
+		return
+	}
+	visible := a.scrapeVisible()
+	if len(visible) == 0 {
+		return
+	}
+	for _, idx := range visible {
+		if a.scrapeItems[idx].Path == path {
+			return // 还在列表里，别乱跳
+		}
+	}
+	if pos >= len(visible) {
+		pos = len(visible) - 1 // 原来在最后一首，就落到新的最后一首
+	}
+	a.selectScrapeTrack(visible[pos])
+}
+
 // scrapeByIDTargets 能「按 ID 批量补全」的曲目：文件里已经有 NETEASE_ID、
 // 还没手工挑过候选、也还没写过。只按当前筛选里的曲目算。
 func (a *app) scrapeByIDTargets() []scrapeTrack {
@@ -639,6 +672,11 @@ func (a *app) runScrapePlan(plan []scrapePlanItem) {
 		return
 	}
 
+	a.scrapeFollowPos = a.scrapeVisiblePos(a.scrapeCur)
+	a.scrapeFollowPath = ""
+	if a.scrapeCur >= 0 && a.scrapeCur < len(a.scrapeItems) {
+		a.scrapeFollowPath = a.scrapeItems[a.scrapeCur].Path
+	}
 	a.scrapeApplying = true
 	a.scrapeDone, a.scrapeTotal = 0, len(plan)
 
@@ -796,6 +834,7 @@ func (a *app) refreshScrapeItems(paths []string) {
 					delete(a.scrapeCandCache, f.Path)
 				}
 			}
+			a.scrapeFollowWritten() // 写完的这首可能已经不在当前筛选里了
 		})
 	}()
 }

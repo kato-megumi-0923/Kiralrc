@@ -1376,3 +1376,50 @@ func TestScrapeIDTotalCountsWrittenOnes(t *testing.T) {
 		t.Fatalf("覆盖选中下两首都该算，拿到 %d", got)
 	}
 }
+
+// 写完一首后它从当前筛选里消失了（封面升到 ≥600px），选中要顺延到下一首。
+func TestScrapeFollowsNextAfterWrite(t *testing.T) {
+	newCase := func() *app {
+		a := newApp()
+		a.scrapeItems = []scrapeTrack{
+			{Path: "a.flac", Writable: true, CoverW: 300, CoverH: 300},
+			{Path: "b.flac", Writable: true, CoverW: 300, CoverH: 300},
+			{Path: "c.flac", Writable: true, CoverW: 300, CoverH: 300},
+		}
+		a.scrapeFilter = 2 // 低清
+		a.scrapeCur = 1
+		a.scrapeCandPath = "b.flac"
+		// 命中候选缓存，免得顺延时真去起 python 搜索
+		a.scrapeCandCache = map[string][]scrapeCandidate{
+			"c.flac": {{Source: "网易云", Title: "c"}},
+		}
+		a.scrapeFollowPath, a.scrapeFollowPos = "b.flac", 1
+		return a
+	}
+
+	// 1) b 升级成 1200，不再属于低清 → 跳到同一位置上的 c
+	a := newCase()
+	a.scrapeItems[1].CoverW, a.scrapeItems[1].CoverH = 1200, 1200
+	a.scrapeFollowWritten()
+	if a.scrapeCur != 2 || a.scrapeItems[a.scrapeCur].Path != "c.flac" {
+		t.Fatalf("应该顺延到 c.flac，实际 %q", a.scrapeItems[a.scrapeCur].Path)
+	}
+
+	// 2) b 还在低清里（源图就这么小）→ 选中不动
+	a = newCase()
+	a.scrapeFollowWritten()
+	if a.scrapeCur != 1 {
+		t.Fatalf("还在列表里就不该跳，实际到了 %q", a.scrapeItems[a.scrapeCur].Path)
+	}
+
+	// 3) 原来是最后一首且它消失了 → 落到新的最后一首
+	a = newCase()
+	a.scrapeCur = 2
+	a.scrapeCandPath = "c.flac"
+	a.scrapeFollowPath, a.scrapeFollowPos = "c.flac", 2
+	a.scrapeItems[2].CoverW, a.scrapeItems[2].CoverH = 1200, 1200
+	a.scrapeFollowWritten()
+	if got := a.scrapeItems[a.scrapeCur].Path; got != "b.flac" {
+		t.Fatalf("末尾消失后应落到新的最后一首 b.flac，实际 %q", got)
+	}
+}
