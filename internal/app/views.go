@@ -91,6 +91,8 @@ func (a *app) view(c *ui.Context) {
 					a.viewTools(c)
 				case pageSeparate:
 					a.viewSeparate(c)
+				case pageCleanup:
+					a.viewCleanup(c)
 				case pageSettings:
 					a.viewSettings(c)
 				}
@@ -241,8 +243,11 @@ func (a *app) viewSidebar(c *ui.Context) {
 			ui.Icon(c, iconSearch).Size(14, 14).TextColor(p.faint)
 			inp := ui.TextInputBase(c.Key("side-search-in"), &a.libQuery).Grow(1).MinWidth(0).Height(28).
 				FontSize(12.5).TextColor(p.text).Background(ui.Transparent).Placeholder("搜索曲库歌曲 / 歌手").FocusRing(false)
-			if inp.Changed() && a.libQuery != "" && a.page != pageLibrary {
-				a.navigate(pageLibrary, -1)
+			if inp.Changed() {
+				a.libPage = 0      // 搜索词一变就回第一页
+				if a.libQuery != "" && a.page != pageLibrary {
+					a.navigate(pageLibrary, -1)
+				}
 			}
 		})
 
@@ -925,8 +930,10 @@ func (a *app) viewLibrary(c *ui.Context) {
 				} else {
 					ui.Text(c, fmt.Sprintf("已选择 %d 首歌曲", selCount)).FontSize(13).FontWeight(700)
 				}
-				// 没有分页：选的是当前筛选下的全部，不是「本页」
-				if pillButton(c.Key("lib-sel-all"), nil, "全选", p.surface2, p.text).Clicked() {
+				if pillButton(c.Key("lib-sel-page"), nil, "全选本页", p.surface2, p.text).Clicked() {
+					a.setPageSelected(true)
+				}
+				if pillButton(c.Key("lib-sel-all"), nil, "全选全部", p.surface2, p.text).Clicked() {
 					a.setVisibleTracksSelected(true)
 				}
 				if selCount > 0 {
@@ -1058,17 +1065,28 @@ func (a *app) viewLibrary(c *ui.Context) {
 					ui.Text(c, "备注").Grow(1).FontSize(11.5).FontWeight(600).TextColor(p.faint)
 					ui.Text(c, "操作").Width(actColW).FontSize(11.5).FontWeight(600).TextColor(p.faint)
 				})
-				shown := 0
+				// 先算出当前筛选下的全部行，再按页取一段
+				visible := make([]int, 0, len(a.tracks))
 				for i := range a.tracks {
-					idx := i
+					if a.trackMatchesFilter(&a.tracks[i]) {
+						visible = append(visible, i)
+					}
+				}
+				size := a.pageSize()
+				pages := (len(visible) + size - 1) / size
+				if pages < 1 {
+					pages = 1
+				}
+				if a.libPage >= pages {
+					a.libPage = pages - 1
+				}
+				if a.libPage < 0 {
+					a.libPage = 0
+				}
+				start := a.libPage * size
+				end := min(start+size, len(visible))
+				for _, idx := range visible[start:end] {
 					tr := &a.tracks[idx]
-					if !a.trackMatchesFilter(tr) {
-						continue
-					}
-					shown++
-					if shown > 80 {
-						break
-					}
 
 					row := ui.Row(c.Key(fmt.Sprintf("tr-%d", idx))).FillWidth().Height(54).PaddingX(12).Gap(12).Radius(12).
 						AlignItems(ui.Center)
@@ -1289,6 +1307,33 @@ func (a *app) viewLibrary(c *ui.Context) {
 						}
 					}
 				}
+
+				ui.Row(c.Key("lib-pager")).FillWidth().AlignItems(ui.Center).Gap(10).
+					Margin(8, 0, 0, 0).Children(func() {
+					ui.Text(c, fmt.Sprintf("共 %d 首 · 第 %d / %d 页", len(visible), a.libPage+1, pages)).
+						FontSize(12).TextColor(p.muted)
+					for _, n := range []int{50, 100} {
+						size := n
+						bg, fg := p.surface2, p.text
+						if a.pageSize() == size {
+							bg, fg = p.accent.Alpha(0.12), p.accent
+						}
+						if pillButton(c.Key(fmt.Sprintf("page-size-%d", size)), nil,
+							fmt.Sprintf("%d / 页", size), bg, fg).Clicked() {
+							a.setPageSize(size)
+						}
+					}
+					if a.libPage > 0 {
+						if pillButton(c.Key("page-prev"), nil, "上一页", p.surface2, p.text).Clicked() {
+							a.libPage--
+						}
+					}
+					if a.libPage < pages-1 {
+						if pillButton(c.Key("page-next"), nil, "下一页", p.surface2, p.text).Clicked() {
+							a.libPage++
+						}
+					}
+				})
 			})
 		})
 	})
@@ -2854,6 +2899,7 @@ func (a *app) viewTools(c *ui.Context) {
 				{"双语歌词加 ❤️", "识别只有首尾双标签的中文翻译行，前后加 ❤️，保持其余字节不变。", "hearts", 345, iconHeart, []string{"hearts", "examples/sample.lrc"}},
 				{"小数位转换", "两位小数时间戳批量转为三位（末尾补 0，数值等价），统一全库格式。", "convert", 215, iconQueue, []string{"convert", "examples/sample.lrc"}},
 				{"人声分离", "demucs htdemucs 分离出人声与伴奏轨，可单独导出用于试听。", "separate", 285, iconMic, []string{"info"}},
+				{"清理歌词文件", "选定目录后按格式勾选，批量删除 .lrc / .vtt / .ttml 等歌词文件，先进回收站。", "cleanup", 20, iconTrash, []string{"info"}},
 				{"解密加密音频", "把网易云 NCM 解成普通音频，歌名、歌手、专辑、封面与 ID 等原始信息全部写回标签。", "decrypt", 20, iconUnlock, []string{"info"}},
 			}
 

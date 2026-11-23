@@ -29,6 +29,7 @@ const (
 	pageEditor
 	pageTools
 	pageSeparate
+	pageCleanup
 	pageSettings
 )
 
@@ -178,11 +179,17 @@ type app struct {
 	sepPct            int
 	sepStems          []sepStem
 	sepPlaying        string // 正在试听哪条轨
+	cleanupDir        string
+	cleanupItems      []cleanupGroup
+	cleanupConfirm    bool
+	cleanupScanned    bool
 	sepPaused         bool
 	downloadDone      int
 	downloadAll       int
 	downloadNote      string
 	libScanning       bool
+	libPage           int  // 当前页码（0 起）
+	libPageSize       int  // 每页条数：50 / 100
 	libScanDone       int
 	libScanAll        int
 	libScanTime       string
@@ -344,6 +351,7 @@ type userPrefs struct {
 	AIModel          string   `json:"ai_model,omitempty"`
 	AIAPIKey         string   `json:"ai_api_key,omitempty"`
 	CustomPython     string   `json:"custom_python,omitempty"`
+	LibPageSize      int      `json:"lib_page_size,omitempty"`
 }
 
 func prefsPath() string {
@@ -388,6 +396,12 @@ func (a *app) loadPrefs() {
 		}
 	}
 	a.libFolders = foldLibraryFolders(a.libFolders)
+	switch up.LibPageSize {
+	case 100:
+		a.libPageSize = 100
+	default:
+		a.libPageSize = 50
+	}
 	covers := indexCovers()
 	for _, rp := range up.RecentPaths {
 		if info, err := os.Stat(rp); err == nil && !info.IsDir() {
@@ -514,6 +528,7 @@ func (a *app) savePrefs() {
 		AIModel:          strings.TrimSpace(a.setAIModel),
 		AIAPIKey:         encAIKey,
 		CustomPython:     strings.TrimSpace(a.setCustomPython),
+		LibPageSize:      a.pageSize(),
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)
@@ -1328,6 +1343,14 @@ func (a *app) runToolInteractive(toolCmd string) {
 			}
 			a.runKiralrcCLI("decrypt", dir)
 		}()
+	case "cleanup":
+		go func() {
+			dir, err := chooseFolder(a.win, "选择要清理歌词的目录", "")
+			if err != nil || dir == "" {
+				return
+			}
+			a.openCleanup(dir)
+		}()
 	case "separate":
 		go func() {
 			p, err := chooseFile(a.win, "选择要分离人声的音频文件", "选择音频", []mygo.FileFilter{
@@ -1498,6 +1521,7 @@ func (a *app) pickLrcFile() {
 
 func (a *app) setLibFilter(f int) {
 	a.libFilter = f
+	a.libPage = 0          // 换筛选就回第一页
 	if f != 3 {
 		a.libBatchIdOpen = false
 		a.libExpandedPath = ""
@@ -1595,6 +1619,42 @@ func (a *app) selectedLibraryTracks() []trackItem {
 		}
 	}
 	return batch
+}
+
+// pageSize 每页条数，只支持 50 / 100 两档。
+func (a *app) pageSize() int {
+	if a.libPageSize == 100 {
+		return 100
+	}
+	return 50
+}
+
+// setPageSize 换每页条数时回到第一页，免得停在越界的页码上。
+func (a *app) setPageSize(n int) {
+	if n != 100 {
+		n = 50
+	}
+	if a.libPageSize == n {
+		return
+	}
+	a.libPageSize = n
+	a.libPage = 0
+	a.savePrefs()
+}
+
+// setPageSelected 只选当前这一页。
+func (a *app) setPageSelected(sel bool) {
+	size := a.pageSize()
+	page := 0
+	for i := range a.tracks {
+		if !a.trackMatchesFilter(&a.tracks[i]) {
+			continue
+		}
+		if page/size == a.libPage {
+			a.tracks[i].Selected = sel
+		}
+		page++
+	}
 }
 
 func (a *app) setVisibleTracksSelected(sel bool) {
@@ -3313,6 +3373,11 @@ func Run() error {
 			Content:         ui.View(a.view),
 		})
 		applyWindowIcon("Kiralrc")
+		if dir := os.Getenv("KIRALRC_CLEANUP_DEMO"); dir != "" {
+			a.cleanupDir = dir
+			a.page = pageCleanup
+			a.scanCleanup()
+		}
 		a.refreshBackendInfo()
 		if len(a.libFolders) > 0 {
 			a.scanLibraryAsync()
