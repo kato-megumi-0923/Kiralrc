@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -664,6 +665,11 @@ func (a *app) volumeControl(c *ui.Context, keyPrefix string) {
 // ==================== 1. 曲库 ====================
 func (a *app) viewLibrary(c *ui.Context) {
 	p := a.pal
+	// 调试用：KIRALRC_SCROLL_TO=bottom 直接滚到底（滚动位置就是 App 的状态，
+	// 不需要去伪造滚轮事件）
+	if os.Getenv("KIRALRC_SCROLL_TO") == "bottom" {
+		a.libScroll.Y = math.MaxFloat32
+	}
 	sc := ui.Scroll(c.Key("lib-scroll")).TrackScroll(&a.libScroll).Fill()
 	sc.Children(func() {
 		col := ui.Column(c).FillWidth().Padding(pageGap, 38, 108, 38).Gap(16)
