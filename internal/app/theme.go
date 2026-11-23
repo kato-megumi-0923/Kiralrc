@@ -550,8 +550,9 @@ func winFiveDots(c *ui.Context, color ui.Color) {
 			if at < 0 {
 				at += 1
 			}
+			// 五个点都从同一个起点出发，只靠错时（0.24s）拉开：
+			// 再额外错开 72° 会变成均匀转圈，原版「慢侧聚拢、快侧甩开」的手感就没了
 			deg, alpha := winDotPose(at)
-			deg += float64(i) * 72 // 五个点固定相隔 72°，错时推进才有快慢感
 			if alpha <= 0.01 {
 				continue
 			}

@@ -856,3 +856,32 @@ def test_resume_from_paused_point_retries_the_failed_song(tmp_path, monkeypatch)
     assert not second.get("paused")
 
     assert seen == ["A a", "A a", "B b", "C c"]   # 第一首正好重试一次
+
+
+def test_local_meta_reads_mp4_like_m4a(tmp_path, monkeypatch):
+    """.mp4 和 .m4a 共用 MP4 标签：漏了 .mp4，fill 模式就会以为本地全空而误覆盖。"""
+    import mutagen
+
+    class FakeAudio:
+        tags = {
+            "\xa9nam": ["晴天"],
+            "\xa9ART": ["周杰伦"],
+            "\xa9alb": ["叶惠美"],
+            "\xa9day": ["2003"],
+        }
+        info = None
+
+    monkeypatch.setattr(mutagen, "File", lambda *a, **k: FakeAudio())
+    p = tmp_path / "a.mp4"
+    p.write_bytes(b"\x00" * 32)
+
+    for ext in (".m4a", ".mp4"):
+        meta = scrape._local_meta(p, ext)
+        assert (meta["title"], meta["artist"], meta["album"], meta["year"]) == (
+            "晴天", "周杰伦", "叶惠美", "2003"), ext
+
+    # fill 模式：本地已有年份与专辑，候选不同也不该覆盖
+    meta = scrape._local_meta(p, ".mp4")
+    want = scrape._want(meta, candidate(title="别的", album="别的专辑", year="1999"),
+                        {"year": True, "album": True}, "fill")
+    assert want == {}

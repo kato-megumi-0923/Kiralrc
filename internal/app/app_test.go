@@ -294,6 +294,18 @@ func TestPythonSubprocessEnvPassesAppleMusicToken(t *testing.T) {
 	if gotTok != "test-token-xyz" || gotSf != "us" {
 		t.Fatalf("expected token=test-token-xyz sf=us, got token=%q sf=%q", gotTok, gotSf)
 	}
+
+	// Cloudy 登录态也从这一个出口走：所有 python 子进程才不会有漏掉的链路
+	a.setCloudyAuth = true
+	found := false
+	for _, kv := range a.pythonSubprocessEnv() {
+		if kv == "KIRALRC_CLOUDY_AUTH=1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("pythonSubprocessEnv 没把 KIRALRC_CLOUDY_AUTH 带上")
+	}
 }
 
 func TestParseAITranslations(t *testing.T) {

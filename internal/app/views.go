@@ -777,7 +777,8 @@ func (a *app) viewLibrary(c *ui.Context) {
 						}
 						batchLabel := fmt.Sprintf("批量升级整行歌词（%d）", st.LineOnly)
 						if a.libScanning {
-							batchLabel = fmt.Sprintf("批量升级整行歌词（已加载 %d）", len(a.tracks))
+							// 扫描中 st 只是「已经扫到的部分」，别拿上一轮的全量 tracks 充数
+							batchLabel = fmt.Sprintf("批量升级整行歌词（约 %d）", st.LineOnly)
 						}
 						if pillButton(c.Key("hero-batch"), iconPlay, batchLabel, ui.RGBA(255, 255, 255, 0.18), white).Clicked() {
 							a.enqueueLineOnlyTracks()

@@ -1207,9 +1207,16 @@ func (a *app) appleStorefrontCode() string {
 	}
 }
 
+// pythonSubprocessEnv 所有 Python 子进程共用的一套环境变量：
+// 编码、Apple Music Token、以及「借用 Cloudy 登录态」的开关。
+// 任何新起的 python 调用都应该用它，别自己拼——漏一处就会有一条链路拿不到身份。
 func (a *app) pythonSubprocessEnv(extra ...string) []string {
 	env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 	env = append(env, extra...)
+	if a.setCloudyAuth {
+		// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
+		env = append(env, "KIRALRC_CLOUDY_AUTH=1")
+	}
 	if tok := strings.TrimSpace(a.setAppleToken); tok != "" {
 		env = append(env,
 			"KIRALRC_APPLE_MEDIA_USER_TOKEN="+tok,
@@ -1226,12 +1233,7 @@ func (a *app) pythonCmd(args ...string) *exec.Cmd {
 	if root := appRootDir(); root != "" {
 		cmd.Dir = root
 	}
-	env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-	if a.setCloudyAuth {
-		// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
-		env = append(env, "KIRALRC_CLOUDY_AUTH=1")
-	}
-	cmd.Env = env
+	cmd.Env = a.pythonSubprocessEnv()
 	return cmd
 }
 
@@ -1472,12 +1474,7 @@ func (a *app) checkEditorLrc(path, audioPath string) {
 		}
 		cmd := newHiddenCmd(py, args...)
 		cmd.Dir = appRootDir()
-		env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-		if a.setCloudyAuth {
-			// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
-			env = append(env, "KIRALRC_CLOUDY_AUTH=1")
-		}
-		cmd.Env = env
+		cmd.Env = a.pythonSubprocessEnv()
 		out, err := cmd.CombinedOutput()
 		var issues []string
 		for _, ln := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
@@ -1506,12 +1503,7 @@ func (a *app) heartsCurrentLrc() {
 	go func() {
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "hearts", path)
 		cmd.Dir = appRootDir()
-		env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-		if a.setCloudyAuth {
-			// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
-			env = append(env, "KIRALRC_CLOUDY_AUTH=1")
-		}
-		cmd.Env = env
+		cmd.Env = a.pythonSubprocessEnv()
 		out, _ := cmd.CombinedOutput()
 		msg := strings.TrimSpace(string(out))
 		a.post(func() {
@@ -1592,12 +1584,7 @@ func (a *app) refreshBackendInfo() {
 		}
 		cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "info", "--json")
 		cmd.Dir = appRootDir()
-		env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-		if a.setCloudyAuth {
-			// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
-			env = append(env, "KIRALRC_CLOUDY_AUTH=1")
-		}
-		cmd.Env = env
+		cmd.Env = a.pythonSubprocessEnv()
 		out, err := cmd.Output()
 		if err != nil {
 			return
@@ -2813,12 +2800,7 @@ func (a *app) loadEditorCoverAsync(audioPath string) {
 			py := getActivePythonPath()
 			cmd := newHiddenCmd(py, "-X", "utf8", "-m", "kiralrc", "cover", ap)
 			cmd.Dir = appRootDir()
-			env := append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
-			if a.setCloudyAuth {
-				// 借用 Cloudy 的登录态是用户显式打开的偏好，否则 Python 那边默认不读
-				env = append(env, "KIRALRC_CLOUDY_AUTH=1")
-			}
-			cmd.Env = env
+			cmd.Env = a.pythonSubprocessEnv()
 			if out, err := cmd.Output(); err == nil {
 				p := strings.TrimSpace(string(out))
 				if p != "" {

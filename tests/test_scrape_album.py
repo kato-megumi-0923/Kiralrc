@@ -128,19 +128,6 @@ def test_album_match_rejects_bracketed_live_title():
     assert cand["song_id"] == 1
 
 
-def test_album_match_rejects_bracketed_live_title():
-    """「同上歌名 + (Live)」这种折叠后同名的情况，靠版本标记挡住。"""
-    local = {"title": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269}
-    tracks = [album_track(song_id=1, title="晴天 (Live)", artist="周杰伦", duration=269)]
-    cand, reason = scrape.find_unique_match(local, tracks, check_album=False)
-    assert not cand and reason == "none"
-
-    # 两边都是 Live 才算同一版
-    live = {"title": "晴天 (Live)", "artist": "周杰伦", "album": "叶惠美", "duration": 269}
-    cand, _ = scrape.find_unique_match(live, tracks, check_album=False)
-    assert cand["song_id"] == 1
-
-
 def test_album_match_compares_duration():
     local = {"title": "届かない恋", "artist": "米澤円", "album": "X", "duration": 300}
     tracks = [album_track(song_id=1, title="届かない恋", artist="米澤円", duration=361)]
@@ -265,3 +252,43 @@ def test_album_mode_resumes_from_the_failed_album(tmp_path, monkeypatch):
     assert not second.get("paused")
     assert second["ok"] == 2
     assert calls == [100, 100, 101]     # 第一张专辑重查了一次，第二张只查一次
+
+
+def test_non_rate_limit_pause_waits_before_retrying(tmp_path, monkeypatch):
+    """反爬挡住时没有冷却时间可等，也不能报 1 秒——否则续跑会连撞三次上限。"""
+    from kiralrc import netauth
+
+    p = make_flac(tmp_path / "a.flac", title="T")
+
+    def blocked(aid, **kw):
+        kw.get("state", {}).update({"blocked": True})
+        return {}
+
+    monkeypatch.setattr(scrape, "album_detail", blocked)
+    summary = scrape.apply_plan({"items": [
+        {"path": str(p), "album_id": 1, "resolve": "album",
+         "fields": {"netease_id": True}, "mode": "fill"},
+    ]})
+    assert netauth.cooling_for() == 0          # 不是限速
+    assert summary["paused"] and summary["retry_after"] >= 25
+    assert summary["resume_from"] == 1
+
+
+def test_non_rate_limit_pause_waits_before_retrying(tmp_path, monkeypatch):
+    """反爬挡住时没有冷却时间可等，也不能报 1 秒——否则续跑会连撞三次上限。"""
+    from kiralrc import netauth
+
+    p = make_flac(tmp_path / "a.flac", title="T")
+
+    def blocked(aid, **kw):
+        kw.get("state", {}).update({"blocked": True})
+        return {}
+
+    monkeypatch.setattr(scrape, "album_detail", blocked)
+    summary = scrape.apply_plan({"items": [
+        {"path": str(p), "album_id": 1, "resolve": "album",
+         "fields": {"netease_id": True}, "mode": "fill"},
+    ]})
+    assert netauth.cooling_for() == 0          # 不是限速
+    assert summary["paused"] and summary["retry_after"] >= 25
+    assert summary["resume_from"] == 1

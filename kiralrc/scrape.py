@@ -368,15 +368,6 @@ def inspect_track(path: str | Path) -> dict:
     except Exception:
         info["album_id"] = 0
 
-    # 专辑 ID 复用刚读到的标签，不再为它多开一次文件
-    try:
-        tags = getattr(audio, "tags", None) if audio is not None else None
-        if not tags and ext == ".mp3":
-            tags = _id3_tags(p)
-        info["album_id"] = _album_id_from_tags(tags)
-    except Exception:
-        info["album_id"] = 0
-
     info.update({k: meta[k] for k in ("title", "artist", "album", "year")})
     w, h = image_size(meta["cover"])
     info["cover_w"], info["cover_h"] = w, h
@@ -461,10 +452,6 @@ def netease_details(ids: list[int], netease_json=None, state: dict | None = None
         return []
     songs = data.get("songs") or []
     return [s for s in songs if isinstance(s, dict)]
-
-
-ALBUM_RETRY = 3                      # 反爬（code -462）是随机的：同一张专辑多要两次就好
-ALBUM_BLOCKED_CODES = {-462, -460, 400}
 
 
 ALBUM_RETRY = 3                      # 反爬（code -462）是随机的：同一张专辑多要两次就好
@@ -713,6 +700,7 @@ def search_candidates(query: str, artist: str = "", title: str = "",
 # ---------- 写入 ----------
 
 RESOLVE_GAP = 0.8            # 「按网易云补全」每首之间歇一下，免得被限速
+PAUSE_MIN_WAIT = 25          # 非限速暂停（反爬挡住之类）的保底等待秒数
 DURATION_TOLERANCE = 3       # 秒。同一录音不会差太多；长曲子再放宽 2%（编码留白）
 
 # 版本关键词不许当副标题丢掉：不然「晴天 (Live)」会被当成原版写进去。
@@ -855,7 +843,8 @@ def _local_meta(path: Path, ext: str) -> dict:
     elif ext == ".mp3":
         tags = getattr(audio, "tags", None) if audio is not None else None
         meta = _id3_meta(tags if tags is not None else _id3_tags(path))
-    elif ext == ".m4a":
+    elif ext in (".m4a", ".mp4"):
+        # mp4 和 m4a 共用同一套 MP4 标签：漏了 .mp4 会在 fill 模式下以为本地什么都没有
         meta = _m4a_meta(audio) if audio is not None else _m4a_meta(None)
     else:
         meta = {"title": "", "artist": "", "album": "", "year": "", "cover": b""}
@@ -1170,7 +1159,13 @@ def apply_plan(plan, on_item=None) -> dict:
             on_item(i, total, res)
 
     def pause(reason: str, start: int, ok: int, skipped: int, failed: int, picks: int) -> dict:
-        wait = int(round(netauth.cooling_for())) + 1
+        cooling = netauth.cooling_for()
+        if cooling > 0:
+            wait = int(round(cooling)) + 1
+        else:
+            # 不是限速（比如专辑接口被反爬挡住）：没有冷却时间可等，
+            # 但也不能报 1 秒——前端会 3 秒内连撞 3 次「续跑」上限就停手了。
+            wait = PAUSE_MIN_WAIT
         for j in range(start, total + 1):
             emit(j, _skip_result(items[j - 1], reason))
         return {"summary": True, "total": total, "ok": ok,

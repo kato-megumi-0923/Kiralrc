@@ -213,6 +213,15 @@ func (a *app) loadScrapeItems() {
 					items[i].WriteState = "done" // 「重新读取」之后仍能看出哪些已经写过
 				}
 			}
+			// 换目录 / 换勾选会带来一整批新封面：旧缩略图没人再用了，
+			// 位图不清掉会随着反复切换一路涨上去（每张 240×240 也在占显存）
+			a.scrapeMu.Lock()
+			a.scrapeThumbs = nil
+			a.scrapeThumbBusy = nil
+			a.scrapeCovers = nil
+			a.scrapeSizes = nil
+			a.scrapeSizeBusy = nil
+			a.scrapeMu.Unlock()
 			a.scrapeItems = items
 			if len(items) > 0 {
 				a.scrapeQuery = scrapeDefaultQuery(items[0])
@@ -1581,6 +1590,9 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 	bar := ui.Column(c.Key("scrape-bar")).FillWidth().Padding(12, 14, 12, 14).Gap(10).
 		Radius(14).Background(p.surface)
 	bar.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 14, 1) })
+	if len(a.scrapePending) > 0 && !a.scrapeApplying {
+		c.After(time.Second) // 倒计时每秒走一格，否则界面停在第一次画的秒数上
+	}
 	bar.Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(2).Children(func() {
 			ui.Text(c, "写入字段").FontSize(12).FontWeight(700).TextColor(p.muted).Margin(0, 10, 0, 4)
@@ -1606,7 +1618,8 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 				if wait < 0 {
 					wait = 0
 				}
-				hint = fmt.Sprintf("限速暂停：还剩 %d 首，约 %d 秒后自动续跑", n, wait)
+				// 也可能是反爬挡住而不是限速，措辞别写死
+				hint = fmt.Sprintf("已暂停：还剩 %d 首，约 %d 秒后自动续跑", n, wait)
 			}
 			ui.Text(c, hint).FontSize(11.5).TextColor(p.muted).Grow(1).MinWidth(0).SingleLine()
 
