@@ -546,3 +546,45 @@ func writeTestMP3(t *testing.T, path, title, artist string) {
 		t.Fatal(err)
 	}
 }
+
+// 每个 Tab 上写的数字必须等于点下去列表里的行数（含搜索词），
+// 两边共用 statusMatchesFilter，这里把它钉住。
+func TestTabCountsMatchTheFilteredList(t *testing.T) {
+	t.Setenv("KIRALRC_NO_PREFS", "1")
+	a := newApp()
+	a.tracks = []trackItem{
+		{Title: "官方", Status: "official"},
+		{Title: "对齐", Status: "aligned"},
+		{Title: "来源未知", Status: "unknown"},
+		{Title: "仅整行", Status: "line_only"},
+		{Title: "缺词", Status: "missing"},
+		{Title: "全网无词", Status: "nolyrics_notfound"},
+		{Title: "纯音乐", Status: "inst_pure"},
+		{Title: "OST", Status: "inst_ost"},
+		{Title: "伴奏", Status: "inst_accomp"},
+	}
+
+	for _, query := range []string{"", "词", "官方"} {
+		a.libQuery = query
+		counts := a.filterCounts()
+		for f := 0; f <= 5; f++ {
+			a.libFilter = f
+			listed := 0
+			for i := range a.tracks {
+				if a.trackMatchesFilter(&a.tracks[i]) {
+					listed++
+				}
+			}
+			if listed != counts[f] {
+				t.Errorf("query=%q filter=%d：Tab 写 %d，列表是 %d", query, f, counts[f], listed)
+			}
+		}
+	}
+
+	// 顺带确认各 Tab 覆盖的是应有状态，官方逐字不能被「对齐」Tab 吞掉
+	a.libQuery = ""
+	c := a.filterCounts()
+	if c[0] != 6 || c[5] != 1 || c[2] != 2 || c[1] != 1 || c[3] != 2 || c[4] != 3 {
+		t.Errorf("分类条数不对: %v", c)
+	}
+}

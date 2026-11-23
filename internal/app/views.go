@@ -882,17 +882,23 @@ func (a *app) viewLibrary(c *ui.Context) {
 				}
 			})
 
-			// 5-Tab Filter bar with Cloudy sliding selection pill (Match: tabPillMatch{})
+			// 每个 Tab 对应一个筛选值，条数现算（搜索词也算在内），
+			// 保证「Tab 上的数字」和「点下去列表里的行数」永远一致。
 			ui.Row(c.Key("filter-bar")).Gap(6).Margin(4, 0, 0, 0).AlignItems(ui.Center).Children(func() {
-				tabs := []string{
-					fmt.Sprintf("有效人声 %d", st.Vocal),
-					fmt.Sprintf("待升级逐字 %d", st.LineOnly),
-					fmt.Sprintf("逐字就绪 %d", st.Enhanced),
-					fmt.Sprintf("无歌词 %d", st.Missing),
-					fmt.Sprintf("纯音乐 / OST / 伴奏 %d", st.InstTotal),
+				counts := a.filterCounts()
+				tabs := []struct {
+					label string
+					filter int
+				}{
+					{fmt.Sprintf("有效人声 %d", counts[0]), 0},
+					{fmt.Sprintf("官方逐字 %d", counts[5]), 5},
+					{fmt.Sprintf("对齐逐字 %d", counts[2]), 2},
+					{fmt.Sprintf("仅整行 %d", counts[1]), 1},
+					{fmt.Sprintf("无歌词 %d", counts[3]), 3},
+					{fmt.Sprintf("纯音乐 / OST / 伴奏 %d", counts[4]), 4},
 				}
-				for i, tl := range tabs {
-					idx, label := i, tl
+				for _, tab := range tabs {
+					idx, label := tab.filter, tab.label
 					on := a.libFilter == idx
 					btn := ui.ButtonBase(c.Key(fmt.Sprintf("tab-%d", idx))).Height(32).PaddingX(14).Radius(999).
 						Center().Label(label).Selected(on).FocusRing(false)
@@ -1342,7 +1348,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 						b.Children(func() { ui.Icon(c, icon).Size(14, 14).TextColor(col) })
 						if enabled && b.Clicked() {
 							a.libPage = target
-							a.win.Invalidate()
+							if a.win != nil {
+								a.win.Invalidate()
+							}
 						}
 					}
 					arrow("page-prev", iconChevronL, a.libPage-1, a.libPage > 0)
@@ -1371,7 +1379,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 						})
 						if pb.Clicked() {
 							a.libPage = idx
-							a.win.Invalidate()
+							if a.win != nil {
+								a.win.Invalidate()
+							}
 						}
 					}
 
@@ -1389,7 +1399,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 					})
 					if sizeBtn.Clicked() {
 						a.pageMenuOpen = !a.pageMenuOpen
-						a.win.Invalidate()
+						if a.win != nil {
+							a.win.Invalidate()
+						}
 					}
 
 					if a.pageMenuOpen {
@@ -1404,7 +1416,9 @@ func (a *app) viewLibrary(c *ui.Context) {
 								fmt.Sprintf("%d / 页", size), bg, fg).Clicked() {
 								a.setPageSize(size)
 								a.pageMenuOpen = false
-								a.win.Invalidate()
+								if a.win != nil {
+									a.win.Invalidate()
+								}
 							}
 						}
 					}

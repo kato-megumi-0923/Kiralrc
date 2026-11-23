@@ -1621,30 +1621,57 @@ func isNoLyricsStatus(status string) bool {
 	return status == "missing" || status == "nolyrics_notfound"
 }
 
-func (a *app) trackMatchesFilter(tr *trackItem) bool {
-	if q := strings.TrimSpace(strings.ToLower(a.libQuery)); q != "" {
-		if !strings.Contains(strings.ToLower(tr.Title), q) &&
-			!strings.Contains(strings.ToLower(tr.Artist), q) &&
-			!strings.Contains(strings.ToLower(tr.File), q) {
-			return false
-		}
+// matchesQuery 只看搜索词，与当前选中的 Tab 无关。
+func (a *app) matchesQuery(tr *trackItem) bool {
+	q := strings.TrimSpace(strings.ToLower(a.libQuery))
+	if q == "" {
+		return true
 	}
-	isInst := tr.Status == "inst_pure" || tr.Status == "inst_ost" || tr.Status == "inst_accomp"
-	switch a.libFilter {
+	return strings.Contains(strings.ToLower(tr.Title), q) ||
+		strings.Contains(strings.ToLower(tr.Artist), q) ||
+		strings.Contains(strings.ToLower(tr.File), q)
+}
+
+// statusMatchesFilter 某个状态是否属于某个 Tab。
+// 列表、Tab 上的条数都调它，规则只有一份，不会两边算出不同结果。
+func statusMatchesFilter(status string, filter int) bool {
+	isInst := status == "inst_pure" || status == "inst_ost" || status == "inst_accomp"
+	switch filter {
 	case 0:
 		return !isInst
 	case 1:
-		return tr.Status == "line_only"
+		return status == "line_only"
 	case 2:
-		return tr.Status == "aligned" || tr.Status == "unknown"
-	case 5:
-		return tr.Status == "official"
+		return status == "aligned" || status == "unknown"
 	case 3:
-		return isNoLyricsStatus(tr.Status)
+		return isNoLyricsStatus(status)
 	case 4:
 		return isInst
+	case 5:
+		return status == "official"
 	}
 	return true
+}
+
+func (a *app) trackMatchesFilter(tr *trackItem) bool {
+	return a.matchesQuery(tr) && statusMatchesFilter(tr.Status, a.libFilter)
+}
+
+// filterCounts 一次遍历算出每个 Tab 的条数（含搜索词），下标就是筛选值。
+func (a *app) filterCounts() [6]int {
+	var counts [6]int
+	for i := range a.tracks {
+		tr := &a.tracks[i]
+		if !a.matchesQuery(tr) {
+			continue
+		}
+		for f := 0; f < len(counts); f++ {
+			if statusMatchesFilter(tr.Status, f) {
+				counts[f]++
+			}
+		}
+	}
+	return counts
 }
 
 func (a *app) selectedLibraryTracks() []trackItem {
