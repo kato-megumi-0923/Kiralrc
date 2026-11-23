@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -880,5 +881,55 @@ func TestPruneDropsSelectionsForGoneFiles(t *testing.T) {
 	}
 	if !a.isTrackSelected(alive) {
 		t.Fatal("还在的曲目不该被清")
+	}
+}
+
+// 造一个 ID3v2 标签：帧头按版本用不同的长度编码（v2.3 普通大端 / v2.4 syncsafe）。
+func buildID3(version byte, frames [][2][]byte) []byte {
+	syncsafe := func(n int) []byte {
+		return []byte{byte(n>>21) & 0x7f, byte(n>>14) & 0x7f, byte(n>>7) & 0x7f, byte(n) & 0x7f}
+	}
+	var body []byte
+	for _, fr := range frames {
+		id, data := fr[0], fr[1]
+		body = append(body, id...)
+		if version >= 4 {
+			body = append(body, syncsafe(len(data))...)
+		} else {
+			n := len(data)
+			body = append(body, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		}
+		body = append(body, 0, 0) // 帧标志
+		body = append(body, data...)
+	}
+	out := []byte{'I', 'D', '3', version, 0, 0}
+	out = append(out, syncsafe(len(body))...)
+	return append(out, body...)
+}
+
+// v2.3 的帧长是普通 32 位，不是 syncsafe。早前一律按 syncsafe 读，
+// 前面有个 >127 字节的帧就会串位，后面的 APIC 再也找不到。
+func TestEmbeddedCoverParsesID3v23AndV24(t *testing.T) {
+	cover := []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("x", 64))
+	apic := func() []byte {
+		b := []byte{0} // 编码：Latin-1
+		b = append(b, []byte("image/png")...)
+		b = append(b, 0)    // MIME 结尾
+		b = append(b, 3)    // 图片类型：正面
+		b = append(b, 0)    // 空描述
+		return append(b, cover...)
+	}
+	filler := [2][]byte{[]byte("USLT"), append([]byte{0, 0, 0}, bytes.Repeat([]byte("歌词"), 120)...)}
+
+	for _, version := range []byte{3, 4} {
+		tag := buildID3(version, [][2][]byte{filler, {[]byte("APIC"), apic()}})
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("v2.%d.mp3", version))
+		if err := os.WriteFile(path, tag, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := readEmbeddedCover(path)
+		if !bytes.Equal(got, cover) {
+			t.Fatalf("ID3v2.%d 取封面失败：拿到 %d 字节", version, len(got))
+		}
 	}
 }

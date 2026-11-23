@@ -253,25 +253,73 @@ func parseFlacPicture(body []byte) ([]byte, int) {
 	return body[pos : pos+dataLen], picType
 }
 
+// id3Cover 在 ID3v2 标签里找封面。
+//
+// 三个版本的帧头不一样，混着读会直接串位：
+//
+//	v2.2  帧 ID 3 字节 + 长度 3 字节（普通大端）
+//	v2.3  帧 ID 4 字节 + 长度 4 字节（普通大端）
+//	v2.4  同上，但长度是 syncsafe（每字节只用低 7 位）
+//
+// 早先一律按 syncsafe 读，v2.3 里超过 127 字节的帧（USLT、APIC 基本都是）
+// 一读就偏，导致 312 首本来有封面的歌显示成占位块。
 func id3Cover(f *os.File, head []byte) []byte {
+	version := head[3]
 	size := int64(head[6]&0x7F)<<21 | int64(head[7]&0x7F)<<14 |
 		int64(head[8]&0x7F)<<7 | int64(head[9]&0x7F)
 	body := make([]byte, size)
 	if _, err := f.ReadAt(body, 10); err != nil {
 		return nil
 	}
+
 	pos := 0
-	if head[5]&0x40 != 0 && len(body) > 4 {
-		ext := int64(body[0])<<24 | int64(body[1])<<16 | int64(body[2])<<8 | int64(body[3])
-		pos = int(ext)
+	if head[5]&0x40 != 0 && len(body) > 4 { // 扩展头
+		if version >= 4 { // v2.4：长度含自身，且是 syncsafe
+			ext := int64(body[0]&0x7F)<<21 | int64(body[1]&0x7F)<<14 |
+				int64(body[2]&0x7F)<<7 | int64(body[3]&0x7F)
+			pos = int(ext)
+		} else { // v2.3：长度不含自身，普通大端
+			ext := int64(body[0])<<24 | int64(body[1])<<16 | int64(body[2])<<8 | int64(body[3])
+			pos = int(ext) + 4
+		}
 	}
+
+	if version == 2 {
+		for pos+6 <= len(body) {
+			id := string(body[pos : pos+3])
+			if id == "\x00\x00\x00" {
+				return nil
+			}
+			fsize := int64(body[pos+3])<<16 | int64(body[pos+4])<<8 | int64(body[pos+5])
+			pos += 6
+			if fsize <= 0 || pos+int(fsize) > len(body) {
+				return nil
+			}
+			frame := body[pos : pos+int(fsize)]
+			pos += int(fsize)
+			if id == "PIC" {
+				if data := parsePIC(frame); data != nil {
+					return data
+				}
+			}
+		}
+		return nil
+	}
+
+	syncsafe := version >= 4
 	for pos+10 <= len(body) {
 		id := string(body[pos : pos+4])
 		if id == "\x00\x00\x00\x00" {
 			return nil
 		}
-		fsize := int64(body[pos+4])<<21 | int64(body[pos+5])<<14 |
-			int64(body[pos+6])<<7 | int64(body[pos+7])
+		var fsize int64
+		if syncsafe {
+			fsize = int64(body[pos+4]&0x7F)<<21 | int64(body[pos+5]&0x7F)<<14 |
+				int64(body[pos+6]&0x7F)<<7 | int64(body[pos+7]&0x7F)
+		} else {
+			fsize = int64(body[pos+4])<<24 | int64(body[pos+5])<<16 |
+				int64(body[pos+6])<<8 | int64(body[pos+7])
+		}
 		pos += 10
 		if fsize <= 0 || pos+int(fsize) > len(body) {
 			return nil
@@ -298,26 +346,34 @@ func parseAPIC(frame []byte) []byte {
 	for end < len(rest) && rest[end] != 0 {
 		end++
 	}
-	mime := string(rest[:end])
 	if end+1 >= len(rest) {
 		return nil
 	}
-	rest = rest[end+1:]
+	rest = rest[end+1:] // 跳过 MIME 与它的结尾 0
 	if len(rest) < 1 {
 		return nil
 	}
-	rest = rest[1:] // 图片类型
-	// 描述：UTF-16 时两字节一字符，结尾是两个 0
+	return skipPicDesc(enc, rest[1:]) // 再跳 1 字节图片类型
+}
+
+// parsePIC 是 v2.2 的封面帧：「编码 + 3 字节图片格式 + 图片类型 + 描述 + 数据」。
+func parsePIC(frame []byte) []byte {
+	if len(frame) < 5 {
+		return nil
+	}
+	return skipPicDesc(frame[0], frame[4:])
+}
+
+// skipPicDesc 跳过描述字段（UTF-16 结尾是两个 0，其余是单个 0），返回图片数据。
+func skipPicDesc(enc byte, rest []byte) []byte {
 	if enc == 1 || enc == 2 {
-		i := 0
-		for i+1 < len(rest) {
+		for i := 0; i+1 < len(rest); i += 2 {
 			if rest[i] == 0 && rest[i+1] == 0 {
-				i += 2
+				rest = rest[i+2:]
 				break
 			}
-			i += 2
 		}
-		rest = rest[min(i, len(rest)):]
+		// 找不到终止符说明没有描述，整段就是数据
 	} else {
 		i := 0
 		for i < len(rest) && rest[i] != 0 {
@@ -326,11 +382,10 @@ func parseAPIC(frame []byte) []byte {
 		if i < len(rest) {
 			i++
 		}
-		rest = rest[min(i, len(rest)):]
+		rest = rest[i:]
 	}
 	if len(rest) == 0 {
 		return nil
 	}
-	_ = mime
 	return rest
 }
