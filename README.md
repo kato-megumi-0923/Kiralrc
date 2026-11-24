@@ -8,8 +8,8 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4?style=flat-square)](#快速开始)
 [![License](https://img.shields.io/badge/license-MIT-2e8b57?style=flat-square)](LICENSE)
 
-核心思路是 **「能直下官方逐字就不算本地模型」**——绝大多数歌曲**无需显卡、无需下载本地模型**，开箱直下官方逐字与译文，<br/>
-一站式打通 **NCM 解密 → 曲库管理 → 官方取词 & 译文补全 → 标签刮削 → 校对 & AI 翻译**（冷门曲再由本地歌声模型兜底）。
+能直下官方逐字就不算本地模型——绝大多数歌曲**无需显卡与本地模型**，开箱直下官方逐字与译文，<br/>
+一站式打通 **NCM 解密 → 曲库管理 → 官方取词 & 补译文 → 标签刮削 → 校对 & AI 翻译**。
 
 </div>
 
