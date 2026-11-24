@@ -463,16 +463,33 @@ func (a *app) viewSettingsTranslation(c *ui.Context) {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Gap(1).Children(func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "AI 歌词翻译（OpenAI 兼容）").FontSize(13.5).FontWeight(600)
-						if a.aiTranslateConfigured() {
-							statusPill(c, "已启用", p.okBg, p.ok)
+						ui.Text(c, "AI 歌词翻译").FontSize(13.5).FontWeight(600)
+						if a.setAIMode == 0 {
+							statusPill(c, "官方内置 · 已启用", p.okBg, p.ok)
+						} else if a.aiTranslateConfigured() {
+							statusPill(c, "自定义 · 已启用", p.okBg, p.ok)
 						} else {
 							statusPill(c, "未配置", p.surface2, p.muted)
 						}
 					})
-					ui.Text(c, "在编辑页一键整首翻译日/英/韩等外语歌词，支持 DeepSeek、OpenAI 及各类兼容中转接口").FontSize(12).TextColor(p.muted)
+					ui.Text(c, "在编辑页一键整首翻译日/英/韩等外语歌词；支持开箱即用的官方翻译，也可接入自己的 DeepSeek / OpenAI / Ollama").FontSize(12).TextColor(p.muted)
 				})
+				prevMode := a.setAIMode
+				segmented(c.Key("set-ai-mode"), &a.setAIMode, "官方内置", "自定义 API")
+				if a.setAIMode != prevMode {
+					a.setAIURLDropOpen = false
+					a.setAIModelDropOpen = false
+					a.savePrefs()
+				}
 			})
+			if a.setAIMode == 0 {
+				infoBox := ui.Column(c.Key("set-ai-official-info")).FillWidth().Padding(12, 14, 12, 14).Gap(4).Radius(12).Background(p.bg)
+				infoBox.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 12, 1) })
+				infoBox.Children(func() {
+					ui.Text(c, "当前使用 Kiralrc 官方内置翻译（DeepSeek）").FontSize(12.5).FontWeight(650).TextColor(p.text)
+					ui.Text(c, "无需填写 API Key，在编辑器点「翻译」即可直接使用；单小时限 30 首。如需无限制批量翻译或使用其它模型，请切换到右侧「自定义 API」。").FontSize(12).TextColor(p.muted)
+				})
+			} else {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
 				// Left column: Base URL input + aligned dropdown
 				ui.Column(c.Key("set-ai-url-col")).Grow(3).MinWidth(0).Gap(4).Children(func() {
@@ -694,6 +711,7 @@ func (a *app) viewSettingsTranslation(c *ui.Context) {
 					}
 				}
 			})
+			}
 		})
 	})
 }

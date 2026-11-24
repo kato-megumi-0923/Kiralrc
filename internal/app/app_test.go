@@ -246,13 +246,6 @@ func TestNoLyricsWorkflowAndNeteaseIDParsing(t *testing.T) {
 	a.setLibFilter(3) // 无歌词 Tab
 	tt := ui.NewTester(a.view, 1360, 860)
 	tt.Frame()
-	if err := tt.Click("批量填网易云 ID"); err != nil {
-		t.Fatalf("click 批量填网易云 ID: %v", err)
-	}
-	tt.Frame()
-	if !a.libBatchIdOpen {
-		t.Fatalf("expected libBatchIdOpen=true")
-	}
 
 	// 列表固定按相对路径排（不再让「全网无词」抢到前面），状态本身照旧区分
 	a3 := filepath.Join(tmp, "新歌 - 本地缺词.flac")
@@ -423,9 +416,18 @@ func TestTranslateCurrentLyricsMockServer(t *testing.T) {
 		t.Fatalf("expected Japanese lyrics to need translation")
 	}
 
-	// 未配置时拦截并提示
+	// 默认官方内置模式无需 API Key 即视为已配置
+	if !a.aiTranslateConfigured() {
+		t.Fatalf("expected official AI translate mode to be configured by default")
+	}
+	if u, m, k := a.aiTranslateConfig(); u != officialAITranslateBaseURL || m != officialAITranslateModel || k != "" {
+		t.Fatalf("unexpected official config: %q %q %q", u, m, k)
+	}
+
+	// 切换自定义模式且未配置时拦截并提示
+	a.setAIMode = 1
 	if err := a.translateCurrentLyricsSync(srv.Client()); err == nil {
-		t.Fatalf("expected error when AI config is empty")
+		t.Fatalf("expected error when custom AI config is empty")
 	}
 	if !strings.Contains(a.toast, "设置") {
 		t.Fatalf("expected settings toast, got %q", a.toast)

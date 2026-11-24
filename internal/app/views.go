@@ -976,39 +976,48 @@ func (a *app) viewLibrary(c *ui.Context) {
 				}
 				ui.Box(c).Grow(1)
 				if a.libFilter == 3 {
-					idBtnBg, idBtnFg := p.surface2, p.text
-					if a.libBatchIdOpen {
-						idBtnBg, idBtnFg = p.accent.Alpha(0.14), p.accent
-					}
-					if pillButton(c.Key("lib-batch-id-toggle"), iconLink, "批量填网易云 ID", idBtnBg, idBtnFg).Clicked() {
-						a.libBatchIdOpen = !a.libBatchIdOpen
-						if a.libBatchIdOpen {
-							a.libExpandedPath = ""
-							a.libExpandedMode = ""
+					if selCount > 0 {
+						if pillButton(c.Key("lib-nl-download-lyrics"), iconDownload, "下载歌词", p.surface2, p.text).Clicked() {
+							a.downloadLyricsOf(selTracks)
+						}
+						if pillButton(c.Key("lib-nl-scrape"), iconTag, "刮削标签", p.surface2, p.text).Clicked() {
+							paths := make([]string, 0, len(selTracks))
+							for _, t := range selTracks {
+								paths = append(paths, t.FullPath)
+							}
+							a.openScrapeTracks(paths)
 						}
 					}
-					if pillButton(c.Key("lib-retry-search"), nil, "重试全网搜索", p.surface2, p.text).Clicked() {
+					if pillButton(c.Key("lib-retry-search"), nil, "重试全网", p.surface2, p.text).Clicked() {
 						a.enqueueNoLyricsRetrySearch(selTracks)
 					}
-					asrLabel := "本地 ASR 识别并对齐"
-					if selCount > 0 {
-						asrLabel = fmt.Sprintf("本地 ASR 识别并对齐（%d 首）", selCount)
-					}
-					if pillButton(c.Key("lib-batch-asr"), iconMic, asrLabel, p.accent, p.onAccent).Clicked() {
+					if pillButton(c.Key("lib-batch-asr"), iconMic, "本地 ASR 识别并对齐", p.surface2, p.text).Clicked() {
 						a.enqueueNoLyricsAsr(selTracks)
 					}
+				} else if a.libFilter == 4 {
+					if selCount > 0 {
+						if pillButton(c.Key("lib-inst-scrape"), iconTag, "刮削标签", p.surface2, p.text).Clicked() {
+							paths := make([]string, 0, len(selTracks))
+							for _, t := range selTracks {
+								paths = append(paths, t.FullPath)
+							}
+							a.openScrapeTracks(paths)
+						}
+					} else {
+						ui.Text(c, "勾选下方曲目后即可一键批量刮削标签").FontSize(12).TextColor(p.muted)
+					}
 				} else if selCount > 0 {
-					if pillButton(c.Key("lib-download-lyrics"), iconDownload, fmt.Sprintf("下载歌词（%d 首）", selCount), p.surface2, p.text).Clicked() {
+					if pillButton(c.Key("lib-download-lyrics"), iconDownload, "下载歌词", p.surface2, p.text).Clicked() {
 						a.downloadLyricsOf(selTracks)
 					}
-					if pillButton(c.Key("lib-scrape"), iconTag, fmt.Sprintf("刮削标签（%d 首）", selCount), p.surface2, p.text).Clicked() {
+					if pillButton(c.Key("lib-scrape"), iconTag, "刮削标签", p.surface2, p.text).Clicked() {
 						paths := make([]string, 0, len(selTracks))
 						for _, t := range selTracks {
 							paths = append(paths, t.FullPath)
 						}
 						a.openScrapeTracks(paths)
 					}
-					if pillButton(c.Key("lib-start-align"), iconPlay, fmt.Sprintf("对齐歌词（%d 首）", selCount), p.accent, p.onAccent).Clicked() {
+					if pillButton(c.Key("lib-start-align"), iconPlay, "对齐歌词", p.surface2, p.text).Clicked() {
 						a.enqueueFromLibrary()
 						a.navigate(pageQueue, 1)
 					}
@@ -1098,11 +1107,12 @@ func (a *app) viewLibrary(c *ui.Context) {
 				}
 				ui.Row(c.Key("thead")).Height(34).PaddingX(12).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Box(c).Width(22)
-					ui.Text(c, "标题").Width(250).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "艺术家").Width(110).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "歌词状态").Width(96).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "语言").Width(56).FontSize(11.5).FontWeight(600).TextColor(p.faint)
-					ui.Text(c, "备注").Grow(1).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "标题").Width(220).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "艺术家").Width(100).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "歌词状态").Width(88).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "语言").Width(48).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "文件路径").Grow(2).MinWidth(0).FontSize(11.5).FontWeight(600).TextColor(p.faint)
+					ui.Text(c, "备注").Grow(1).MinWidth(0).FontSize(11.5).FontWeight(600).TextColor(p.faint)
 					ui.Text(c, "操作").Width(actColW).FontSize(11.5).FontWeight(600).TextColor(p.faint)
 				})
 				// 先算出当前筛选下的全部行，再按页取一段
@@ -1161,7 +1171,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 								cb.Children(func() { ui.Icon(c, iconCheck).Size(12, 12).TextColor(p.onAccent) })
 							}
 
-							ui.Row(c).Width(250).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
+							ui.Row(c).Width(220).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
 								if cover, _ := a.lookupCover(tr.FullPath); cover != nil {
 									ui.Image(c, cover).Size(36, 36).Radius(8).Fit(ui.Cover).Shrink(0)
 								} else {
@@ -1172,8 +1182,8 @@ func (a *app) viewLibrary(c *ui.Context) {
 									ui.Text(c, tr.File).FontSize(11.5).TextColor(p.muted).SingleLine()
 								})
 							})
-							ui.Text(c, tr.Artist).Width(110).Shrink(0).FontSize(13).TextColor(p.text).SingleLine()
-							ui.Box(c).Width(96).Shrink(0).AlignItems(ui.Start).Children(func() {
+							ui.Text(c, tr.Artist).Width(100).Shrink(0).FontSize(13).TextColor(p.text).SingleLine()
+							ui.Box(c).Width(88).Shrink(0).AlignItems(ui.Start).Children(func() {
 								switch tr.Status {
 								case "official":
 									statusPill(c, "官方逐字", p.okBg, p.ok)
@@ -1197,8 +1207,19 @@ func (a *app) viewLibrary(c *ui.Context) {
 									statusPill(c, "已跳过", p.surface2, p.muted)
 								}
 							})
-							ui.Box(c).Width(56).Shrink(0).AlignItems(ui.Start).Children(func() {
+							ui.Box(c).Width(48).Shrink(0).AlignItems(ui.Start).Children(func() {
 								statusPill(c, tr.Lang, p.surface2, p.muted)
+							})
+							pathCell := ui.Box(c.Key(fmt.Sprintf("tr-path-%d", idx))).Grow(2).MinWidth(0).AlignItems(ui.Start)
+							pathCell.Children(func() {
+								ui.Text(c, tr.FullPath).FillWidth().FontSize(11.5).TextColor(p.muted).SingleLine()
+							})
+							ui.TooltipBase(c, pathCell, func(tip ui.Element) {
+								tip.Padding(6, 10).Radius(8).Background(p.raised).Border(1, p.hairline).
+									Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.22)).MaxWidth(640)
+								tip.Children(func() {
+									ui.Text(c, tr.FullPath).FontSize(12).TextColor(p.text)
+								})
 							})
 							ui.Text(c, tr.Note).Grow(1).MinWidth(0).FontSize(12).TextColor(p.muted).SingleLine()
 						})
@@ -1235,7 +1256,7 @@ func (a *app) viewLibrary(c *ui.Context) {
 								if rowPill(fmt.Sprintf("nl-man-%d", idx), "手动填词", manBg, manFg).Clicked() {
 									a.toggleInlineDrawer(tr, "manual")
 								}
-								if rowPill(fmt.Sprintf("nl-asr-%d", idx), "本地 ASR", p.accent.Alpha(0.13), p.accent).Clicked() {
+								if rowPill(fmt.Sprintf("nl-asr-%d", idx), "本地 ASR", p.surface2, p.text).Clicked() {
 									a.enqueueNoLyricsAsr([]trackItem{*tr})
 								}
 							})
@@ -1419,15 +1440,21 @@ func (a *app) viewLibrary(c *ui.Context) {
 
 					arrow("page-next", iconChevronR, a.libPage+1, a.libPage < pages-1)
 
-					// 每页条数：按钮显示当前值，点开再选
+					// 每页条数：按钮显示当前值，点开从正上方居中弹出动画菜单
 					sizeBtn := ui.ButtonBase(c.Key("page-size-btn")).Height(30).PaddingX(12).Radius(999).
 						Gap(5).AlignItems(ui.Center).Label(fmt.Sprintf("每页 %d 条", a.pageSize())).
 						Background(p.accent.Alpha(0.10))
+					menuProgress := b2f(a.pageMenuOpen)
+					if !c.Preferences().ReduceMotion {
+						menuProgress = clamp01(sizeBtn.AnimateTo("menu-open", menuProgress, motionPane))
+					}
 					sizeBtn.Children(func() {
 						ui.Text(c, fmt.Sprintf("%d / 页", a.pageSize())).FontSize(12).FontWeight(600).
 							TextColor(p.accent).SingleLine()
-						// 始终朝下：表示「可以展开」
-						ui.Icon(c, iconChevronD).Size(11, 11).TextColor(p.accent)
+						chev := ui.Icon(c, iconChevronD).Size(11, 11).TextColor(p.accent)
+						if menuProgress > 0 {
+							chev.Scale(1, 1-2*menuProgress)
+						}
 					})
 					if sizeBtn.Clicked() {
 						a.pageMenuOpen = !a.pageMenuOpen
@@ -1436,22 +1463,47 @@ func (a *app) viewLibrary(c *ui.Context) {
 						}
 					}
 
-					if a.pageMenuOpen {
-						for _, n := range []int{50, 100} {
-							size := n
-							cur := a.pageSize() == size
-							bg, fg := p.surface2, p.text
-							if cur {
-								bg, fg = p.accent.Alpha(0.10), p.accent
-							}
-							if pillButton(c.Key(fmt.Sprintf("page-size-%d", size)), nil,
-								fmt.Sprintf("%d / 页", size), bg, fg).Clicked() {
-								a.setPageSize(size)
-								a.pageMenuOpen = false
-								if a.win != nil {
-									a.win.Invalidate()
+					if menuProgress > 0 || a.pageMenuOpen {
+						shown := true
+						ui.PopoverBase(c.Key("page-size-popover"), sizeBtn, &shown, func(panel ui.Element) {
+							s := lerp(0.92, 1, menuProgress)
+							panel.AttachTo(sizeBtn, ui.AnchorTop, ui.AnchorBottom).
+								Width(86).Margin(0, 0, 6, 0).Padding(4).Radius(12).
+								Background(p.raised).Border(1, p.hairline).Shadow(0, 6, 18, 0, p.cardShade).
+								TransformOrigin(0.5, 1).Opacity(menuProgress).Scale(s, s)
+							ui.Column(c).FillWidth().Gap(2).Children(func() {
+								for _, n := range []int{50, 100} {
+									size := n
+									cur := a.pageSize() == size
+									item := ui.ButtonBase(c.Key(fmt.Sprintf("page-size-%d", size))).FillWidth().Height(28).PaddingX(8).
+										Gap(4).Radius(8).AlignItems(ui.Center).Label(fmt.Sprintf("每页 %d 条", size)).FocusRing(false)
+									if cur {
+										item.Background(p.accent.Alpha(0.12))
+									} else if item.Hovered() {
+										item.Background(p.hover)
+									}
+									item.Children(func() {
+										fg := p.text
+										if cur {
+											fg = p.accent
+										}
+										ui.Text(c, fmt.Sprintf("%d / 页", size)).Grow(1).FontSize(12).FontWeight(600).TextColor(fg).SingleLine()
+										if cur {
+											ui.Icon(c, iconCheck).Size(13, 13).TextColor(p.accent)
+										}
+									})
+									if item.Clicked() {
+										a.setPageSize(size)
+										a.pageMenuOpen = false
+										if a.win != nil {
+											a.win.Invalidate()
+										}
+									}
 								}
-							}
+							})
+						})
+						if !shown && a.pageMenuOpen {
+							a.pageMenuOpen = false
 						}
 					}
 				})

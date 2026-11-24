@@ -290,7 +290,22 @@ func requestAITranslations(client *http.Client, baseURL, model, apiKey, title, a
 	return parseAITranslations(parsed.Choices[0].Message.Content, len(lines))
 }
 
+const (
+	officialAITranslateBaseURL = "https://kiralrc-translate.shiodome-official.workers.dev/v1"
+	officialAITranslateModel   = "deepseek-chat"
+)
+
+func (a *app) aiTranslateConfig() (baseURL, model, apiKey string) {
+	if a.setAIMode == 0 {
+		return officialAITranslateBaseURL, officialAITranslateModel, ""
+	}
+	return strings.TrimSpace(a.setAIBaseURL), strings.TrimSpace(a.setAIModel), strings.TrimSpace(a.setAIAPIKey)
+}
+
 func (a *app) aiTranslateConfigured() bool {
+	if a.setAIMode == 0 {
+		return officialAITranslateBaseURL != ""
+	}
 	baseURL := strings.TrimSpace(a.setAIBaseURL)
 	if baseURL == "" || strings.TrimSpace(a.setAIModel) == "" {
 		return false
@@ -343,12 +358,13 @@ func (a *app) translateCurrentLyricsSync(client *http.Client) error {
 		a.toast = "未接入 AI 翻译 API，请先在「设置」中配置 Base URL、模型和 API Key"
 		return errors.New("not configured")
 	}
+	baseURL, model, apiKey := a.aiTranslateConfig()
 	title, artist := extractSongMeta(a.edMetas, a.edFile)
 	origLines := make([]string, len(a.edLines))
 	for i, ln := range a.edLines {
 		origLines[i] = ln.Text
 	}
-	trans, err := requestAITranslations(client, a.setAIBaseURL, a.setAIModel, a.setAIAPIKey, title, artist, origLines)
+	trans, err := requestAITranslations(client, baseURL, model, apiKey, title, artist, origLines)
 	if err != nil {
 		a.toast = "AI 翻译失败：" + err.Error()
 		return err
@@ -373,9 +389,7 @@ func (a *app) translateCurrentLyrics() {
 		a.toast = "未接入 AI 翻译 API，请先在「设置」中配置 Base URL、模型和 API Key"
 		return
 	}
-	baseURL := a.setAIBaseURL
-	model := a.setAIModel
-	apiKey := a.setAIAPIKey
+	baseURL, model, apiKey := a.aiTranslateConfig()
 	snapPath := a.edPath
 	title, artist := extractSongMeta(a.edMetas, a.edFile)
 	origLines := make([]string, len(a.edLines))

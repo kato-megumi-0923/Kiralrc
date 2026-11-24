@@ -369,6 +369,7 @@ type app struct {
 	setCleanDays          int // 0:7天前 1:30天前 2:全部
 	setAppleToken         string
 	setAppleStorefront    int // 0:jp 1:cn 2:us
+	setAIMode             int // 0=官方内置翻译 1=自定义API
 	setAIBaseURL          string
 	setAIModel            string
 	setAIAPIKey           string
@@ -403,6 +404,7 @@ type userPrefs struct {
 	Volume           *float64 `json:"volume,omitempty"`
 	AppleToken       string   `json:"apple_media_user_token,omitempty"`
 	AppleStorefront  int      `json:"apple_storefront"`
+	AIMode           string   `json:"ai_mode,omitempty"`
 	AIBaseURL        string   `json:"ai_base_url,omitempty"`
 	AIModel          string   `json:"ai_model,omitempty"`
 	AIAPIKey         string   `json:"ai_api_key,omitempty"`
@@ -494,6 +496,19 @@ func (a *app) loadPrefs() {
 	}
 	a.setAIBaseURL = strings.TrimSpace(up.AIBaseURL)
 	a.setAIModel = strings.TrimSpace(up.AIModel)
+	switch strings.ToLower(strings.TrimSpace(up.AIMode)) {
+	case "custom":
+		a.setAIMode = 1
+	case "official":
+		a.setAIMode = 0
+	default:
+		// 老版本已配好自定义 API 的用户自动保持自定义模式；新用户默认走官方内置翻译
+		if a.setAIBaseURL != "" || strings.TrimSpace(up.AIAPIKey) != "" {
+			a.setAIMode = 1
+		} else {
+			a.setAIMode = 0
+		}
+	}
 	a.setCustomPython = strings.TrimSpace(up.CustomPython)
 	a.setCloudyAuth = up.CloudyAuth
 	if key, migrate, err := unprotectSecret(up.AIAPIKey); err == nil {
@@ -571,6 +586,10 @@ func (a *app) savePrefs() {
 			encAIKey = enc
 		}
 	}
+	aiModeStr := "official"
+	if a.setAIMode == 1 {
+		aiModeStr = "custom"
+	}
 	up := userPrefs{
 		QueueConcurrency: a.queueConcurrency,
 		QueueKeepGoing:   &kg,
@@ -582,6 +601,7 @@ func (a *app) savePrefs() {
 		Volume:           &vol,
 		AppleToken:       strings.TrimSpace(a.setAppleToken),
 		AppleStorefront:  a.setAppleStorefront,
+		AIMode:           aiModeStr,
 		AIBaseURL:        strings.TrimSpace(a.setAIBaseURL),
 		AIModel:          strings.TrimSpace(a.setAIModel),
 		AIAPIKey:         encAIKey,
@@ -917,11 +937,7 @@ func readTrackBatch(entries []audioEntry, notFoundSnap map[string]bool) (items [
 		}
 
 		artist, title := parseArtistTitle(f.full, stem)
-		relDir := filepath.ToSlash(filepath.Dir(f.rel))
-		if relDir == "." {
-			relDir = filepath.Base(filepath.Dir(f.full))
-		}
-		fileInfo := fmt.Sprintf("%s · %s", relDir, strings.TrimPrefix(strings.ToLower(ext), "."))
+		fileInfo := strings.TrimPrefix(strings.ToLower(ext), ".")
 		hue := hueForString(stem)
 
 		instKind := classifyAudioTrack(f.full, f.rel, lrcRaw)
@@ -1198,6 +1214,9 @@ func (a *app) scanLibraryAsync() {
 			resetCoverKeys() // 文件可能被换过，封面键重新算
 			a.libScanning = false
 			a.libScanTime = "今天 " + nowStr
+			if a.toast == "正在刷新曲库状态…" {
+				a.toast = ""
+			}
 		})
 	}()
 }
