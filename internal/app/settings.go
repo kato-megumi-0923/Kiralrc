@@ -384,6 +384,55 @@ func (a *app) viewSettingsAlignment(c *ui.Context) {
 
 func (a *app) viewSettingsSources(c *ui.Context) {
 	p := a.pal
+	order := normalizeDownloadSources(a.setDownloadSources)
+	orderCard := ui.Column(c.Key("set-download-order")).FillWidth().Padding(14, 18, 14, 18).Gap(10).Radius(16).Background(p.surface)
+	orderCard.Children(func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Gap(2).Children(func() {
+				ui.Text(c, "官方歌词下载源优先级").FontSize(13.5).FontWeight(600)
+				ui.Text(c, "按从上到下顺序依次尝试，优先采纳逐字歌词；调整后对批量下载与单曲默认下载均生效").FontSize(12).TextColor(p.muted)
+			})
+			if pillButton(c.Key("set-src-reset"), nil, "恢复默认", p.surface2, p.muted).Clicked() {
+				a.setDownloadSources = append([]string{}, defaultDownloadSourceOrder...)
+				a.savePrefs()
+				a.toast = "已恢复默认下载源顺序"
+			}
+		})
+		ui.Column(c.Key("set-src-list")).FillWidth().Gap(4).Children(func() {
+			for i, key := range order {
+				idx, k := i, key
+				row := ui.Row(c.Key("set-src-"+k)).FillWidth().Height(38).PaddingX(12).Gap(10).Radius(10).
+					AlignItems(ui.Center).Background(p.bg)
+				row.Draw(func(pt *ui.Painter, r ui.Rect) { pt.Stroke(r, p.hairline, 10, 1) })
+				row.Children(func() {
+					ui.Text(c, fmt.Sprintf("%d", idx+1)).Width(18).FontSize(12).FontWeight(700).TextColor(p.accent)
+					ui.Text(c, downloadSourceLabel(k)).Grow(1).FontSize(13).FontWeight(600).TextColor(p.text).SingleLine()
+					tag := "逐字"
+					if k == "lrclib" {
+						tag = "逐行"
+					}
+					statusPill(c, tag, p.surface2, p.muted)
+					if idx > 0 {
+						if pillButton(c.Key("set-src-up-"+k), nil, "上移", p.surface2, p.text).Clicked() {
+							next := append([]string{}, order...)
+							next[idx-1], next[idx] = next[idx], next[idx-1]
+							a.setDownloadSources = next
+							a.savePrefs()
+						}
+					}
+					if idx+1 < len(order) {
+						if pillButton(c.Key("set-src-dn-"+k), nil, "下移", p.surface2, p.text).Clicked() {
+							next := append([]string{}, order...)
+							next[idx+1], next[idx] = next[idx], next[idx+1]
+							a.setDownloadSources = next
+							a.savePrefs()
+						}
+					}
+				})
+			}
+		})
+	})
+
 	card := ui.Column(c.Key("set-sources")).FillWidth().Padding(6, 18, 6, 18).Radius(16).Background(p.surface)
 	card.Children(func() {
 		ui.Column(c.Key("set-apple-row")).FillWidth().Padding(10, 0, 10, 0).Gap(8).Children(func() {

@@ -401,7 +401,8 @@ def _write(path: Path, lrc: fmt.Lrc) -> None:
     os.replace(tmp, target)
 
 
-def download_one(audio: Path, force: bool = False) -> Result:
+def download_one(audio: Path, force: bool = False,
+                 sources_order: tuple[str, ...] | None = None) -> Result:
     """给一首歌下载歌词，按规则决定要不要写。"""
     audio = Path(audio)
     kind = lrc_kind(audio)
@@ -431,13 +432,13 @@ def download_one(audio: Path, force: bool = False) -> Result:
         duration = None
 
     try:
-        lyric = sources.fetch(song_id, name=name, artist=artist, duration=duration)
+        lyric = sources.fetch(song_id, name=name, artist=artist, duration=duration, sources=sources_order)
     except RateLimited:
         # 被限速时整条队列一起等，然后给这首一次机会
         hold(60)
         try:
             wait_pause()
-            lyric = sources.fetch(song_id, name=name, artist=artist, duration=duration)
+            lyric = sources.fetch(song_id, name=name, artist=artist, duration=duration, sources=sources_order)
         except RateLimited:
             return Result(audio, "failed", "平台限速，稍后重试")
         except Exception as e:
@@ -460,8 +461,8 @@ def download_one(audio: Path, force: bool = False) -> Result:
                       "没有源给出歌词")
 
     if not lyric.timed:
-        # 只有逐行：缺的时候才写，别拿逐行盖掉已有的逐行或逐字
-        if kind != "missing":
+        # 只有逐行：缺的时候才写，别拿逐行盖掉已有的逐行或逐字（显式 force 指定来源时允许写入）
+        if kind != "missing" and not force:
             if kind in ("aligned", "word"):
                 added, still_missing = _backfill_existing_lrc(
                     audio, song_id=song_id, title=title, artist=artist, duration=duration,
@@ -512,7 +513,8 @@ def download_one(audio: Path, force: bool = False) -> Result:
 
 def run(folder: str | Path, force: bool = False, jobs: int = 2,
         on_song=None, on_done=None, stop: threading.Event | None = None,
-        paths: list[str] | None = None) -> Counts:
+        paths: list[str] | None = None,
+        sources_order: tuple[str, ...] | None = None) -> Counts:
     """批量下载歌词：一个目录（含子目录），或者给一份文件清单。"""
     root = Path(folder) if folder else Path(".")
     if paths is not None:
@@ -532,7 +534,7 @@ def run(folder: str | Path, force: bool = False, jobs: int = 2,
         if stop.is_set():
             return Result(path, "kept", "已停止")
         try:
-            return download_one(path, force=force)
+            return download_one(path, force=force, sources_order=sources_order)
         except Exception as e:      # 一首歌的意外不该把整批带下去
             return Result(path, "failed", f"{type(e).__name__}: {e}")
 

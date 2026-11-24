@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +19,15 @@ TAG_RE = re.compile(r"<(\d{2}):(\d{2}\.\d{1,3})>")
 META_RE = re.compile(r"^\[(ti|ar|al|by|tool|offset|length|re|ve|kiralrc):", re.I)
 STAMP_RE = re.compile(r"^\[(\d{2}):(\d{2}\.\d{1,3})\]")
 TS2_RE = re.compile(r"([\[<]\d{2}:\d{2}\.\d{2})([\]>])")
+LATIN_WORD_RE = re.compile(r"[^\W_]+(?:['’ʼ‐‑-][^\W_]+)*[.,!?;:…]*")
+
+
+def _is_latin_word(text: str) -> bool:
+    text = unicodedata.normalize("NFC", text.strip())
+    letters = "".join(ch for ch in text if not unicodedata.category(ch).startswith("M"))
+    return LATIN_WORD_RE.fullmatch(letters) is not None and all(
+        ch == "ʼ" or not ch.isalpha() or "LATIN" in unicodedata.name(ch, "") for ch in letters
+    )
 
 
 def fmt_ts(sec: float, tag: bool = False) -> str:
@@ -40,19 +50,8 @@ class Line:
 
     @property
     def enhanced(self) -> bool:
-        """逐字行：除首尾两个时间标签外，行内还有逐字标签。
-
-        两种来源都要认：
-        - 解析出来的（tag_count 记录标签数，`> 2` 即逐字）；
-        - 程序里直接构造的（没设 tag_count，但 chars 与文字一一对应）。
-        不能用「标签数 >= 字数」判断——含 "My " 这类多字符 token 的行，
-        一个标签会盖住多个字符。
-        """
-        if self.tag_count > 2:
-            return True
-        if self.tag_count == len(self.text) + 1:
-            return True          # 单字行（<字><行尾>）也在这里
-        return bool(self.chars) and (len(self.chars) >= 2 or len(self.chars) >= len(self.text))
+        """逐字或逐词行包含至少一个带时间戳的歌词块。"""
+        return bool(self.chars)
 
     def render(self) -> str:
         if not self.enhanced:
@@ -122,10 +121,11 @@ def _append_line(lrc: Lrc, start: float, body: str) -> None:
         return
 
     plain = TAG_RE.sub("", body)
-    # 逐字行的标签数 = 字数 + 1（每字一个 + 行尾）；译文行固定「首 + 尾」两个标签，
-    # 所以 2 个标签 + 1 个字 = 单字逐字行，2 个标签 + 多字 = 译文行。
-    # 另留一条 `> 2`，兜住 "My Wish" 这种一标签盖多字符的行。
-    enhanced = len(tags) > 2 or len(tags) == len(plain) + 1
+    # 单字或单词行只有块首和行尾两个标签。
+    enhanced = len(tags) > 2 or (
+        len(tags) == 2 and tags[0].start() == 0 and tags[1].end() == len(body)
+        and (len(plain.strip()) == 1 or _is_latin_word(plain))
+    )
     chars = []
     if enhanced:
         for ti, m in enumerate(tags):

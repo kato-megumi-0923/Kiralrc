@@ -26,11 +26,30 @@ type contextMenu struct {
 	track      *scrapeTrack
 }
 
+var (
+	lastContextMenuX    float32
+	lastContextMenuY    float32
+	lastContextMenuDIPs bool
+)
+
 func (a *app) openWindowMenu(x, y float32, items []kiralrcmenu.Item) {
+	lastContextMenuX, lastContextMenuY, lastContextMenuDIPs = x, y, true
+	a.libFolderMenuOpen = false
+	a.libRowMenuPath = ""
+	a.scrapeCfgOpen, a.scrapeAutoOpen = false, false
+	a.queueCfgOpen = false
 	m := &contextMenu{x: x, y: y, windowDIPs: true}
 	for _, it := range items {
 		item := contextItem{label: it.Label, disabled: it.Disabled, separator: it.Separator}
 		switch it.Label {
+		case "下载歌词":
+			item.icon = iconDownload
+		case "刮削标签":
+			item.icon = iconTag
+		case "新建对齐":
+			item.icon = iconPlay
+		case "打开校对":
+			item.icon = iconEdit
 		case "在资源管理器中显示":
 			item.icon = iconFolder
 		case "复制文件路径":
@@ -44,6 +63,32 @@ func (a *app) openWindowMenu(x, y float32, items []kiralrcmenu.Item) {
 		m.items = append(m.items, item)
 	}
 	a.menu = m
+}
+
+// openDownloadSourceMenu 在右键位置弹出平台选择菜单，供单曲按默认顺序或指定来源下载歌词。
+func (a *app) openDownloadSourceMenu(tr trackItem) {
+	items := []contextItem{
+		{
+			label: "按默认顺序下载",
+			icon:  iconDownload,
+			run:   func(*ui.Context) { a.downloadTrackFromSource(tr, "") },
+		},
+		{separator: true},
+	}
+	for _, key := range normalizeDownloadSources(a.setDownloadSources) {
+		k := key
+		items = append(items, contextItem{
+			label: downloadSourceLabel(k),
+			icon:  iconLink,
+			run:   func(*ui.Context) { a.downloadTrackFromSource(tr, k) },
+		})
+	}
+	a.menu = &contextMenu{
+		x:          lastContextMenuX,
+		y:          lastContextMenuY,
+		windowDIPs: lastContextMenuDIPs,
+		items:      items,
+	}
 }
 
 func (m *contextMenu) width(c *ui.Context) float32 {

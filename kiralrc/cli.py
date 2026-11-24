@@ -115,8 +115,14 @@ def cmd_fetch_lyrics(a) -> int:
     if getattr(a, "paths_file", None):
         with open(a.paths_file, encoding="utf-8") as f:
             paths = [line.strip() for line in f if line.strip()]
+    sources_order = None
+    if getattr(a, "sources", None):
+        items = [s.strip().lower() for s in str(a.sources).split(",") if s.strip()]
+        if items:
+            sources_order = tuple(items)
     counts = download.run(
         a.dir, force=a.force, jobs=a.jobs, paths=paths,
+        sources_order=sources_order,
         on_song=(None if a.quiet else (lambda i, n, r: print(
             f"[{i}/{n}] {r.status:<9} {r.audio.name[:44]}  {r.note}", flush=True))),
     )
@@ -534,9 +540,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--en-granularity", choices=["word", "char"], default=None)
     p.set_defaults(func=cmd_batch)
 
-    p = sub.add_parser("download", help="批量下载歌词（网易云 → QQ → AMLL → 酷狗，不跑模型）")
+    p = sub.add_parser("download", help="批量下载歌词（网易云 → QQ → AMLL → 酷狗 → LRCLIB，不跑模型）")
     p.add_argument("dir", nargs="?", default="", help="目录，可省略（用 --paths-file 给清单时）")
     p.add_argument("--paths-file", help="只处理清单里的文件（每行一个路径）")
+    p.add_argument("--sources", help="指定下载源顺序（逗号分隔，如 netease,qq,amll,kugou,lrclib）")
     p.add_argument("--force", action="store_true", help="已有官方逐字也重新下载")
     p.add_argument("--jobs", type=int, default=2, help="并发数，默认 2（平台会限速）")
     p.add_argument("--quiet", action="store_true")

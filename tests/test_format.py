@@ -90,6 +90,18 @@ def test_single_char_line_is_enhanced():
     # 真正的译文行（两个字以上）仍判为非逐字
     tr = fmt.parse("[00:01.000]<00:01.000>中文翻译<00:02.000>\n").lines[0]
     assert not tr.enhanced
+
+
+def test_single_word_line_is_enhanced(tmp_path):
+    line = "[00:01.000]<00:01.000>Won’t!<00:02.000>"
+    path = tmp_path / "word.lrc"
+    path.write_bytes((line + "\n").encode("utf-8"))
+    ln = fmt.parse(str(path)).lines[0]
+    assert ln.enhanced and ln.chars == [("Won’t!", 1.0)]
+    assert ln.render() == line
+    assert fmt.validate_enhanced(path) == []
+
+
 def test_wavecheck_flags_squeezed_tail_but_not_spaced_tail(monkeypatch, tmp_path):
     import numpy as np
     from kiralrc import format as fmt, wavecheck

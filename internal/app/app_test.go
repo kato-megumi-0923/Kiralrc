@@ -215,6 +215,51 @@ func TestLoadLrcFileIntoEditor(t *testing.T) {
 	}
 }
 
+func TestEditorEnglishLyricBlocks(t *testing.T) {
+	a := newApp()
+	p := filepath.Join(t.TempDir(), "english.lrc")
+	content := "[00:01.000]<00:01.000>I<00:01.100> <00:01.200>w<00:01.300>o<00:01.350>n<00:01.400>’<00:01.450>t<00:01.500> <00:01.600>go!<00:02.000>\n" +
+		"[00:01.000]我不走\n" +
+		"[00:03.000]<00:03.000>Goodbye<00:04.000>\n" +
+		"[00:05.000]晚風 on-air\n"
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadLrcFile(p); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.edLines) != 3 || a.edLines[0].Translation != "我不走" {
+		t.Fatalf("unexpected lines: %+v", a.edLines)
+	}
+	want := []lyricChar{{Ch: "I ", Start: 1, End: 1.2}, {Ch: "won’t ", Start: 1.2, End: 1.6}, {Ch: "go!", Start: 1.6, End: 2}}
+	for i, got := range a.edGlyphs {
+		if i >= len(want) || got != want[i] {
+			t.Fatalf("unexpected English blocks: %+v", a.edGlyphs)
+		}
+	}
+	if len(a.edGlyphs) != len(want) {
+		t.Fatalf("unexpected English blocks: %+v", a.edGlyphs)
+	}
+	if blocks := a.edLines[1].Chars; len(blocks) != 1 || blocks[0] != (lyricChar{Ch: "Goodbye", Start: 3, End: 4}) {
+		t.Fatalf("unexpected single-word line: %+v", blocks)
+	}
+	if blocks := a.edLines[2].Chars; len(blocks) != 4 || blocks[0].Ch != "晚" || blocks[1].Ch != "風" || blocks[3].Ch != "on-air" {
+		t.Fatalf("unexpected mixed-language blocks: %+v", blocks)
+	}
+
+	a.beginEditLyricLine(0)
+	a.edEditingText = "I won’t ever go!"
+	a.commitEditLyricLine()
+	a.saveLrcFile()
+	if err := a.loadLrcFile(p); err != nil {
+		t.Fatal(err)
+	}
+	if blocks := a.edGlyphs; len(blocks) != 4 || blocks[1].Ch != "won’t " || blocks[2].Ch != "ever " ||
+		blocks[1].Start != 1.2 || blocks[2].Start != 1.4 || blocks[3].Start != 1.6 || blocks[3].End != 2 {
+		t.Fatalf("unexpected blocks after editing and reloading: %+v", blocks)
+	}
+}
+
 func TestNoLyricsWorkflowAndNeteaseIDParsing(t *testing.T) {
 	cases := map[string]string{
 		"30967650": "30967650",
@@ -2018,5 +2063,235 @@ func TestResetScrapeCachesKeepsMapsUsable(t *testing.T) {
 	}
 	if len(a.scrapeThumbs) != 0 || len(a.scrapeSizes) != 0 || len(a.scrapeCovers) != 0 {
 		t.Fatal("重置后应当是空的")
+	}
+}
+
+func TestScrapeBarPopovers(t *testing.T) {
+	a := newApp()
+	a.page = pageScrape
+	a.edFile = "open.lrc"
+	root := t.TempDir()
+	path := filepath.Join(root, "song.flac")
+	a.scrapeItems = []scrapeTrack{
+		{Path: path, Writable: true},
+		{Path: filepath.Join(root, "second.flac"), Writable: true, NeteaseID: 1234567},
+	}
+	a.scrapeSel = map[string]scrapeCandidate{path: {}}
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		tt.Advance(350 * time.Millisecond)
+		tt.Frame()
+	}
+	if _, ok := tt.Find("open.lrc"); ok {
+		t.Fatal("GlassDock is visible on the scrape workbench")
+	}
+	click(a.scrapeCfgSummary())
+	if !a.scrapeCfgOpen {
+		t.Fatal("write configuration popover did not open")
+	}
+	click("专辑年份")
+	click("1200")
+	click("覆盖选中")
+	plan := a.scrapePlan()
+	if len(plan) != 1 || plan[0].Fields["year"] || !plan[0].Fields["cover"] ||
+		plan[0].Mode != "overwrite" || plan[0].CoverSize != 1200 {
+		t.Fatalf("unexpected write plan: %+v", plan)
+	}
+	if got := a.scrapeCfgSummary(); got != "封面(1200)·ID · 覆盖选中" {
+		t.Fatalf("unexpected summary: %q", got)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.scrapeCfgOpen {
+		t.Fatal("Escape did not dismiss the popover")
+	}
+	tt.Advance(350 * time.Millisecond)
+	tt.Frame()
+	click("自动补全")
+	if !a.scrapeAutoOpen || a.scrapeCfgOpen {
+		t.Fatal("automatic completion did not open independently")
+	}
+	for _, label := range []string{"按专辑补全", "按 NETEASE_ID 补全", "按网易云搜索补全"} {
+		if _, ok := tt.Find(label); !ok {
+			t.Fatalf("automatic completion option %q is missing", label)
+		}
+	}
+}
+
+func TestLibraryNoLyricsDialog(t *testing.T) {
+	a := newApp()
+	root := t.TempDir()
+	a.libFolders = []string{root}
+	a.tracks = []trackItem{{FullPath: filepath.Join(root, "test.flac"), Title: "测试歌曲", Status: "missing"}}
+	a.libStats = recomputeLibStats(a.tracks)
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		tt.Advance(350 * time.Millisecond)
+		tt.Frame()
+	}
+	click("无歌词 1")
+	click("批量填 ID")
+	if a.libNoLyricsDialog != "batch_id" {
+		t.Fatalf("unexpected dialog mode: %q", a.libNoLyricsDialog)
+	}
+	if _, ok := tt.Find("网易云歌曲 ID"); !ok {
+		t.Fatal("batch ID input is missing")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.Advance(350 * time.Millisecond)
+	tt.Frame()
+	if a.libNoLyricsDialog != "" {
+		t.Fatal("Escape did not dismiss batch dialog")
+	}
+	a.openNoLyricsDialog("netease", &a.tracks[0])
+	tt.Frame()
+	tt.Advance(350 * time.Millisecond)
+	tt.Frame()
+	if _, ok := tt.Find("下载歌词并对齐"); !ok {
+		t.Fatal("single-track submission button is missing")
+	}
+	click("取消")
+	click("补词")
+	click("手动贴歌词")
+	if a.libNoLyricsDialog != "manual" || a.libDialogTrack.FullPath != a.tracks[0].FullPath {
+		t.Fatal("row menu did not open the track's manual lyrics dialog")
+	}
+}
+
+func TestAlignAdvancedDisclosure(t *testing.T) {
+	a := newApp()
+	a.page = pageAlign
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	if _, ok := tt.Find("鬼畜 / 波形起音优先"); ok {
+		t.Fatal("advanced options should start collapsed")
+	}
+	if err := tt.Click("高级与输出选项"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	waveform := a.alignWaveformFirst
+	if err := tt.Click("切换鬼畜 / 波形起音优先"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Scroll(1000, 730, 0, 230)
+	tt.Frame()
+	if err := tt.Click("2 位"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.alignAdvOpen || a.alignWaveformFirst == waveform || a.alignDecimals != 1 {
+		t.Fatalf("advanced settings not updated: open=%v waveform=%v decimals=%d", a.alignAdvOpen, a.alignWaveformFirst, a.alignDecimals)
+	}
+}
+
+func TestQueueSettingsPopoverAndReadOnlyStepper(t *testing.T) {
+	a := newApp()
+	a.page = pageQueue
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		tt.Advance(350 * time.Millisecond)
+		tt.Frame()
+	}
+	click("队列设置")
+	click("2")
+	if !a.queueCfgOpen || a.queueConcurrency != 1 {
+		t.Fatal("queue settings did not change concurrency")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.Advance(350 * time.Millisecond)
+	tt.Frame()
+
+	a.queueActiveTitle = "正在对齐"
+	a.queueStage = 2
+	a.queueLogs = []string{"测试队列日志"}
+	tt.Frame()
+	click("3. 人声分离")
+	if a.queueStage != 2 {
+		t.Fatal("clicking a step changed the current stage")
+	}
+	if _, ok := tt.Find(a.queueLogs[0]); ok {
+		t.Fatal("queue logs should start collapsed")
+	}
+	click("运行日志 (1)")
+	if _, ok := tt.Find(a.queueLogs[0]); !ok {
+		t.Fatal("queue logs did not expand")
+	}
+	click("运行日志 (1)")
+	if _, ok := tt.Find(a.queueLogs[0]); ok {
+		t.Fatal("queue logs did not collapse")
+	}
+}
+
+func TestToolsOutputDialog(t *testing.T) {
+	a := newApp()
+	a.page = pageTools
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	for _, title := range []string{"独立工作台", "快捷批处理"} {
+		if _, ok := tt.Find(title); !ok {
+			t.Fatalf("missing section %q", title)
+		}
+	}
+	a.toolLog = "测试工具输出"
+	tt.Frame()
+	if _, ok := tt.Find(a.toolLog); ok {
+		t.Fatal("tool output is visible before opening its dialog")
+	}
+	if err := tt.Click("上次输出"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Advance(350 * time.Millisecond)
+	tt.Frame()
+	if _, ok := tt.Find(a.toolLog); !ok {
+		t.Fatal("tool output is missing from the dialog")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.toolOutputOpen {
+		t.Fatal("Escape did not close the tool dialog")
+	}
+}
+
+func TestAlignQueueActions(t *testing.T) {
+	a := newApp()
+	a.page = pageAlign
+	a.setAlignAudioPath(filepath.Join(t.TempDir(), "song.flac"))
+	tt := ui.NewTester(a.view, 1360, 860)
+	tt.Frame()
+	if err := tt.Click("加入队列"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.page != pageAlign || len(a.queueItems) != 1 || a.toast != "已加入对齐队列" {
+		t.Fatalf("enqueue action did not keep the alignment form open: page=%v queue=%d toast=%q", a.page, len(a.queueItems), a.toast)
+	}
+	if err := tt.Click("开始对齐"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.page != pageQueue || len(a.queueItems) != 1 {
+		t.Fatalf("start action did not open the queue or added a duplicate: page=%v queue=%d", a.page, len(a.queueItems))
 	}
 }

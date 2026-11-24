@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/kiralrcmenu"
@@ -206,20 +207,23 @@ type app struct {
 	libSelected        map[string]bool // 勾选状态按路径存：切片重建也不会丢
 
 	// 封面按需加载（见 cover.go）
-	coverMu           sync.Mutex
-	coverInFlight     map[string]bool
-	coverSem          chan struct{}
-	coverPending      bool
-	libScroll         ui.ScrollState
-	notFoundPaths     map[string]bool   // 持久化：多源均未搜到的「全网无词」音频路径（小写归一化）
-	libBatchIdOpen    bool              // 无歌词 Tab：顶部「批量填网易云 ID」抽屉是否展开
-	libBatchIdInputs  map[string]string // 批量填 ID 抽屉输入值（key=AudioPath）
-	libExpandedPath   string            // 无歌词 Tab：当前展开行内抽屉的音频路径
-	libExpandedMode   string            // "netease" | "manual"
-	libSingleIdInput  string            // 单曲网易云 ID 输入值
-	libManualText     string            // 单曲手动参考词多行文本
-	libManualLang     int               // 单曲手动参考词语言：0:中文 1:日文 2:英文
-	libManualFilePath string            // 用记事本编辑时的落盘路径
+	coverMu               sync.Mutex
+	coverInFlight         map[string]bool
+	coverSem              chan struct{}
+	coverPending          bool
+	libScroll             ui.ScrollState
+	notFoundPaths         map[string]bool // 持久化：多源均未搜到的「全网无词」音频路径（小写归一化）
+	libFolderMenuOpen     bool
+	libRowMenuPath        string
+	libNoLyricsDialog     string
+	libDialogTrack        *trackItem
+	libClosingLyricsMode  string // 保留弹窗内容，直到退出动画结束
+	libClosingLyricsTrack *trackItem
+	libBatchIdInputs      map[string]string // 批量填 ID 弹窗输入值（key=AudioPath）
+	libSingleIdInput      string            // 单曲网易云 ID 输入值
+	libManualText         string            // 单曲手动参考词多行文本
+	libManualLang         int               // 单曲手动参考词语言：0:中文 1:日文 2:英文
+	libManualFilePath     string            // 用记事本编辑时的落盘路径
 
 	// 2. 新建对齐
 	alignAudio          string
@@ -243,6 +247,7 @@ type app struct {
 	alignArtist         string
 	alignAlbum          string
 	alignOut            string
+	alignAdvOpen        bool
 	alignDecimals       int // 0:3位 1:2位
 	alignLead           string
 	alignEndTag         bool
@@ -252,6 +257,8 @@ type app struct {
 
 	// 3. 任务队列
 	queueJobs        int
+	queueCfgOpen     bool
+	queueLogOpen     bool
 	queueConcurrency int // 0: 1并发, 1: 2并发, 2: 3并发
 	queueWorkers     int
 	queueKeepGoing   bool
@@ -312,6 +319,9 @@ type app struct {
 
 	// 5. 工具箱
 	toolSelectedFile int
+	toolRunning      bool
+	toolTitle        string
+	toolOutputOpen   bool
 	toolLog          string
 	toolScroll       ui.ScrollState
 
@@ -332,9 +342,11 @@ type app struct {
 	scrapeAuth        string    // 这次搜索用的身份（Cloudy 登录态 / 匿名）
 	scrapeLoading     bool
 	scrapeSel         map[string]scrapeCandidate // 路径 → 已确认的候选
-	scrapeFields      [5]bool                    // 封面/年份/ID/专辑/标题歌手
-	scrapeMode        int                        // 0 仅补缺失 1 覆盖选中
-	scrapeQuality     int                        // 0 封面取原图 1 只请求 1200
+	scrapeCfgOpen     bool
+	scrapeAutoOpen    bool
+	scrapeFields      [5]bool // 封面/年份/ID/专辑/标题歌手
+	scrapeMode        int     // 0 仅补缺失 1 覆盖选中
+	scrapeQuality     int     // 0 封面取原图 1 只请求 1200
 	scrapeApplying    bool
 	scrapeDone        int
 	scrapeTotal       int
@@ -368,6 +380,7 @@ type app struct {
 	setCleanDays          int // 0:7天前 1:30天前 2:全部
 	setAppleToken         string
 	setAppleStorefront    int // 0:jp 1:cn 2:us
+	setDownloadSources    []string // 官方歌词下载源优先级（如 netease, qq, amll, kugou, lrclib）
 	setAIMode             int // 0=官方内置翻译 1=自定义API
 	setAIBaseURL          string
 	setAIModel            string
@@ -410,6 +423,7 @@ type userPrefs struct {
 	CustomPython     string   `json:"custom_python,omitempty"`
 	LibPageSize      int      `json:"lib_page_size,omitempty"`
 	CloudyAuth       bool     `json:"cloudy_auth,omitempty"` // 借用 Cloudy 的网易云登录态（默认关）
+	DownloadSources  []string `json:"download_sources,omitempty"`
 }
 
 func prefsPath() string {
@@ -510,6 +524,7 @@ func (a *app) loadPrefs() {
 	}
 	a.setCustomPython = strings.TrimSpace(up.CustomPython)
 	a.setCloudyAuth = up.CloudyAuth
+	a.setDownloadSources = normalizeDownloadSources(up.DownloadSources)
 	if key, migrate, err := unprotectSecret(up.AIAPIKey); err == nil {
 		a.setAIAPIKey = key
 		if migrate && key != "" {
@@ -607,6 +622,7 @@ func (a *app) savePrefs() {
 		CustomPython:     strings.TrimSpace(a.setCustomPython),
 		LibPageSize:      a.pageSize(),
 		CloudyAuth:       a.setCloudyAuth,
+		DownloadSources:  normalizeDownloadSources(a.setDownloadSources),
 	}
 	if data, err := json.MarshalIndent(up, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o644)
@@ -677,6 +693,10 @@ func (a *app) navigate(to pageKind, dir int) {
 		return
 	}
 	a.menu = nil
+	a.scrapeCfgOpen, a.scrapeAutoOpen = false, false
+	a.resetLibraryOverlays()
+	a.queueCfgOpen = false
+	a.toolOutputOpen = false
 	a.pageDir = dir
 	a.page = to
 }
@@ -759,7 +779,35 @@ func (a *app) addLibraryFolder(dir string) {
 	a.scanLibraryAsync()
 }
 
+func (a *app) removeLibraryFolder(folder string) {
+	for i, dir := range a.libFolders {
+		if normPathKey(dir) != normPathKey(folder) {
+			continue
+		}
+		if len(a.libFolders) == 1 {
+			a.clearLibraryFolders()
+			return
+		}
+		a.libFolders = append(a.libFolders[:i], a.libFolders[i+1:]...)
+		kept := a.tracks[:0]
+		for _, track := range a.tracks {
+			if !isSubOrSameDir(dir, track.FullPath) {
+				kept = append(kept, track)
+			}
+		}
+		a.tracks = kept
+		a.libStats = recomputeLibStats(kept)
+		a.pruneSelectedTracks()
+		a.libRowMenuPath = ""
+		a.savePrefs()
+		a.scanLibraryAsync()
+		return
+	}
+}
+
 func (a *app) clearLibraryFolders() {
+	a.nextScanToken() // 已提交的旧扫描结果不能重新填充曲库。
+	a.resetLibraryOverlays()
 	a.libFolders = nil
 	a.tracks = nil
 	a.libSelected = nil
@@ -1261,6 +1309,50 @@ func (a *app) pythonCmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
+var defaultDownloadSourceOrder = []string{"netease", "qq", "amll", "kugou", "lrclib"}
+
+func normalizeDownloadSources(in []string) []string {
+	allowed := map[string]bool{
+		"netease": true, "qq": true, "amll": true, "kugou": true, "lrclib": true,
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(defaultDownloadSourceOrder))
+	for _, s := range in {
+		k := strings.ToLower(strings.TrimSpace(s))
+		if allowed[k] && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	for _, k := range defaultDownloadSourceOrder {
+		if !seen[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func downloadSourceLabel(key string) string {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "netease":
+		return "网易云音乐"
+	case "qq":
+		return "QQ 音乐"
+	case "amll":
+		return "AMLL"
+	case "kugou":
+		return "酷狗音乐"
+	case "lrclib":
+		return "LRCLIB"
+	default:
+		return key
+	}
+}
+
+func (a *app) downloadSourcesArg() string {
+	return strings.Join(normalizeDownloadSources(a.setDownloadSources), ",")
+}
+
 // startDownloadLyrics 给曲库里的每个文件夹下载歌词：只下载，不跑模型。
 func (a *app) startDownloadLyrics() {
 	if a.downloading {
@@ -1275,13 +1367,14 @@ func (a *app) startDownloadLyrics() {
 		a.toast = "还没有添加音乐文件夹"
 		return
 	}
+	srcArg := a.downloadSourcesArg()
 	a.downloading = true
 	a.downloadDone, a.downloadAll, a.downloadNote = 0, 0, "准备中…"
 	a.toast = "开始下载歌词"
 	go func() {
 		var last string
 		for _, dir := range folders {
-			cmd := a.pythonCmd("download", dir, "--jobs", "2")
+			cmd := a.pythonCmd("download", dir, "--jobs", "2", "--sources", srcArg)
 			last = a.streamDownload(cmd, last)
 		}
 		a.post(func() {
@@ -1346,18 +1439,19 @@ func (a *app) downloadLyricsOf(tracks []trackItem) {
 	}
 	list, err := os.CreateTemp("", "kiralrc-paths-*.txt")
 	if err != nil {
-		a.toolLog = err.Error()
+		a.toast = err.Error()
 		return
 	}
 	for _, tr := range tracks {
 		fmt.Fprintln(list, tr.FullPath)
 	}
 	list.Close()
+	srcArg := a.downloadSourcesArg()
 	a.downloading = true
-	a.toolLog = fmt.Sprintf("正在为 %d 首歌下载歌词…", len(tracks))
+	a.downloadNote = fmt.Sprintf("正在为 %d 首歌下载歌词…", len(tracks))
 	go func() {
 		defer os.Remove(list.Name())
-		cmd := a.pythonCmd("download", "--paths-file", list.Name(), "--jobs", "2")
+		cmd := a.pythonCmd("download", "--paths-file", list.Name(), "--jobs", "2", "--sources", srcArg)
 		last := a.streamDownload(cmd, "")
 		a.post(func() {
 			a.downloading = false
@@ -1368,25 +1462,93 @@ func (a *app) downloadLyricsOf(tracks []trackItem) {
 	}()
 }
 
-// runKiralrcCLI invokes `python -m kiralrc <args>` asynchronously and updates the UI.
-func (a *app) runKiralrcCLI(args ...string) {
-	env := a.pythonSubprocessEnv()
-	py := a.pythonExe()
-	go func() {
-		cmdArgs := append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)
-		cmd := newHiddenCmd(py, cmdArgs...)
-		cmd.Dir = appRootDir()
-		cmd.Env = env
-		out, err := cmd.CombinedOutput()
-		msg := strings.TrimSpace(string(out))
-		if err != nil && msg == "" {
-			msg = err.Error()
+// downloadTrackFromSource 为单首歌按指定来源（或空字符串走默认顺序）下载歌词。
+// 指定单一平台时带 --force 强制换源覆盖，并由 download.py 自动保留/补全中文译文。
+func (a *app) downloadTrackFromSource(tr trackItem, sourceKey string) {
+	if a.downloading || tr.FullPath == "" {
+		if a.downloading {
+			a.toast = "正在下载中，请稍候"
 		}
+		return
+	}
+	list, err := os.CreateTemp("", "kiralrc-paths-*.txt")
+	if err != nil {
+		a.toast = err.Error()
+		return
+	}
+	fmt.Fprintln(list, tr.FullPath)
+	list.Close()
+
+	srcArg := a.downloadSourcesArg()
+	args := []string{"download", "--paths-file", list.Name(), "--jobs", "1"}
+	label := "默认顺序"
+	if k := strings.ToLower(strings.TrimSpace(sourceKey)); k != "" {
+		srcArg = k
+		label = downloadSourceLabel(k)
+		args = append(args, "--sources", srcArg, "--force")
+	} else {
+		args = append(args, "--sources", srcArg)
+	}
+	a.downloading = true
+	a.downloadNote = fmt.Sprintf("正在从 %s 下载《%s》…", label, tr.Title)
+	a.toast = a.downloadNote
+	go func() {
+		defer os.Remove(list.Name())
+		cmd := a.pythonCmd(args...)
+		last := a.streamDownload(cmd, "")
 		a.post(func() {
-			a.toolLog = msg
+			a.downloading = false
+			a.downloadNote = last
+			a.toast = fmt.Sprintf("%s 下载完成：%s", label, last)
+			a.scanLibraryAsync()
+		})
+	}()
+}
+
+// runKiralrcCLI runs background commands that do not have a tool dialog.
+func (a *app) runKiralrcCLI(args ...string) {
+	cmd := a.toolCommand(args...)
+	go func() {
+		msg := commandOutput(cmd)
+		a.post(func() {
+			a.toast = msg
 			if len(args) > 0 && args[0] == "clean" {
 				a.refreshBackendInfo()
 			}
+		})
+	}()
+}
+
+func (a *app) toolCommand(args ...string) *exec.Cmd {
+	cmd := newHiddenCmd(a.pythonExe(), append([]string{"-X", "utf8", "-m", "kiralrc"}, args...)...)
+	cmd.Dir = appRootDir()
+	cmd.Env = a.pythonSubprocessEnv()
+	return cmd
+}
+
+func commandOutput(cmd *exec.Cmd) string {
+	out, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(out))
+	if err != nil && msg == "" {
+		return err.Error()
+	}
+	return msg
+}
+
+func (a *app) runToolCLI(title string, args ...string) {
+	if a.toolRunning {
+		return
+	}
+	cmd := a.toolCommand(args...)
+	a.toolTitle = title
+	a.toolLog = ""
+	a.toolRunning = true
+	a.toolOutputOpen = a.page == pageTools
+	go func() {
+		msg := commandOutput(cmd)
+		a.post(func() {
+			a.toolLog = msg
+			a.toolRunning = false
 		})
 	}()
 }
@@ -1542,6 +1704,7 @@ func (a *app) heartsCurrentLrc() {
 func (a *app) runToolInteractive(toolCmd string) {
 	switch toolCmd {
 	case "validate", "hearts", "convert":
+		title := map[string]string{"validate": "校验逐字 LRC", "hearts": "双语歌词加 ❤️", "convert": "小数位转换"}[toolCmd]
 		go func() {
 			p, err := chooseFile(a.win, "选择要处理的 LRC 文件", "选择 LRC", []mygo.FileFilter{
 				{Name: "LRC 歌词文件", Extensions: []string{"lrc"}},
@@ -1549,7 +1712,7 @@ func (a *app) runToolInteractive(toolCmd string) {
 			if err != nil || p == "" {
 				return
 			}
-			a.runKiralrcCLI(toolCmd, p)
+			a.post(func() { a.runToolCLI(title, toolCmd, p) })
 		}()
 	case "decrypt":
 		go func() {
@@ -1557,7 +1720,7 @@ func (a *app) runToolInteractive(toolCmd string) {
 			if err != nil || dir == "" {
 				return
 			}
-			a.runKiralrcCLI("decrypt", dir)
+			a.post(func() { a.runToolCLI("解密加密音频", "decrypt", dir) })
 		}()
 	case "cleanup":
 		go func() {
@@ -1746,11 +1909,7 @@ func (a *app) pickLrcFile() {
 func (a *app) setLibFilter(f int) {
 	a.libFilter = f
 	a.libPage = 0 // 换筛选就回第一页
-	if f != 3 {
-		a.libBatchIdOpen = false
-		a.libExpandedPath = ""
-		a.libExpandedMode = ""
-	}
+	a.resetLibraryOverlays()
 }
 
 // libWordStatus tells where a word-timed lyric came from: the platform
@@ -1934,6 +2093,7 @@ func (a *app) setPageSize(n int) {
 	}
 	a.libPageSize = n
 	a.libPage = 0
+	a.libRowMenuPath = ""
 	a.savePrefs()
 }
 
@@ -2010,15 +2170,33 @@ func (a *app) batchIdTargetTracks() []trackItem {
 	return all
 }
 
-func (a *app) toggleInlineDrawer(tr *trackItem, mode string) {
-	if strings.EqualFold(a.libExpandedPath, tr.FullPath) && a.libExpandedMode == mode {
-		a.libExpandedPath = ""
-		a.libExpandedMode = ""
+func (a *app) resetLibraryOverlays() {
+	a.libFolderMenuOpen = false
+	a.libRowMenuPath = ""
+	a.closeNoLyricsDialog()
+}
+
+func (a *app) closeNoLyricsDialog() {
+	a.libNoLyricsDialog = ""
+	a.libDialogTrack = nil
+}
+
+func (a *app) openNoLyricsDialog(mode string, tr *trackItem) {
+	if mode != "batch_id" && (tr == nil || (mode != "netease" && mode != "manual")) {
 		return
 	}
-	a.libBatchIdOpen = false
-	a.libExpandedPath = tr.FullPath
-	a.libExpandedMode = mode
+	a.menu = nil
+	a.libFolderMenuOpen = false
+	a.libRowMenuPath = ""
+	a.libNoLyricsDialog = mode
+	a.libDialogTrack = nil
+	if tr != nil {
+		track := *tr
+		a.libDialogTrack = &track
+	}
+	if mode == "batch_id" && a.libBatchIdInputs == nil {
+		a.libBatchIdInputs = make(map[string]string)
+	}
 	if mode == "netease" {
 		if a.libBatchIdInputs != nil {
 			a.libSingleIdInput = a.libBatchIdInputs[tr.FullPath]
@@ -2049,21 +2227,6 @@ func (a *app) upsertQueueItem(q queueItem) {
 		}
 	}
 	a.queueItems = append(a.queueItems, q)
-}
-
-func (a *app) enqueueLineOnlyTracks() {
-	var batch []trackItem
-	for _, tr := range a.tracks {
-		if tr.Status == "line_only" {
-			batch = append(batch, tr)
-		}
-	}
-	if len(batch) == 0 {
-		a.toast = "当前没有仅整行 LRC 歌曲"
-		return
-	}
-	a.enqueueTracks(batch, false, false)
-	a.navigate(pageQueue, 1)
 }
 
 func (a *app) enqueueNoLyricsAsr(batch []trackItem) {
@@ -2135,8 +2298,7 @@ func (a *app) enqueueSingleNetease(tr *trackItem, rawID string) {
 		Note:      fmt.Sprintf("按网易云 ID %s 下载歌词并对齐", pid),
 		Hue:       tr.Hue,
 	})
-	a.libExpandedPath = ""
-	a.libExpandedMode = ""
+	a.closeNoLyricsDialog()
 	a.startQueueRunner()
 	a.toast = fmt.Sprintf("已入队 1 首（--netease-id %s）：%s", pid, tr.Title)
 	a.navigate(pageQueue, 1)
@@ -2172,7 +2334,7 @@ func (a *app) enqueueBatchNetease() {
 		a.toast = "尚未填写有效的网易云歌曲 ID，请至少填写 1 首"
 		return
 	}
-	a.libBatchIdOpen = false
+	a.closeNoLyricsDialog()
 	a.startQueueRunner()
 	a.toast = fmt.Sprintf("已按网易云 ID 批量入队 %d 首（未填写的行已跳过）", count)
 	a.navigate(pageQueue, 1)
@@ -2207,6 +2369,7 @@ func (a *app) pasteClipboardToManual() {
 }
 
 func (a *app) importManualLyricsFile() {
+	track := a.libDialogTrack
 	go func() {
 		p, err := chooseFile(a.win, "导入参考歌词 (.txt / .lrc)", "导入歌词", []mygo.FileFilter{
 			{Name: "歌词或文本文件", Extensions: []string{"txt", "lrc"}},
@@ -2221,6 +2384,9 @@ func (a *app) importManualLyricsFile() {
 		}
 		txt := strings.TrimSpace(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))
 		a.post(func() {
+			if a.libNoLyricsDialog != "manual" || a.libDialogTrack != track {
+				return
+			}
 			a.libManualText = txt
 			a.libManualFilePath = p
 			a.toast = fmt.Sprintf("已导入 %s（%d 行）", filepath.Base(p), countNonEmptyLines(txt))
@@ -2297,8 +2463,7 @@ func (a *app) enqueueSingleManual(tr *trackItem) {
 		Note:      fmt.Sprintf("手动参考词 (%d 行) · ASR 句定位 + 逐字对齐", nLines),
 		Hue:       tr.Hue,
 	})
-	a.libExpandedPath = ""
-	a.libExpandedMode = ""
+	a.closeNoLyricsDialog()
 	a.startQueueRunner()
 	a.toast = fmt.Sprintf("已保存 %d 行参考词并入队：%s", nLines, tr.Title)
 	a.navigate(pageQueue, 1)
@@ -2748,11 +2913,15 @@ func (a *app) togglePlayback() {
 	go func() {
 		if playing {
 			dur, _ := a.player.Load(path)
-			if dur > 0 {
-				a.post(func() { a.dockDur = dur })
-			}
 			_ = a.player.Play()
-			a.startPlayTicker()
+			a.post(func() {
+				if dur > 0 {
+					a.dockDur = dur
+				}
+				if a.edPlaying {
+					a.startPlayTicker()
+				}
+			})
 		} else {
 			_ = a.player.Pause()
 		}
@@ -2982,26 +3151,25 @@ func (a *app) startPlayTicker() {
 	}
 	a.playTickerOn = true
 	go func() {
-		ticker := time.NewTicker(30 * time.Millisecond)
+		ticker := time.NewTicker(16 * time.Millisecond)
 		defer ticker.Stop()
-		lastLine, lastChar, lastSec := -1, -1, -1
 		for range ticker.C {
-			if !a.edPlaying {
-				a.playTickerOn = false
-				return
-			}
-			pos, dur := a.player.Position()
-			curSec := int(pos)
-			// Only trigger a UI layout pass when active line, active character, or displayed second changes;
-			// the 60fps playhead line itself is painted directly inside Draw via pt.After(16ms).
-			a.win.Update(func() {
+			running := false
+			// Sample only when the UI can apply the position. Waiting prevents a busy UI
+			// from accumulating playback updates carrying old positions.
+			mygo.RunOnMain(func() {
+				if !a.edPlaying {
+					a.playTickerOn = false
+					return
+				}
+				running = true
+				pos, dur := a.player.Position()
+				changed := int(pos) != int(a.dockPos) || (dur > 0 && dur != a.dockDur)
 				a.dockPos = pos
 				a.edPlayhead = pos
 				if dur > 0 {
 					a.dockDur = dur
 				}
-				changed := curSec != lastSec
-				lastSec = curSec
 				if len(a.edLines) > 0 {
 					bestLine := a.edSelectedLine
 					// Show incoming line ~80ms early for natural karaoke reading, while keeping exact char timing
@@ -3029,15 +3197,14 @@ func (a *app) startPlayTicker() {
 						a.edSelectedChar = bestChar
 						changed = true
 					}
-					if bestLine != lastLine || bestChar != lastChar {
-						lastLine, lastChar = bestLine, bestChar
-						changed = true
-					}
 				}
 				if changed {
 					a.win.Invalidate()
 				}
 			})
+			if !running {
+				return
+			}
 		}
 	}()
 }
@@ -3234,63 +3401,50 @@ func (a *app) commitEditLyricLine() {
 		return
 	}
 	ln.Text = newText
-	newRunes := []rune(newText)
+	newParts := lyricBlockTexts(newText)
 	oldChars := ln.Chars
 
-	if len(oldChars) == len(newRunes) && len(newRunes) > 0 {
-		// 改字不改字数（如改同音错别字/繁转简）：100% 保留每个字的逐字时间戳
+	if len(oldChars) == len(newParts) {
+		// 块数相同的文本修改保留原时间戳。
 		updated := make([]lyricChar, len(oldChars))
 		copy(updated, oldChars)
-		for i, r := range newRunes {
-			updated[i].Ch = string(r)
+		for i, part := range newParts {
+			updated[i].Ch = part
 		}
 		ln.Chars = updated
-	} else if len(newRunes) > 0 {
-		// 字数变化：保留公共前缀与后缀的时间戳，仅对中间变动区段按比例重算
-		oldRunes := make([]rune, 0, len(oldChars))
-		flatChars := make([]lyricChar, 0, len(oldChars))
-		for _, ch := range oldChars {
-			rs := []rune(ch.Ch)
-			if len(rs) <= 1 {
-				if len(rs) == 1 {
-					oldRunes = append(oldRunes, rs[0])
-					flatChars = append(flatChars, ch)
-				}
-				continue
-			}
-			step := (ch.End - ch.Start) / float64(len(rs))
-			for ri, r := range rs {
-				oldRunes = append(oldRunes, r)
-				flatChars = append(flatChars, lyricChar{
-					Ch:    string(r),
-					Start: ch.Start + float64(ri)*step,
-					End:   ch.Start + float64(ri+1)*step,
-				})
-			}
-		}
+	} else {
+		// 块数变化时，只为变动区段重新分配时间。
 		pref := 0
-		for pref < len(oldRunes) && pref < len(newRunes) && oldRunes[pref] == newRunes[pref] {
+		for pref < len(oldChars) && pref < len(newParts) && oldChars[pref].Ch == newParts[pref] {
 			pref++
 		}
 		suff := 0
-		for suff < len(oldRunes)-pref && suff < len(newRunes)-pref &&
-			oldRunes[len(oldRunes)-1-suff] == newRunes[len(newRunes)-1-suff] {
+		for suff < len(oldChars)-pref && suff < len(newParts)-pref &&
+			oldChars[len(oldChars)-1-suff].Ch == newParts[len(newParts)-1-suff] {
 			suff++
+		}
+		if pref+suff == len(oldChars) && len(oldChars) > 0 {
+			// 插入处没有旧块可分配时间，借用一个相邻块的时长。
+			if pref > 0 {
+				pref--
+			} else {
+				suff--
+			}
 		}
 		tStart := ln.Start
 		tEnd := max(ln.End, ln.Start+0.2)
 		if pref > 0 {
-			tStart = flatChars[pref-1].End
+			tStart = oldChars[pref-1].End
 		}
 		if suff > 0 {
-			tEnd = flatChars[len(flatChars)-suff].Start
+			tEnd = oldChars[len(oldChars)-suff].Start
 		}
 		if tEnd < tStart+0.05 {
 			tEnd = tStart + 0.05
 		}
-		midNew := len(newRunes) - pref - suff
-		updated := make([]lyricChar, 0, len(newRunes))
-		updated = append(updated, flatChars[:pref]...)
+		midNew := len(newParts) - pref - suff
+		updated := make([]lyricChar, 0, len(newParts))
+		updated = append(updated, oldChars[:pref]...)
 		if midNew > 0 {
 			step := (tEnd - tStart) / float64(midNew)
 			for mi := 0; mi < midNew; mi++ {
@@ -3300,17 +3454,22 @@ func (a *app) commitEditLyricLine() {
 					ce = tEnd
 				}
 				updated = append(updated, lyricChar{
-					Ch:    string(newRunes[pref+mi]),
+					Ch:    newParts[pref+mi],
 					Start: cs,
 					End:   ce,
 				})
 			}
 		}
 		if suff > 0 {
-			updated = append(updated, flatChars[len(flatChars)-suff:]...)
+			updated = append(updated, oldChars[len(oldChars)-suff:]...)
+		}
+		if midNew == 0 && pref > 0 && suff > 0 {
+			updated[pref-1].End = updated[pref].Start
 		}
 		ln.Chars = updated
 	}
+	ln.Start = ln.Chars[0].Start
+	ln.End = ln.Chars[len(ln.Chars)-1].End
 
 	if a.edSelectedLine == idx && len(ln.Chars) > 0 {
 		a.edGlyphs = ln.Chars
@@ -3340,42 +3499,30 @@ func (a *app) shiftAllLyrics(delta float64) {
 	a.edModified = true
 }
 
-func isAsciiNonSpace(s string) bool {
-	if strings.TrimSpace(s) == "" {
-		return false
-	}
-	for _, r := range s {
-		if r >= 128 {
-			return false
-		}
-	}
-	return true
+// Keep contractions, hyphenated words, and trailing separators in one editable block.
+// The fallback keeps the character granularity of Chinese and Japanese lyrics.
+var lyricBlockRe = regexp.MustCompile(`(?s)[\p{Latin}0-9][\p{Latin}\p{M}0-9]*(?:['’ʼ‐‑-][\p{Latin}0-9][\p{Latin}\p{M}0-9]*)*[.,!?;:…]*[\p{Zs}\t]*|.`)
+
+func lyricBlockTexts(text string) []string {
+	return lyricBlockRe.FindAllString(text, -1)
 }
 
-// mergeSameTsAsciiWords collapses word-level English LRC tags (where every letter of a word
-// shares the same <mm:ss.SSS> start tag and 0ms duration until the last letter) into whole-word
-// tokens so the editor timeline, preview, and inspector operate on full words ("being", "frankly")
-// instead of single trailing letters ("g", "y"). CJK/Japanese speaker tags (e.g. 【合】) and
-// char-level English (distinct timestamps per letter) are left untouched.
-func mergeSameTsAsciiWords(chars []lyricChar) []lyricChar {
-	if len(chars) < 2 {
-		return chars
+func groupLyricBlocks(chars []lyricChar) []lyricChar {
+	var text strings.Builder
+	for _, ch := range chars {
+		text.WriteString(ch.Ch)
 	}
-	out := make([]lyricChar, 0, len(chars))
-	for _, cur := range chars {
-		if len(out) > 0 {
-			prev := &out[len(out)-1]
-			if math.Abs(cur.Start-prev.Start) < 0.001 &&
-				prev.End-prev.Start < 0.001 &&
-				isAsciiNonSpace(prev.Ch) && isAsciiNonSpace(cur.Ch) {
-				prev.Ch += cur.Ch
-				prev.End = cur.End
-				continue
-			}
-		}
-		out = append(out, cur)
+	parts := lyricBlockTexts(text.String())
+	blocks := make([]lyricChar, 0, len(parts))
+	for _, part := range parts {
+		length := utf8.RuneCountInString(part)
+		block := chars[0]
+		block.Ch = part
+		block.End = chars[length-1].End
+		blocks = append(blocks, block)
+		chars = chars[length:]
 	}
-	return out
+	return blocks
 }
 
 func formatLrcLine(ln lyricLine) string {
@@ -3487,8 +3634,9 @@ func (a *app) loadLrcFile(path string) error {
 			continue
 		}
 		tagLocs := lrcTagRe.FindAllStringSubmatchIndex(body, -1)
-		runes := []rune(plain)
-		isEnh := len(tagLocs) > 2 || (len(runes) > 0 && len(tagLocs) == len(runes)+1)
+		parts := lyricBlockTexts(plain)
+		isEnh := len(tagLocs) > 2 || (len(tagLocs) == 2 && len(parts) == 1 &&
+			tagLocs[0][0] == 0 && tagLocs[1][1] == len(body))
 		// Same-timestamp non-enhanced line following an existing line = bilingual translation!
 		if !isEnh && len(lines) > 0 && math.Abs(start-lines[len(lines)-1].Start) < 0.06 {
 			if lines[len(lines)-1].Translation == "" {
@@ -3529,17 +3677,17 @@ func (a *app) loadLrcFile(path string) error {
 					chars = append(chars, lyricChar{Ch: string(r), Start: cs, End: ce})
 				}
 			}
-			chars = mergeSameTsAsciiWords(chars)
+			chars = groupLyricBlocks(chars)
 			lastLoc := tagLocs[len(tagLocs)-1]
 			end = parseSec(body[lastLoc[2]:lastLoc[3]], body[lastLoc[4]:lastLoc[5]])
 			if len(body[lastLoc[1]:]) > 0 {
 				missingEndTag++
 			}
-		} else if len(runes) > 0 {
-			step := 2.4 / float64(len(runes))
-			for i, r := range runes {
+		} else {
+			step := 2.4 / float64(len(parts))
+			for i, part := range parts {
 				t := start + float64(i)*step
-				chars = append(chars, lyricChar{Ch: string(r), Start: t, End: t + step})
+				chars = append(chars, lyricChar{Ch: part, Start: t, End: t + step})
 			}
 		}
 		lines = append(lines, lyricLine{

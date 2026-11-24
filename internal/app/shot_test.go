@@ -179,6 +179,7 @@ func seedScrapeDemo(a *app) {
 	}
 
 	a.page = pageScrape
+	a.edFile = "歌词校对已打开.lrc" // 检查该工作台不会渲染全局播放条
 	a.scrapeDir = dir
 	a.scrapePaths = nil
 	a.scrapeItems = items

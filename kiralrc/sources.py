@@ -24,7 +24,7 @@ LRC_LINE = re.compile(r"^\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]")
 META_LINE = re.compile(r"^\[(ti|ar|al|by|offset|length|re|ve|tool):", re.I)
 
 # 歌词来自哪，写进 [by:] 里，扫描时用它区分「官方逐字」与「对齐逐字」
-TAGS = {"netease": "NeteaseCloud", "qq": "QQMusic", "amll": "AMLL", "kugou": "Kugou"}
+TAGS = {"netease": "NeteaseCloud", "qq": "QQMusic", "amll": "AMLL", "kugou": "Kugou", "lrclib": "LRCLIB"}
 
 
 @dataclass
@@ -213,6 +213,8 @@ def fetch(song_id: int | None, name: str = "", artist: str = "",
                 hit = from_amll(song_id)
             elif which == "kugou" and name:
                 hit = from_kugou(name, artist, duration)
+            elif which == "lrclib" and name:
+                hit = from_lrclib(name, artist, duration)
             if hit and len(hit):
                 if hit.timed:
                     return hit
@@ -611,3 +613,24 @@ def from_kugou(name: str, artist: str = "", duration: float | None = None) -> Wo
     if not lines:
         return None
     return WordLyric(source="酷狗", tag=TAGS["kugou"], lines=lines, timed=True)
+
+
+def from_lrclib(name: str, artist: str = "", duration: float | None = None) -> WordLyric | None:
+    """LRCLIB：提供同步逐行歌词（无逐字时间戳）。"""
+    from . import text as tx
+
+    kw = f"{artist} {name}".strip() if artist else name
+    hit = tx.lrclib_match(kw, duration=duration, name=name, artist=artist)
+    if not hit or not (hit.get("lrc") or "").strip():
+        return None
+    timed_lines = parse_lrc(hit["lrc"])
+    if not timed_lines:
+        return None
+    lines: list[WordLine] = []
+    for i, (sec, text) in enumerate(timed_lines):
+        end = timed_lines[i + 1][0] if i + 1 < len(timed_lines) else sec + 6
+        lines.append(WordLine(start=sec, text=text, end=min(end, sec + 6)))
+    lines = trim_preamble(lines, name, artist)
+    if not lines:
+        return None
+    return WordLyric(source="LRCLIB", tag=TAGS["lrclib"], lines=lines, timed=False)
