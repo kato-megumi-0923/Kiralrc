@@ -20,7 +20,7 @@
   <img src="docs/screenshots/scrape.png" alt="标签刮削" width="49%" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/editor.png" alt="编辑与校对" width="72%" />
+  <img src="docs/screenshots/editor.png" alt="编辑与校对" width="49%" />
 </p>
 
 ## 为什么做 Kiralrc？
