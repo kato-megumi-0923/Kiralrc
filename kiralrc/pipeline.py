@@ -517,7 +517,13 @@ def _fetch_missing_translations(
             return None
         return tmap
 
-    sources = []
+    from . import netauth, sources as _sources
+    from .ratelimit import RateLimited
+
+    def _netease_ok() -> bool:
+        return _sources.netease_available() and netauth.cooling_for() <= 0
+
+    sources: list[tuple[bool, Callable[[], dict | None]]] = []
     used_id = netease_id
     if not used_id and audio_path.exists():
         try:
@@ -525,17 +531,24 @@ def _fetch_missing_translations(
         except Exception:
             used_id = None
     if used_id:
-        sources.append(lambda sid=used_id: tx.netease_by_id(sid))
+        sources.append((True, lambda sid=used_id: tx.netease_by_id(sid)))
     sources.extend([
-        lambda: tx.netease_match(kw, dur, interval=1.0, name=title_hint or kw, artist=artist_hint),
-        lambda: tx.qq_match(kw, dur, name=title_hint or kw, artist=artist_hint),
+        (True, lambda: tx.netease_match(kw, dur, interval=1.0, name=title_hint or kw, artist=artist_hint)),
+        (False, lambda: tx.qq_match(kw, dur, name=title_hint or kw, artist=artist_hint)),
     ])
 
-    for fn in sources:
+    for is_netease, fn in sources:
+        if is_netease and not _netease_ok():
+            continue
         try:
             tmap = _try_hit(fn())
             if tmap is not None:
                 return tmap
+        except RateLimited:
+            if is_netease:
+                netauth.record_rate_limit(None)
+                _sources._trip_netease()
+            continue
         except Exception:
             continue
     return {}

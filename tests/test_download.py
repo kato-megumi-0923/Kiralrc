@@ -208,3 +208,228 @@ def test_the_id_is_written_into_the_lrc_and_read_back(tmp_path, monkeypatch):
     monkeypatch.setattr(download.tx, "netease_id_from_file", lambda p: None)
     monkeypatch.setattr(download.tx, "netease_id_from_downloads", lambda p: None)
     assert download.tx.netease_id_from_lrc(audio) == 167732
+
+
+def test_official_upgrade_preserves_local_translations(tmp_path, monkeypatch):
+    """官方逐字覆盖已有双语歌词时，若新下载的缺译文，应无损继承本地已有中文译文。"""
+    from kiralrc import pipeline as pl
+
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"")
+    _lrc(tmp_path, "song.lrc",
+         "[00:01.000]君のことが好き\n[00:01.000]我喜欢你\n")
+
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 1001)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="QQ音乐", tag="QQMusic",
+        lines=[sources.WordLine(1.0, "君のことが好き", [("君", 1.0), ("の", 1.2), ("こ", 1.4), ("と", 1.6), ("が", 1.8), ("好", 2.0), ("き", 2.2)], 2.5)],
+        timed=True))
+    # 本地已把全部译文补齐，不应再触发远端补全
+    remote_called = []
+    monkeypatch.setattr(pl, "_fetch_missing_translations", lambda *a, **k: remote_called.append(1) or {})
+
+    res = download.download_one(audio)
+    assert res.status == "upgraded"
+    assert not remote_called
+    body = (tmp_path / "song.lrc").read_text(encoding="utf-8")
+    assert "<00:01.000>君<00:01.200>の" in body
+    assert "[00:01.000]我喜欢你" in body
+
+
+def test_foreign_download_backfills_missing_translation_cross_source(tmp_path, monkeypatch):
+    """外语歌下到无译文官方逐字时，跨源补全中文译文，且保留原逐字时间戳。"""
+    from kiralrc import pipeline as pl
+
+    audio = tmp_path / "jp.mp3"
+    audio.write_bytes(b"")
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 2002)
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: sources.WordLyric(
+        source="酷狗", tag="Kugou",
+        lines=[sources.WordLine(1.0, "また会えるよね", [("ま", 1.0), ("た", 1.2), ("会", 1.4), ("え", 1.6), ("る", 1.8), ("よ", 2.0), ("ね", 2.2)], 2.5)],
+        timed=True))
+    monkeypatch.setattr(
+        pl, "_fetch_missing_translations",
+        lambda *a, **k: {pl._norm_lyric_key("また会えるよね"): [["我们还会再见的吧"]]},
+    )
+
+    res = download.download_one(audio)
+    assert res.status == "downloaded"
+    assert res.trans_filled == 1
+    assert res.missing_trans is False
+    body = (tmp_path / "jp.lrc").read_text(encoding="utf-8")
+    assert "<00:01.000>ま<00:01.200>た" in body
+    assert "[00:01.000]我们还会再见的吧" in body
+
+
+def test_existing_official_foreign_lrc_backfills_without_touching_word_times(tmp_path, monkeypatch):
+    """已有官方逐字但缺译文的外语歌，下载流程只补译文、原样保留全部 <mm:ss.xxx> 逐字时间戳。"""
+    from kiralrc import pipeline as pl
+
+    audio = tmp_path / "exist.mp3"
+    audio.write_bytes(b"")
+    _lrc(
+        tmp_path, "exist.lrc",
+        "[by:NeteaseCloud]\n"
+        "[00:01.234]<00:01.234>君<00:01.567>の<00:01.890>声<00:02.345>\n"
+        "[00:05.000]<00:05.000>届<00:05.300>い<00:05.600>た<00:06.000>\n"
+        "[00:05.000]已经传达到了\n",
+    )
+    fetch_called = []
+    monkeypatch.setattr(download.sources, "fetch", lambda *a, **k: fetch_called.append(1))
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 3003)
+    monkeypatch.setattr(
+        pl, "_fetch_missing_translations",
+        lambda *a, **k: {
+            pl._norm_lyric_key("君の声"): [["你的声音"]],
+            pl._norm_lyric_key("届いた"): [["远端第二句"]],
+        },
+    )
+
+    res = download.download_one(audio)
+    assert res.status == "upgraded"
+    assert res.trans_filled == 1
+    assert res.missing_trans is False
+    assert not fetch_called
+    body = (tmp_path / "exist.lrc").read_text(encoding="utf-8")
+    # 原逐字时间戳一个字符都不能变
+    assert "[00:01.234]<00:01.234>君<00:01.567>の<00:01.890>声<00:02.345>" in body
+    assert "[00:01.234]你的声音" in body
+    # 原已有译文不被远端覆盖
+    assert "[00:05.000]已经传达到了" in body
+    assert "远端第二句" not in body
+
+
+def test_missing_trans_flagged_in_counts_and_report(tmp_path, monkeypatch):
+    """外语官方逐字全网无译文时，保留原文件并在统计报告里标出缺译文。"""
+    from kiralrc import pipeline as pl
+
+    audio = tmp_path / "rare.mp3"
+    audio.write_bytes(b"")
+    _lrc(
+        tmp_path, "rare.lrc",
+        "[by:NeteaseCloud]\n"
+        "[00:01.000]<00:01.000>ず<00:01.200>っ<00:01.400>と<00:01.600>見<00:01.800>て<00:02.000>\n",
+    )
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: None)
+    monkeypatch.setattr(pl, "_fetch_missing_translations", lambda *a, **k: {})
+
+    counts = download.run(tmp_path, jobs=1)
+    assert counts.kept == 1
+    assert counts.missing_trans == 1
+    assert "缺译文 1" in download.report(counts)
+
+
+def test_vocalization_lines_and_high_coverage_do_not_refetch(tmp_path, monkeypatch):
+    """仅有哼唱/拟声词缺译，或实质行译文覆盖率 ≥ 85% 时，不重复联网补译。"""
+    from kiralrc import pipeline as pl
+
+    # 1) 仅有 La la la / Yeah~ / Oh 缺译
+    audio1 = tmp_path / "voc.mp3"
+    audio1.write_bytes(b"")
+    _lrc(
+        tmp_path, "voc.lrc",
+        "[by:NeteaseCloud]\n"
+        "[00:01.000]<00:01.000>Hello <00:01.500>world<00:02.000>\n"
+        "[00:01.000]你好世界\n"
+        "[00:03.000]<00:03.000>La <00:03.200>la <00:03.400>la<00:03.800>\n"
+        "[00:05.000]<00:05.000>Yeah~<00:05.500>\n"
+        "[00:07.000]<00:07.000>Oh<00:07.300>\n",
+    )
+    called = []
+    monkeypatch.setattr(pl, "_fetch_missing_translations", lambda *a, **k: called.append(1) or {})
+    res1 = download.download_one(audio1)
+    assert res1.status == "kept"
+    assert res1.missing_trans is False
+    assert not called
+
+    # 2) 10 句实质外语歌词已有 9 句译文（90% ≥ 85%）→ 视为完整，不重复联网
+    audio2 = tmp_path / "cov.mp3"
+    audio2.write_bytes(b"")
+    lines = ["[by:NeteaseCloud]"]
+    for i in range(10):
+        t0, t1 = f"00:{i+1:02d}.000", f"00:{i+1:02d}.500"
+        lines.append(f"[{t0}]<{t0}>君<{t1}>の声{i}<00:{i+1:02d}.900>")
+        if i < 9:
+            lines.append(f"[{t0}]你的声音{i}")
+    _lrc(tmp_path, "cov.lrc", "\n".join(lines) + "\n")
+    res2 = download.download_one(audio2)
+    assert res2.status == "kept"
+    assert res2.missing_trans is False
+    assert not called
+
+
+def test_backfill_respects_netease_cooldown_and_trips_on_ratelimit(tmp_path, monkeypatch):
+    """补译文遇网易云 RateLimited 触发熔断，冷却中直接跳过网易云只问 QQ。"""
+    from kiralrc import netauth, pipeline as pl, text as tx
+    from kiralrc.ratelimit import RateLimited
+
+    audio = tmp_path / "Artist - Song.mp3"
+    audio.write_bytes(b"")
+    monkeypatch.setattr(tx, "netease_id_from_file", lambda p: None)
+
+    tripped = []
+    monkeypatch.setattr(sources, "_trip_netease", lambda *a, **k: tripped.append("sources"))
+    monkeypatch.setattr(netauth, "record_rate_limit", lambda *a, **k: tripped.append("netauth"))
+    monkeypatch.setattr(sources, "netease_available", lambda: True)
+    monkeypatch.setattr(netauth, "cooling_for", lambda: 0.0)
+
+    def raise_rl(*a, **k):
+        raise RateLimited("HTTP 405")
+
+    monkeypatch.setattr(tx, "netease_by_id", raise_rl)
+    monkeypatch.setattr(tx, "netease_match", raise_rl)
+    monkeypatch.setattr(tx, "qq_match", lambda *a, **k: {
+        "lrc": "[00:01.00]Hello world\n",
+        "tlyric": "[00:01.00]来自QQ的译文\n",
+    })
+
+    got = pl._fetch_missing_translations(audio, 200.0, netease_id=123, target_lines=["Hello world"])
+    assert "sources" in tripped and "netauth" in tripped
+    assert got == {pl._norm_lyric_key("Hello world"): [["来自QQ的译文"]]}
+
+    # 冷却中再次调用时，网易云函数完全不被触发，直接走 QQ
+    netease_calls = []
+    monkeypatch.setattr(sources, "netease_available", lambda: False)
+    monkeypatch.setattr(tx, "netease_by_id", lambda *a, **k: netease_calls.append("id"))
+    monkeypatch.setattr(tx, "netease_match", lambda *a, **k: netease_calls.append("search"))
+    got2 = pl._fetch_missing_translations(audio, 200.0, netease_id=123, target_lines=["Hello world"])
+    assert not netease_calls
+    assert got2 == {pl._norm_lyric_key("Hello world"): [["来自QQ的译文"]]}
+
+
+def test_inplace_backfill_preserves_metas_and_heart_translations(tmp_path, monkeypatch):
+    """原地写回时保留 [by:] / [kiralrc:aligned] / [kiralrc:id=...]，且不重复贴已有 ❤️ 译文行。"""
+    from kiralrc import pipeline as pl
+
+    audio = tmp_path / "heart.mp3"
+    audio.write_bytes(b"")
+    _lrc(
+        tmp_path, "heart.lrc",
+        "[ti:测试曲]\n"
+        "[by:SOFA 歌声对齐]\n"
+        "[kiralrc:aligned]\n"
+        "[kiralrc:id=556677]\n"
+        "[00:01.000]<00:01.000>君<00:01.300>の<00:01.600>声<00:02.000>\n"
+        "[00:05.000]<00:05.000>届<00:05.300>い<00:05.600>た<00:06.000>\n"
+        "[00:05.000]❤️已经传达到了❤️\n",
+    )
+    monkeypatch.setattr(download.tx, "netease_id_of", lambda p: 556677)
+    monkeypatch.setattr(
+        pl, "_fetch_missing_translations",
+        lambda *a, **k: {
+            pl._norm_lyric_key("君の声"): [["你的声音"]],
+            pl._norm_lyric_key("届いた"): [["传达到了"]],
+        },
+    )
+
+    added, still_missing = download._backfill_existing_lrc(audio)
+    assert added == 1
+    assert still_missing is False
+    body = (tmp_path / "heart.lrc").read_text(encoding="utf-8")
+    assert "[by:SOFA 歌声对齐]" in body
+    assert "[kiralrc:aligned]" in body
+    assert "[kiralrc:id=556677]" in body
+    assert "[00:01.000]你的声音" in body
+    # 已有 ❤️ 译文原样保留且仅出现一次，不会被远端译文重复贴成两条
+    assert body.count("❤️已经传达到了❤️") == 1
+    assert "传达到了\n" not in body.replace("❤️已经传达到了❤️", "")
