@@ -33,7 +33,6 @@ const (
 	pageTools
 	pageSeparate
 	pageCleanup
-	pageSettings
 	pageScrape
 )
 
@@ -320,6 +319,9 @@ type app struct {
 	scrapePaths       []string
 	scrapeItems       []scrapeTrack
 	scrapeCur         int
+	scrapeMenuPath    string
+	scrapeMenuX       float32
+	scrapeMenuY       float32
 	scrapeFilter      int // 0 全部 1 无封面 2 低清(<600px) 3 缺 ID/年份
 	scrapeQuery       string
 	scrapeCands       []scrapeCandidate
@@ -381,6 +383,9 @@ type app struct {
 	envInstalling         bool
 	envInstallLog         string
 	setScroll             ui.ScrollState
+	settingsOpen          bool
+	settingsSection       settingsSection
+	settingsSearch        string
 
 	toast     string
 	toastLast string
@@ -652,6 +657,7 @@ func (a *app) navigate(to pageKind, dir int) {
 	if a.page == to {
 		return
 	}
+	a.scrapeMenuPath = ""
 	a.pageDir = dir
 	a.page = to
 }

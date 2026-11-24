@@ -4,7 +4,7 @@
 
 **面向本地音乐曲库的逐字（Enhanced LRC）歌词管理、下载与歌声对齐工具**
 
-[![Version](https://img.shields.io/badge/version-v0.2.0--beta-e53935?style=flat-square)](https://github.com/kato-megumi-0923/Kiralrc/releases)
+[![Version](https://img.shields.io/badge/version-v0.2.0-e53935?style=flat-square)](https://github.com/kato-megumi-0923/Kiralrc/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078d4?style=flat-square)](#快速开始)
 [![License](https://img.shields.io/badge/license-MIT-2e8b57?style=flat-square)](LICENSE)
 
@@ -195,12 +195,13 @@ models/            本地模型与 HuggingFace / Torch 统一缓存目录（不�
 <details>
 <summary><b>点击展开：版本更新记录</b></summary>
 
-### 未发布：标签刮削与批量补全（2026-11-24）
+### v0.2.0（2026-11-24）
 - **标签刮削（新）**：双栏工作台——左栏按「全部 / 无封面 / 低清 / 缺 ID·年份」筛，右栏并排看网易云与 iTunes 候选，手动挑版本（默认不预选），底栏控制写入字段（默认只补高清封面、专辑年份、`NETEASE_ID`）与策略（仅补缺失 / 覆盖选中）。
 - **三条批量路径**：按专辑（专辑 ID 分组，一张专辑查一次、封面下一次，歌名/版本/歌手/时长对得上才写，多条命中留手选）、按 ID（已有 `NETEASE_ID` 直接补全）、按网易云（严格匹配后写入）。
 - **写入安全**：只改勾选项、原标签对象上增量写（`163 key` / `REPLAYGAIN` / 封底图都留着）；封面必须能解码且不比本地小才写；限速统一冷却，暂停后从当前曲目/当前专辑自动续跑（可取消，连续三次即停）。
 - **曲库分段加载 & 封面 LRU**：曲库按页读取（50 / 100 条可切），封面按需解码并做 400 张固定容量 LRU，翻页与长列表不再越用越吃内存。
 - **清理歌词文件更保守**：不再在回收站失败后改走直接删除；没处理的文件原样保留并如实报结果，永久删除独立成第二个入口（二次确认）。
+- **设置页重构与细节修复**：拆分独立设置模块（`internal/app/settings.go`），完善封面来源配置、目录迁移与刮削交互稳定性。
 
 ### v0.2.0-beta（2026-11-23）
 - **优先直下官方逐字**：新增 `download` 流程与曲库直下入口，支持按标签 ID（`163 key` / `NETEASE_ID`）及精准匹配从网易云 / QQ / AMLL / 酷狗获取官方逐字歌词。

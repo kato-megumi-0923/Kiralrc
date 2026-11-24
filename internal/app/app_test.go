@@ -42,7 +42,6 @@ func TestNavigationAndAccentSwitching(t *testing.T) {
 		{"任务队列", pageQueue},
 		{"编辑与校对", pageEditor},
 		{"工具箱", pageTools},
-		{"设置", pageSettings},
 		{"曲库", pageLibrary},
 	} {
 		if err := tt.Click(nav.label); err != nil {
@@ -58,6 +57,14 @@ func TestNavigationAndAccentSwitching(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
+	if !a.settingsOpen || a.page != pageLibrary {
+		t.Fatal("设置应以弹窗打开并保留当前页面")
+	}
+	initial := tt.Image().At(85, 430)
+	tt.Advance(motionPane.Duration)
+	if tt.Image().At(85, 430) == initial {
+		t.Fatal("设置卡片打开时应有可见过渡")
+	}
 	if err := tt.Click("主题色：紫罗兰"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +72,45 @@ func TestNavigationAndAccentSwitching(t *testing.T) {
 	if a.accentID != "violet" || a.accentHex != "#7C5CD6" {
 		t.Fatalf("got accent %s (%s), want violet", a.accentID, a.accentHex)
 	}
+	if err := tt.Click("缓存管理"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("立即清理"); !ok {
+		t.Fatal("缓存分类未显示原有清理操作")
+	}
+	if err := tt.Click("搜索设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("Python")
+	tt.Frame()
+	if a.settingsSection != settingsRuntime {
+		t.Fatal("搜索 Python 应切换到模型与运行环境")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.settingsOpen || a.page != pageLibrary {
+		t.Fatal("Escape 应关闭设置并返回原页面")
+	}
+	if _, ok := tt.Find("关闭设置"); !ok {
+		t.Fatal("退出动画期间应保留设置卡片")
+	}
+	tt.Advance(motionPane.Duration + 20*time.Millisecond)
+	if _, ok := tt.Find("关闭设置"); ok {
+		t.Fatal("退出动画结束后应移除设置卡片")
+	}
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(motionPane.Duration + 20*time.Millisecond)
+	if err := tt.Click("关闭设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.settingsOpen {
+		t.Fatal("关闭按钮应关闭设置")
+	}
+	tt.Advance(motionPane.Duration + 20*time.Millisecond)
 
 	// On startup, Library, Queue, Recents, and Editor should ALL start in a clean empty state.
 	if len(a.libFolders) != 0 || len(a.tracks) != 0 || len(a.recents) != 0 || len(a.queueItems) != 0 || a.queueActiveTitle != "" || a.edFile != "" {
@@ -469,17 +515,21 @@ func TestRenderFrames(t *testing.T) {
 		{"native-editor", pageEditor, "red", false},
 		{"native-editor-dark", pageEditor, "violet", true},
 		{"native-tools", pageTools, "teal", false},
-		{"native-settings", pageSettings, "clay", false},
+		{"native-settings", pageLibrary, "clay", false},
 	}
 	for _, sc := range scenes {
 		a := newApp()
 		a.page = sc.page
+		if sc.name == "native-settings" {
+			a.openSettings(settingsAppearance)
+		}
 		a.setAccent(sc.accent)
 		if sc.dark {
 			a.appearance = 1
 		}
 		tt := ui.NewTester(a.view, 1360, 860)
 		tt.SetDark(sc.dark)
+		tt.Frame()
 		tt.Advance(400 * time.Millisecond)
 		tt.Frame()
 		f, err := os.Create(filepath.Join(dir, sc.name+".png"))
@@ -1513,22 +1563,21 @@ func TestScrapeRowRightClickCopies(t *testing.T) {
 	tt := ui.NewTester(a.view, 1360, 860)
 	tt.Frame()
 
-	if err := tt.RightClick("月がきれい"); err != nil {
-		t.Fatalf("右键点不到那一行：%v", err)
+	row, ok := tt.Find("月がきれい")
+	if !ok {
+		t.Fatal("找不到曲目")
 	}
+	x, y := row.X+row.W/2, row.Y+row.H/2
+	tt.RightClickAt(x, y)
 	tt.Frame()
-	labels := tt.Menu()
-	want := []string{"复制歌名", "复制歌手", "复制专辑", "-", "复制全部信息"}
-	if len(labels) != len(want) {
-		t.Fatalf("菜单项不对：%v", labels)
+	if a.scrapeMenuPath != path {
+		t.Fatal("右键菜单没有打开")
 	}
-	for i := range want {
-		if labels[i] != want[i] {
-			t.Fatalf("第 %d 项是 %q，想要 %q（全量：%v）", i, labels[i], want[i], labels)
-		}
+	if item, ok := tt.Find("复制歌手"); !ok || item.X <= x {
+		t.Fatalf("菜单应出现在鼠标右侧，鼠标 x=%v，菜单项=%+v", x, item)
 	}
 
-	if err := tt.ChooseMenuItem("复制歌手"); err != nil {
+	if err := tt.Click("复制歌手"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -1540,7 +1589,7 @@ func TestScrapeRowRightClickCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if err := tt.ChooseMenuItem("复制全部信息"); err != nil {
+	if err := tt.Click("复制全部信息"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()

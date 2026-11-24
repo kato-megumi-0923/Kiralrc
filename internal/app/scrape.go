@@ -175,6 +175,7 @@ func (a *app) loadScrapeItems() {
 	a.scrapeCands = nil
 	a.scrapeCandPath = ""
 	a.scrapeCur = 0
+	a.scrapeMenuPath = ""
 	a.scrapeSel = map[string]scrapeCandidate{}
 	a.scrapeCandCache = map[string][]scrapeCandidate{}
 
@@ -1207,7 +1208,7 @@ func (a *app) viewScrapeRow(c *ui.Context, idx int) {
 	p := a.pal
 	it := a.scrapeItems[idx]
 	key := "scrape-row-" + strconv.Itoa(idx)
-	row := ui.Row(c.Key(key)).FillWidth().Height(50).PaddingX(9).Gap(8).Radius(10).AlignItems(ui.Center)
+	row := ui.Row(c.Key(key)).FillWidth().Height(50).PaddingX(9).Gap(8).Radius(10).AlignItems(ui.Center).Focusable()
 	switch {
 	case idx == a.scrapeCur:
 		row.Background(p.accent.Alpha(0.14))
@@ -1238,32 +1239,82 @@ func (a *app) viewScrapeRow(c *ui.Context, idx int) {
 			})
 		})
 	})
-	row.ContextMenu(func(m *ui.Menu) {
-		title, artist := scrapeTitleOf(it), strings.TrimSpace(it.Artist)
-		album := strings.TrimSpace(it.Album)
-		if m.Item("复制歌名").Disabled(title == "").Chosen() {
-			c.WriteClipboard(title)
-			a.notifyCopy("歌名", title)
-		}
-		if m.Item("复制歌手").Disabled(artist == "").Chosen() {
-			c.WriteClipboard(artist)
-			a.notifyCopy("歌手", artist)
-		}
-		if m.Item("复制专辑").Disabled(album == "").Chosen() {
-			c.WriteClipboard(album)
-			a.notifyCopy("专辑", album)
-		}
-		m.Separator()
-		if m.Item("复制全部信息").Chosen() {
-			c.WriteClipboard(scrapeClipAll(it))
-			a.notifyCopy("全部信息", "")
-		}
-	})
+	if row.RightClicked() {
+		x, y, _ := row.PointerPosition()
+		a.scrapeMenuX, a.scrapeMenuY = row.LocalToWindow(x, y)
+		a.scrapeMenuPath = it.Path
+	} else if row.Shortcut(0, ui.KeyContextMenu) || row.Shortcut(ui.Shift, ui.KeyF10) {
+		bounds := row.Bounds()
+		a.scrapeMenuX, a.scrapeMenuY = bounds.X, bounds.Y+bounds.H
+		a.scrapeMenuPath = it.Path
+	}
+	if a.scrapeMenuPath != "" && a.scrapeMenuPath == it.Path {
+		a.viewScrapeCopyMenu(c, it)
+	}
 	if row.Clicked() {
 		a.selectScrapeTrack(idx)
 		if a.win != nil {
 			a.win.Invalidate()
 		}
+	}
+}
+
+func (a *app) viewScrapeCopyMenu(c *ui.Context, it scrapeTrack) {
+	p := a.pal
+	title, artist := scrapeTitleOf(it), strings.TrimSpace(it.Artist)
+	album := strings.TrimSpace(it.Album)
+	displayArtist := artist
+	if displayArtist == "" {
+		displayArtist = "未知歌手"
+	}
+	var anchor ui.Element
+	ui.Overlay(c, func() {
+		anchor = ui.Box(c.Key("scrape-menu-anchor")).Absolute().
+			Left(a.scrapeMenuX).Top(a.scrapeMenuY).Size(0, 0).PassThrough()
+	})
+	open := true
+	ui.PopoverBase(c, anchor, &open, func(panel ui.Element) {
+		panel.AttachTo(anchor, ui.AnchorTopEnd, ui.AnchorTopStart).
+			Width(240).Margin(0, 0, 0, 8).Padding(6).Radius(12).
+			Background(p.raised).Border(1, p.hairline).Shadow(0, 6, 18, 0, p.cardShade)
+		ui.Column(c).FillWidth().Gap(3).Children(func() {
+			ui.Row(c).FillWidth().Padding(6).Gap(10).AlignItems(ui.Center).Children(func() {
+				if bmp := a.scrapeEmbeddedCover(it.Path); bmp != nil {
+					ui.Image(c, bmp).Size(44, 44).Radius(8).Fit(ui.Cover).Shrink(0)
+				} else {
+					artCover(c, hueForString(it.Path), 44, 8, iconNote)
+				}
+				ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+					ui.Text(c, title).FontSize(13).FontWeight(700).TextColor(p.text).FillWidth().SingleLine()
+					ui.Text(c, displayArtist).FontSize(11.5).TextColor(p.muted).FillWidth().SingleLine()
+				})
+			})
+			ui.Box(c).FillWidth().Height(1).Background(p.hairline)
+			copyItem := func(label, kind, value, notice string, disabled bool) {
+				button := ui.ButtonBase(c.Key(label)).Label(label).FillWidth().Height(32).
+					PaddingX(9).Radius(6).AlignItems(ui.Center).Disabled(disabled)
+				fg := p.text
+				if disabled {
+					fg = p.faint
+				} else if button.Hovered() {
+					button.Background(p.hover)
+				}
+				button.Children(func() { ui.Text(c, label).FontSize(13).TextColor(fg) })
+				if button.Clicked() {
+					c.WriteClipboard(value)
+					a.notifyCopy(kind, notice)
+					open = false
+				}
+			}
+			copyItem("复制歌名", "歌名", title, title, title == "")
+			copyItem("复制歌手", "歌手", artist, artist, artist == "")
+			copyItem("复制专辑", "专辑", album, album, album == "")
+			ui.Box(c).FillWidth().Height(1).Background(p.hairline)
+			copyItem("复制全部信息", "全部信息", scrapeClipAll(it), "", false)
+		})
+	})
+	if !open && a.scrapeMenuPath == it.Path {
+		a.scrapeMenuPath = ""
 	}
 }
 
@@ -1330,6 +1381,7 @@ func (a *app) scrapeFilterChip(c *ui.Context, idx int, label string, count int) 
 	})
 	if b.Clicked() {
 		a.scrapeFilter = idx
+		a.scrapeMenuPath = ""
 	}
 }
 
@@ -1627,6 +1679,7 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 		c.After(time.Second) // 倒计时每秒走一格，否则界面停在第一次画的秒数上
 	}
 	bar.Children(func() {
+		// 第一行：写入配置（左：字段与封面档位，右：补全策略）
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(2).Children(func() {
 			ui.Text(c, "写入字段").FontSize(12).FontWeight(700).TextColor(p.muted).Margin(0, 10, 0, 4)
 			for i, label := range scrapeFieldLabels {
@@ -1635,9 +1688,12 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 					a.scrapeQualityToggle(c) // 封面档位紧跟着「高清封面」
 				}
 			}
+			ui.Box(c).Grow(1)
+			segmented(c.Key("scrape-mode"), &a.scrapeMode, "仅补缺失", "覆盖选中")
 		})
 
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(10).Children(func() {
+		// 第二行：状态说明 + 批量补全 | 手动写入
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			hint := "只写勾选的字段；不动已有值，也不碰 163 key 与封底图"
 			if !a.scrapeApplying && a.scrapeMode == 0 {
 				if total := a.scrapeIDTotal(); total > 0 && len(a.scrapeByIDTargets()) == 0 {
@@ -1656,29 +1712,25 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			}
 			ui.Text(c, hint).FontSize(11.5).TextColor(p.muted).Grow(1).MinWidth(0).SingleLine()
 
-			segmented(c.Key("scrape-mode"), &a.scrapeMode, "仅补缺失", "覆盖选中")
-
-			// 有专辑 ID 的走专辑分组：一张专辑查一次、封面下一次，比逐首搜省得多。
-			// 没有专辑 ID 就不显示，别白占底栏。
+			// 有专辑 ID 的走专辑分组：一张专辑查一次、封面下一次，没有就不显示
 			if albums := a.scrapeAlbumTargets(); len(albums) > 0 {
 				bg, fg := p.surface2, p.text
 				if a.scrapeApplying {
 					bg, fg = p.surface2, p.faint
 				}
-				label := fmt.Sprintf("按专辑（%d 张 %d 首）", scrapeAlbumCount(albums), len(albums))
+				label := fmt.Sprintf("按专辑 (%d张·%d)", scrapeAlbumCount(albums), len(albums))
 				if scrapeActionPill(c, "scrape-byalbum", label, bg, fg).Clicked() && !a.scrapeApplying {
 					a.applyScrapeByAlbum()
 				}
 			}
 
-			// 三颗紧凑按钮：按 ID / 按网易云 / 写入。0 首的都灰着，别让它们凭空消失。
 			byID := len(a.scrapeByIDTargets())
 			byNE := len(a.scrapeNeteaseTargets())
 			byIDBg, byIDFg := p.surface2, p.text
 			if byID == 0 || a.scrapeApplying {
 				byIDBg, byIDFg = p.surface2, p.faint
 			}
-			if scrapeActionPill(c, "scrape-byid", fmt.Sprintf("按 ID（%d 首）", byID),
+			if scrapeActionPill(c, "scrape-byid", fmt.Sprintf("按 ID (%d)", byID),
 				byIDBg, byIDFg).Clicked() && byID > 0 && !a.scrapeApplying {
 				a.applyScrapeByID()
 			}
@@ -1686,13 +1738,16 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			if byNE == 0 || a.scrapeApplying {
 				byNEBg, byNEFg = p.surface2, p.faint
 			}
-			if scrapeActionPill(c, "scrape-byne", fmt.Sprintf("按网易云（%d 首）", byNE),
+			if scrapeActionPill(c, "scrape-byne", fmt.Sprintf("按网易云 (%d)", byNE),
 				byNEBg, byNEFg).Clicked() && byNE > 0 && !a.scrapeApplying {
 				a.applyScrapeByNetease()
 			}
 
+			// 区分「自动批量补全」与「写入已手动确认的候选」
+			ui.Box(c).Width(1).Height(16).Margin(0, 2, 0, 2).Background(p.hairline).Shrink(0)
+
 			n := a.scrapeSelectedCount()
-			label := fmt.Sprintf("写入（%d 首）", n)
+			label := fmt.Sprintf("写入 (%d)", n)
 			applyBg, applyFg := p.accent, p.onAccent
 			if n == 0 || a.scrapeApplying {
 				applyBg, applyFg = p.surface2, p.faint
@@ -1705,7 +1760,7 @@ func (a *app) viewScrapeBar(c *ui.Context) {
 			}
 			if len(a.scrapePending) > 0 && !a.scrapeApplying {
 				if scrapeActionPill(c, "scrape-cancel",
-					fmt.Sprintf("取消续跑（%d 首）", len(a.scrapePending)),
+					fmt.Sprintf("取消续跑 (%d)", len(a.scrapePending)),
 					p.surface2, p.text).Clicked() {
 					a.cancelScrapeResume()
 				}
