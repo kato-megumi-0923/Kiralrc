@@ -24,6 +24,15 @@ func newHiddenCmd(name string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// newExplorerSelectCmd 构造 explorer.exe /select,"<path>"，避免 Go 把 /select, 也包进引号导致回退到「文档」。
+func newExplorerSelectCmd(path string) *exec.Cmd {
+	cmd := exec.Command("explorer.exe")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: `explorer.exe /select,"` + path + `"`,
+	}
+	return cmd
+}
+
 // applyWindowIcon loads the embedded RT_GROUP_ICON (ID 1) from kiralrc-gui.exe
 // and applies it to the running top-level window so both Taskbar and Alt-Tab show it.
 func applyWindowIcon(title string) {

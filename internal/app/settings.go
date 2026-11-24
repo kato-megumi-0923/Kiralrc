@@ -23,7 +23,7 @@ func (a *app) openSettings(section settingsSection) {
 	a.settingsSection = section
 	a.settingsSearch = ""
 	a.setScroll = ui.ScrollState{}
-	a.scrapeMenuPath = ""
+	a.menu = nil
 }
 
 func (a *app) viewSettings(c *ui.Context) {

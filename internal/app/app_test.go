@@ -1572,7 +1572,7 @@ func TestScrapeRowRightClickCopies(t *testing.T) {
 	x, y := row.X+row.W/2, row.Y+row.H/2
 	tt.RightClickAt(x, y)
 	tt.Frame()
-	if a.scrapeMenuPath != path {
+	if a.menu == nil || a.menu.track == nil || a.menu.track.Path != path {
 		t.Fatal("右键菜单没有打开")
 	}
 	if item, ok := tt.Find("复制歌手"); !ok || item.X <= x {

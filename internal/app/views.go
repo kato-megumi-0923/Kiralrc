@@ -203,6 +203,7 @@ func (a *app) view(c *ui.Context) {
 		})
 	})
 	a.viewSettings(c)
+	a.viewContextMenu(c)
 }
 
 func (a *app) viewSidebar(c *ui.Context) {
@@ -1158,6 +1159,15 @@ func (a *app) viewLibrary(c *ui.Context) {
 					row.Children(func() {
 						mainBtn := ui.ButtonBase(c.Key(fmt.Sprintf("tr-main-%d", idx))).Grow(1).MinWidth(0).FillHeight().Gap(12).
 							AlignItems(ui.Center).Background(ui.Transparent).Label(tr.Title).FocusRing(false)
+						mainBtn.ContextMenu(func(m *ui.Menu) {
+							if m.Item("在资源管理器中显示").Chosen() {
+								a.revealInExplorer(tr.FullPath)
+							}
+							if m.Item("复制文件路径").Chosen() {
+								c.WriteClipboard(tr.FullPath)
+								a.toast = "已复制文件路径"
+							}
+						})
 						mainBtn.Children(func() {
 							cb := ui.Box(c).Size(18, 18).Radius(6).Shrink(0).Center()
 							cbFill := cb.AnimateColor("cbf", map[bool]ui.Color{true: p.accent, false: ui.Transparent}[sel], ui.Animation{Duration: 140 * time.Millisecond})

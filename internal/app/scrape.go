@@ -175,7 +175,7 @@ func (a *app) loadScrapeItems() {
 	a.scrapeCands = nil
 	a.scrapeCandPath = ""
 	a.scrapeCur = 0
-	a.scrapeMenuPath = ""
+	a.menu = nil
 	a.scrapeSel = map[string]scrapeCandidate{}
 	a.scrapeCandCache = map[string][]scrapeCandidate{}
 
@@ -1241,15 +1241,11 @@ func (a *app) viewScrapeRow(c *ui.Context, idx int) {
 	})
 	if row.RightClicked() {
 		x, y, _ := row.PointerPosition()
-		a.scrapeMenuX, a.scrapeMenuY = row.LocalToWindow(x, y)
-		a.scrapeMenuPath = it.Path
+		x, y = row.LocalToWindow(x, y)
+		a.openScrapeMenu(x, y, it)
 	} else if row.Shortcut(0, ui.KeyContextMenu) || row.Shortcut(ui.Shift, ui.KeyF10) {
 		bounds := row.Bounds()
-		a.scrapeMenuX, a.scrapeMenuY = bounds.X, bounds.Y+bounds.H
-		a.scrapeMenuPath = it.Path
-	}
-	if a.scrapeMenuPath != "" && a.scrapeMenuPath == it.Path {
-		a.viewScrapeCopyMenu(c, it)
+		a.openScrapeMenu(bounds.X, bounds.Y+bounds.H, it)
 	}
 	if row.Clicked() {
 		a.selectScrapeTrack(idx)
@@ -1259,63 +1255,18 @@ func (a *app) viewScrapeRow(c *ui.Context, idx int) {
 	}
 }
 
-func (a *app) viewScrapeCopyMenu(c *ui.Context, it scrapeTrack) {
-	p := a.pal
-	title, artist := scrapeTitleOf(it), strings.TrimSpace(it.Artist)
-	album := strings.TrimSpace(it.Album)
-	displayArtist := artist
-	if displayArtist == "" {
-		displayArtist = "未知歌手"
+func (a *app) openScrapeMenu(x, y float32, it scrapeTrack) {
+	title, artist, album := scrapeTitleOf(it), strings.TrimSpace(it.Artist), strings.TrimSpace(it.Album)
+	copyItem := func(kind, value, notice string) contextItem {
+		return contextItem{label: "复制" + kind, icon: iconCopy, disabled: value == "", run: func(c *ui.Context) {
+			c.WriteClipboard(value)
+			a.notifyCopy(kind, notice)
+		}}
 	}
-	var anchor ui.Element
-	ui.Overlay(c, func() {
-		anchor = ui.Box(c.Key("scrape-menu-anchor")).Absolute().
-			Left(a.scrapeMenuX).Top(a.scrapeMenuY).Size(0, 0).PassThrough()
-	})
-	open := true
-	ui.PopoverBase(c, anchor, &open, func(panel ui.Element) {
-		panel.AttachTo(anchor, ui.AnchorTopEnd, ui.AnchorTopStart).
-			Width(240).Margin(0, 0, 0, 8).Padding(6).Radius(12).
-			Background(p.raised).Border(1, p.hairline).Shadow(0, 6, 18, 0, p.cardShade)
-		ui.Column(c).FillWidth().Gap(3).Children(func() {
-			ui.Row(c).FillWidth().Padding(6).Gap(10).AlignItems(ui.Center).Children(func() {
-				if bmp := a.scrapeEmbeddedCover(it.Path); bmp != nil {
-					ui.Image(c, bmp).Size(44, 44).Radius(8).Fit(ui.Cover).Shrink(0)
-				} else {
-					artCover(c, hueForString(it.Path), 44, 8, iconNote)
-				}
-				ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-					ui.Text(c, title).FontSize(13).FontWeight(700).TextColor(p.text).FillWidth().SingleLine()
-					ui.Text(c, displayArtist).FontSize(11.5).TextColor(p.muted).FillWidth().SingleLine()
-				})
-			})
-			ui.Box(c).FillWidth().Height(1).Background(p.hairline)
-			copyItem := func(label, kind, value, notice string, disabled bool) {
-				button := ui.ButtonBase(c.Key(label)).Label(label).FillWidth().Height(32).
-					PaddingX(9).Radius(6).AlignItems(ui.Center).Disabled(disabled)
-				fg := p.text
-				if disabled {
-					fg = p.faint
-				} else if button.Hovered() {
-					button.Background(p.hover)
-				}
-				button.Children(func() { ui.Text(c, label).FontSize(13).TextColor(fg) })
-				if button.Clicked() {
-					c.WriteClipboard(value)
-					a.notifyCopy(kind, notice)
-					open = false
-				}
-			}
-			copyItem("复制歌名", "歌名", title, title, title == "")
-			copyItem("复制歌手", "歌手", artist, artist, artist == "")
-			copyItem("复制专辑", "专辑", album, album, album == "")
-			ui.Box(c).FillWidth().Height(1).Background(p.hairline)
-			copyItem("复制全部信息", "全部信息", scrapeClipAll(it), "", false)
-		})
-	})
-	if !open && a.scrapeMenuPath == it.Path {
-		a.scrapeMenuPath = ""
-	}
+	a.menu = &contextMenu{x: x, y: y, track: &it, items: []contextItem{
+		copyItem("歌名", title, title), copyItem("歌手", artist, artist), copyItem("专辑", album, album),
+		{separator: true}, copyItem("全部信息", scrapeClipAll(it), ""),
+	}}
 }
 
 // scrapeTitleOf 有标签就用标签，没有就用文件名。
@@ -1381,7 +1332,7 @@ func (a *app) scrapeFilterChip(c *ui.Context, idx int, label string, count int) 
 	})
 	if b.Clicked() {
 		a.scrapeFilter = idx
-		a.scrapeMenuPath = ""
+		a.menu = nil
 	}
 }
 

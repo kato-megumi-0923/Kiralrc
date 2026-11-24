@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/kiralrcmenu"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -319,9 +320,7 @@ type app struct {
 	scrapePaths       []string
 	scrapeItems       []scrapeTrack
 	scrapeCur         int
-	scrapeMenuPath    string
-	scrapeMenuX       float32
-	scrapeMenuY       float32
+	menu              *contextMenu
 	scrapeFilter      int // 0 全部 1 无封面 2 低清(<600px) 3 缺 ID/年份
 	scrapeQuery       string
 	scrapeCands       []scrapeCandidate
@@ -677,7 +676,7 @@ func (a *app) navigate(to pageKind, dir int) {
 	if a.page == to {
 		return
 	}
-	a.scrapeMenuPath = ""
+	a.menu = nil
 	a.pageDir = dir
 	a.page = to
 }
@@ -3648,7 +3647,13 @@ func Run() error {
 			TitleBarStyle:   mygo.TitleBarHidden,
 			TitleBarHeight:  buttonsHeight,
 			BackgroundColor: "light-dark(#ffffff, #141416)",
-			Content:         ui.View(a.view),
+			Content:         kiralrcmenu.Content{View: ui.View(a.view), Open: a.openWindowMenu},
+		})
+		a.win.OnBlur(func() {
+			if a.menu != nil {
+				a.menu = nil
+				a.win.Invalidate()
+			}
 		})
 		applyWindowIcon("Kiralrc")
 		if dir := os.Getenv("KIRALRC_CLEANUP_DEMO"); dir != "" {

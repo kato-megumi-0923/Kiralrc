@@ -89,6 +89,24 @@ func (a *app) revealSepCache() {
 	}
 }
 
+// revealInExplorer 在 Windows 资源管理器中打开文件所在目录并选中该文件。
+func (a *app) revealInExplorer(targetPath string) {
+	p := strings.TrimSpace(targetPath)
+	if p == "" {
+		return
+	}
+	p = filepath.Clean(p)
+	if _, err := os.Stat(p); err == nil {
+		if err := newExplorerSelectCmd(p).Start(); err != nil {
+			a.toast = "打不开目录：" + err.Error()
+		}
+		return
+	}
+	if err := exec.Command("explorer.exe", filepath.Dir(p)).Start(); err != nil {
+		a.toast = "打不开目录：" + err.Error()
+	}
+}
+
 func (a *app) clearSepCache() {
 	purgeSepCache()
 	a.sepStems = nil
