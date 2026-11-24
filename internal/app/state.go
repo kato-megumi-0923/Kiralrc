@@ -294,7 +294,7 @@ type app struct {
 	edTrackMode           int // 0:原曲 1:人声轨
 	edSpeedMode           int // 0:0.5x 1:0.75x 2:1x
 	edShowPinyin          bool
-	edSnapOnset           bool
+	edMenuOpen            bool
 	edRipple              bool
 	edPlaying             bool
 	edPlayhead            float64
@@ -379,9 +379,9 @@ type app struct {
 	setModels             []modelStatusItem
 	setCleanDays          int // 0:7天前 1:30天前 2:全部
 	setAppleToken         string
-	setAppleStorefront    int // 0:jp 1:cn 2:us
+	setAppleStorefront    int      // 0:jp 1:cn 2:us
 	setDownloadSources    []string // 官方歌词下载源优先级（如 netease, qq, amll, kugou, lrclib）
-	setAIMode             int // 0=官方内置翻译 1=自定义API
+	setAIMode             int      // 0=官方内置翻译 1=自定义API
 	setAIBaseURL          string
 	setAIModel            string
 	setAIAPIKey           string
@@ -652,7 +652,6 @@ func newApp() *app {
 		edTrackMode:        0,
 		edSpeedMode:        2,
 		edShowPinyin:       true,
-		edSnapOnset:        true,
 		edEditingLine:      -1,
 		scrapeFields:       [5]bool{true, true, true, false, false},
 		sideWidthPx:        232,
@@ -696,6 +695,7 @@ func (a *app) navigate(to pageKind, dir int) {
 	a.scrapeCfgOpen, a.scrapeAutoOpen = false, false
 	a.resetLibraryOverlays()
 	a.queueCfgOpen = false
+	a.edMenuOpen = false
 	a.toolOutputOpen = false
 	a.pageDir = dir
 	a.page = to
@@ -1674,7 +1674,7 @@ func (a *app) checkEditorLrc(path, audioPath string) {
 		}
 		a.post(func() {
 			if a.edPath == path && !a.edModified {
-				a.edIssues = issues
+				a.edIssues = editorValidationIssues(issues, a.edLines)
 			}
 		})
 	}()
@@ -3183,8 +3183,7 @@ func (a *app) startPlayTicker() {
 						if len(a.edLines[bestLine].Chars) > 0 {
 							a.edGlyphs = a.edLines[bestLine].Chars
 						}
-						targetY := max(0, float32(bestLine)*33-180)
-						a.edLineScroll.ScrollTo(0, targetY, ui.Snappy)
+						a.edLineScroll.ScrollTo(0, editorLineScrollY(a.edLines, bestLine), ui.Snappy)
 						changed = true
 					}
 					bestChar := 0
@@ -3270,11 +3269,27 @@ func (a *app) pruneMissingRecents() {
 	}
 }
 
+func editorLineHeight(line lyricLine) float32 {
+	if line.Translation != "" {
+		return 44
+	}
+	return 31
+}
+
+func editorLineScrollY(lines []lyricLine, idx int) float32 {
+	var y float32
+	for _, line := range lines[:min(max(idx, 0), len(lines))] {
+		y += editorLineHeight(line) + 2
+	}
+	return max(0, y-180)
+}
+
 func (a *app) clearEditorState() {
 	if a.player != nil {
 		a.player.Pause()
 	}
 	a.edPlaying = false
+	a.edMenuOpen = false
 	a.edFile = ""
 	a.edPath = ""
 	a.edSub = ""

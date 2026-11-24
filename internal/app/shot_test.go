@@ -28,6 +28,7 @@ import (
 //	KIRALRC_SHOT_SIZE=1360x860 画布尺寸（DIP）
 //	KIRALRC_SHOT_PAGES=library,tools,settings  只截这几页（含 scrape / 刮削页）
 //	KIRALRC_SHOT_SCALE=2       每 DIP 几个像素（默认 1，2 适合做配图）
+//	KIRALRC_SHOT_LRC=...       指定编辑页截图使用的歌词文件
 //
 // 每个页面一张 <名字>.png；曲库页会先把封面解出来再拍。
 func TestShots(t *testing.T) {
@@ -35,10 +36,17 @@ func TestShots(t *testing.T) {
 	if dir == "" {
 		t.Skip("未设置 KIRALRC_SHOT_DIR，跳过离屏截图")
 	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KIRALRC_NO_PREFS", "1")
+	if hasKiralrcFiles(filepath.Join("..", "..")) {
+		t.Chdir(filepath.Join("..", ".."))
+	}
 
 	width, height := 1360, 860
 	if size := os.Getenv("KIRALRC_SHOT_SIZE"); size != "" {
@@ -102,6 +110,28 @@ func TestShots(t *testing.T) {
 		if len(only) > 0 && !only[p.name] {
 			continue
 		}
+		if p.name == "editor" {
+			path := os.Getenv("KIRALRC_SHOT_LRC")
+			if path == "" {
+				for _, track := range a.tracks {
+					if track.Status == "official" || track.Status == "aligned" || track.Status == "unknown" {
+						path = track.LrcPath
+						break
+					}
+				}
+			}
+			if path != "" {
+				if err := a.loadLrcFile(path); err != nil {
+					t.Fatal(err)
+				}
+				a.edAudioPath = findSiblingAudio(path)
+				if a.edAudioPath != "" && len(a.edGlyphs) > 0 {
+					start, end := a.edGlyphs[0].Start, a.edGlyphs[len(a.edGlyphs)-1].End
+					a.waveMix = extractWaveformPeaks(a.edAudioPath, start, end, 140)
+					a.waveVoc = extractWaveformPeaks(findVocalsCache(a.edAudioPath), start, end, 140)
+				}
+			}
+		}
 		if p.setup != nil {
 			// 不在侧边栏的页面没法 Click 过去：先把状态摆好，再换一台在首帧
 			// 之前就已是这页的 Tester——否则页面淡入没走完，拍出来是空白。
@@ -115,6 +145,13 @@ func TestShots(t *testing.T) {
 		tt.Advance(400 * time.Millisecond) // 等页面淡入走完
 		tt.Frame()
 		tt.Frame() // 再走一帧，过渡才算落定（直接设 page 的页面尤其需要）
+		if p.name == "editor" && a.edAudioPath != "" {
+			for range 5 {
+				time.Sleep(60 * time.Millisecond)
+				tt.Advance(60 * time.Millisecond)
+				tt.Frame()
+			}
+		}
 		img := tt.Image()
 		out := filepath.Join(dir, p.name+".png")
 		file, err := os.Create(out)

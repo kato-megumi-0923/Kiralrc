@@ -215,6 +215,144 @@ func TestLoadLrcFileIntoEditor(t *testing.T) {
 	}
 }
 
+func TestEditorHeaderMenuAndLineEditCancel(t *testing.T) {
+	a := newApp()
+	file := filepath.Join(t.TempDir(), "editor.lrc")
+	const original = "[00:01.000]<00:01.000>晚<00:01.400>风<00:02.000>\n[00:02.200]<00:02.200>又<00:02.500>来<00:03.000>\n"
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadLrcFile(file); err != nil {
+		t.Fatal(err)
+	}
+	a.page = pageEditor
+	tt := ui.NewTester(a.view, 1040, 860)
+	settle := func() {
+		tt.Frame()
+		tt.Advance(400 * time.Millisecond)
+		tt.Frame()
+	}
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		settle()
+	}
+	settle()
+	if _, ok := tt.Find("吸附起音"); ok {
+		t.Fatal("unused onset switch is visible")
+	}
+	if _, ok := tt.Find("保存 LRC"); !ok {
+		t.Fatal("save action is missing in the narrow window")
+	}
+	click("更多")
+	if !a.edMenuOpen {
+		t.Fatal("editor action menu did not open")
+	}
+	for _, label := range []string{"打开 LRC", "从磁盘重新加载", "校验当前歌词", "双语译文加 ❤️"} {
+		if _, ok := tt.Find(label); !ok {
+			t.Fatalf("editor menu is missing %q", label)
+		}
+	}
+	if _, ok := tt.Find("放弃未保存修改"); ok {
+		t.Fatal("discard action is visible on a clean file")
+	}
+	tt.Key(0, ui.KeyEscape)
+	settle()
+	if a.edMenuOpen {
+		t.Fatal("Escape did not close the editor menu")
+	}
+	a.beginEditLyricLine(0)
+	a.edEditingText = "晨风"
+	settle()
+	click("取消修改")
+	if a.edEditingLine != -1 || a.edModified || a.edLines[0].Text != "晚风" {
+		t.Fatal("cancel did not discard the inline draft")
+	}
+	a.beginEditLyricLine(0)
+	a.edEditingText = "晨风"
+	settle()
+	tt.Key(0, ui.KeyEscape)
+	settle()
+	if a.edEditingLine != -1 || a.edLines[0].Text != "晚风" {
+		t.Fatal("Escape did not discard the inline draft")
+	}
+	a.beginEditLyricLine(1)
+	a.edEditingText = "再来"
+	a.commitEditLyricLine()
+	settle()
+	click("更多")
+	click("放弃未保存修改")
+	if a.edMenuOpen || a.edModified || a.edSelectedLine != 1 || a.edLines[1].Text != "又来" {
+		t.Fatal("discard did not reload the file and restore the selection")
+	}
+
+	a.beginEditLyricLine(0)
+	a.edEditingText = "晨风"
+	a.commitEditLyricLine()
+	settle()
+	click("更多")
+	tt.Key(ui.Ctrl, ui.KeyS)
+	settle()
+	if !a.edModified {
+		t.Fatal("save shortcut ran while the menu was open")
+	}
+	tt.Key(0, ui.KeyEscape)
+	settle()
+	tt.Key(ui.Ctrl, ui.KeyS)
+	settle()
+	data, err := os.ReadFile(file)
+	if err != nil || a.edModified || !strings.Contains(string(data), ">晨<") {
+		t.Fatalf("save shortcut did not write the lyric: %v", err)
+	}
+}
+
+func TestEditorLineScrollYBilingual(t *testing.T) {
+	lines := make([]lyricLine, 8)
+	if got := editorLineScrollY(lines, 6); got != 18 {
+		t.Fatalf("monolingual scroll = %v, want 18", got)
+	}
+	lines[1].Translation = "第一行译文"
+	lines[3].Translation = "第二行译文"
+	lines[6].Translation = "当前行译文"
+	if got := editorLineScrollY(lines, 6); got != 44 {
+		t.Fatalf("bilingual scroll = %v, want 44", got)
+	}
+	if got := editorLineScrollY(lines, 2); got != 0 {
+		t.Fatalf("scroll near the top = %v, want 0", got)
+	}
+}
+
+func TestEditorValidationUsesEnglishWords(t *testing.T) {
+	short := "Looking back on how it was in years gone by"
+	long := strings.TrimSpace(strings.Repeat("don't ", 31))
+	chinese := strings.Repeat("词", 31)
+	warning := func(text string) string {
+		runes := []rune(text)
+		return fmt.Sprintf("过长 %d 字: %s", len(runes), strings.TrimSpace(string(runes[:20])))
+	}
+	timing := "行内跳变 3.1s（可能是长音）: Looking back on "
+	got := editorValidationIssues([]string{warning(short), timing, warning(long), warning(chinese)}, []lyricLine{
+		{Text: short}, {Text: long}, {Text: chinese},
+	})
+	if len(got) != 3 || got[0] != timing || !strings.HasPrefix(got[1], "过长 31 个单词:") || got[2] != warning(chinese) {
+		t.Fatalf("unexpected editor warnings: %v", got)
+	}
+
+	const spaced = "[人声] 第 1 行 [00:01.000] I can sing now"
+	const cramped = "[人声] 第 2 行 [00:03.000] I can sing now"
+	const tail = "尾字挤压，末字时间内仍有人声"
+	const onset = "句首约 240 ms 内未检测到明显人声"
+	vocal := editorValidationIssues([]string{spaced + "：" + tail, spaced + "：" + onset + "、" + tail, cramped + "：" + tail}, []lyricLine{
+		{Start: 1, Text: "I can sing now", Chars: []lyricChar{{Ch: "I ", Start: 1}, {Ch: "can ", Start: 1.4}, {Ch: "sing ", Start: 1.8}, {Ch: "now", Start: 2.2}}},
+		{Start: 3, Text: "I can sing now", Chars: []lyricChar{{Ch: "I ", Start: 3}, {Ch: "can ", Start: 3.02}, {Ch: "sing ", Start: 3.04}, {Ch: "now", Start: 3.06}}},
+	})
+	if len(vocal) != 2 || vocal[0] != spaced+"："+onset || vocal[1] != cramped+"：尾词挤压，末词时间内仍有人声" {
+		t.Fatalf("unexpected English vocal warnings: %v", vocal)
+	}
+}
+
 func TestEditorEnglishLyricBlocks(t *testing.T) {
 	a := newApp()
 	p := filepath.Join(t.TempDir(), "english.lrc")

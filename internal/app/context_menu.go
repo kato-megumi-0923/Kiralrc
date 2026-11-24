@@ -38,6 +38,7 @@ func (a *app) openWindowMenu(x, y float32, items []kiralrcmenu.Item) {
 	a.libRowMenuPath = ""
 	a.scrapeCfgOpen, a.scrapeAutoOpen = false, false
 	a.queueCfgOpen = false
+	a.edMenuOpen = false
 	m := &contextMenu{x: x, y: y, windowDIPs: true}
 	for _, it := range items {
 		item := contextItem{label: it.Label, disabled: it.Disabled, separator: it.Separator}
