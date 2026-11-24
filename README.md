@@ -16,8 +16,8 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshots/library.png" alt="曲库总览" width="49%" />
-  <img src="docs/screenshots/scrape.png" alt="标签刮削" width="49%" />
+  <img src="docs/screenshots/library.png?v=2" alt="曲库总览" width="49%" />
+  <img src="docs/screenshots/scrape.png?v=2" alt="标签刮削" width="49%" />
 </p>
 <p align="center">
   <img src="docs/screenshots/editor.png" alt="编辑与校对" width="49%" />
